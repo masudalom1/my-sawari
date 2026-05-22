@@ -1,0 +1,78 @@
+# Dependencies
+node_modules/
+
+# Environment variables
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Runtime data
+pids
+*.pid
+*.seed
+*.pid.lock
+
+# Coverage directory
+coverage/
+
+# Build folders
+dist/
+build/
+
+# Cache
+.cache/
+.parcel-cache/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE / Editor folders
+.vscode/
+.idea/
+
+# Temporary files
+tmp/
+temp/
+
+# MongoDB local data
+data/
+*.mongodb
+
+# Uploads (optional)
+uploads/
+
+# SSL Certificates (optional)
+cert/
+*.pem
+*.key
+
+# Docker
+.dockerignore
+
+# PM2
+.pm2/
+
+# Test files
+*.test.js
+*.spec.js
+
+# TypeScript
+*.tsbuildinfo
+
+# Next.js / React
+.next/
+out/
+
+# Misc
+*.swp
