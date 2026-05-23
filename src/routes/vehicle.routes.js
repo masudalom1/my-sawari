@@ -7,6 +7,7 @@ import {
   updateVehicle,
   deleteVehicle,
   updateVehicleStatus,
+  getAvailableVehicles,
 } from "../controllers/vehicle.controller.js";
 
 import protect from "../middlewares/auth.middleware.js";
@@ -18,6 +19,8 @@ router.use(protect);
 router.post("/create", upload.array("images", 5), createVehicle);
 
 router.get("/all", getAllVehicles);
+
+router.get("/available", protect, getAvailableVehicles);
 
 router.get("/:id", getSingleVehicle);
 

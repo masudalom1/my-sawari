@@ -128,6 +128,30 @@ export const getAllVehicles = async (
   }
 };
 
+export const getAvailableVehicles = async (req, res, next) => {
+  try {
+    const companyId = req.user.company || req.user._id;
+
+    const vehicles = await Vehicle.find({
+      company: companyId,
+      isDeleted: false,
+      status: "available",
+    })
+      .select(
+        "_id vehicleName vehicleNumber color manufacturer model vehicleType"
+      )
+      .sort({ createdAt: -1 });
+
+    res.status(200).json({
+      success: true,
+      count: vehicles.length,
+      data: vehicles,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
 export const getSingleVehicle = async (
   req,
   res,
