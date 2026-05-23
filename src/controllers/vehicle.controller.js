@@ -130,15 +130,11 @@ export const getAllVehicles = async (
 
 export const getAvailableVehicles = async (req, res, next) => {
   try {
-    const companyId = req.user.company || req.user._id;
-
     const vehicles = await Vehicle.find({
-      company: companyId,
-      isDeleted: false,
       status: "available",
     })
       .select(
-        "_id vehicleName vehicleNumber color manufacturer model vehicleType"
+        "_id vehicleName vehicleNumber color manufacturer model vehicleType status"
       )
       .sort({ createdAt: -1 });
 
