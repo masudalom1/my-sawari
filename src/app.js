@@ -77,6 +77,7 @@ app.use(
     path.join(process.cwd(), "uploads")
   )
 );
+app.use("/uploads", express.static(path.resolve("uploads")));
 
 // routes
 app.use("/api/v1/auth", authRoutes);
