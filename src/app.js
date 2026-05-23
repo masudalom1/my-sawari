@@ -7,10 +7,13 @@ import compression from "compression";
 import cookieParser from "cookie-parser";
 import rateLimit from "express-rate-limit";
 import hpp from "hpp";
+import path from "path";
 
 import authRoutes from "./routes/auth.routes.js";
 import notFound from "./middlewares/notFound.middleware.js";
 import errorHandler from "./middlewares/error.middleware.js";
+import handoverRoutes from "./routes/handover.routes.js";
+import vehicleRoutes from "./routes/vehicle.routes.js";
 
 dotenv.config();
 
@@ -67,9 +70,18 @@ app.use(
 
 // prevent HTTP param pollution
 app.use(hpp());
+app.use("/uploads", express.static("uploads"));
+app.use(
+  "/uploads",
+  express.static(
+    path.join(process.cwd(), "uploads")
+  )
+);
 
 // routes
 app.use("/api/v1/auth", authRoutes);
+app.use("/api/v1/handover", handoverRoutes);
+app.use("/api/v1/vehicles",vehicleRoutes);
 
 // 404
 app.use(notFound);
