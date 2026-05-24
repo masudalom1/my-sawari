@@ -83,6 +83,96 @@ export const createHandover = async (req, res, next) => {
   }
 };
 
+export const uploadHandoverImages = async (req, res, next) => {
+  try {
+    console.log("FILES RECEIVED:", req.files);
+
+    const { handoverId } = req.params;
+
+    const handover = await Handover.findById(handoverId);
+
+    if (!handover) {
+      return res.status(404).json({
+        success: false,
+        message: "Handover not found",
+      });
+    }
+
+    if (req.files?.customerPhoto?.[0]) {
+      handover.images.customerPhoto =
+        req.files.customerPhoto[0].path;
+    }
+
+    if (req.files?.customerWithVehicle?.[0]) {
+      handover.images.customerWithVehicle =
+        req.files.customerWithVehicle[0].path;
+    }
+
+    if (req.files?.vehicleFront?.[0]) {
+      handover.images.vehicleFront =
+        req.files.vehicleFront[0].path;
+    }
+
+    if (req.files?.vehicleRear?.[0]) {
+      handover.images.vehicleRear =
+        req.files.vehicleRear[0].path;
+    }
+
+    if (req.files?.vehicleLeft?.[0]) {
+      handover.images.vehicleLeft =
+        req.files.vehicleLeft[0].path;
+    }
+
+    if (req.files?.vehicleRight?.[0]) {
+      handover.images.vehicleRight =
+        req.files.vehicleRight[0].path;
+    }
+
+    await handover.save();
+
+    res.status(200).json({
+      success: true,
+      message: "Handover images uploaded successfully",
+      data: handover,
+    });
+  } catch (error) {
+    console.log("UPLOAD ERROR:", error);
+
+    res.status(500).json({
+      success: false,
+      message: error.message,
+    });
+  }
+};
+
+export const getActiveHandovers = async (req, res) => {
+  try {
+    const activeHandovers = await Handover.find({
+      company: req.user.company || req.user._id,
+      handoverStatus: "active",
+      isDeleted: false,
+    })
+      .populate("vehicle.vehicleId")
+      .populate("createdBy", "fullName")
+      .sort({ createdAt: -1 });
+
+    res.status(200).json({
+      success: true,
+      count: activeHandovers.length,
+      data: activeHandovers,
+    });
+  } catch (error) {
+    console.log("ACTIVE HANDOVER ERROR:", error);
+
+    res.status(500).json({
+      success: false,
+      message: error.message,
+    });
+  }
+};
+
+//not uses right now
+
 export const getAllHandovers = async (req, res, next) => {
   try {
     const page = Math.max(parseInt(req.query.page) || 1, 1);
@@ -160,68 +250,6 @@ export const getAllHandovers = async (req, res, next) => {
     });
   } catch (error) {
     next(error);
-  }
-};
-
-export const uploadHandoverImages = async (req, res, next) => {
-  try {
-    console.log("FILES RECEIVED:", req.files);
-
-    const { handoverId } = req.params;
-
-    const handover = await Handover.findById(handoverId);
-
-    if (!handover) {
-      return res.status(404).json({
-        success: false,
-        message: "Handover not found",
-      });
-    }
-
-    if (req.files?.customerPhoto?.[0]) {
-      handover.images.customerPhoto =
-        req.files.customerPhoto[0].path;
-    }
-
-    if (req.files?.customerWithVehicle?.[0]) {
-      handover.images.customerWithVehicle =
-        req.files.customerWithVehicle[0].path;
-    }
-
-    if (req.files?.vehicleFront?.[0]) {
-      handover.images.vehicleFront =
-        req.files.vehicleFront[0].path;
-    }
-
-    if (req.files?.vehicleRear?.[0]) {
-      handover.images.vehicleRear =
-        req.files.vehicleRear[0].path;
-    }
-
-    if (req.files?.vehicleLeft?.[0]) {
-      handover.images.vehicleLeft =
-        req.files.vehicleLeft[0].path;
-    }
-
-    if (req.files?.vehicleRight?.[0]) {
-      handover.images.vehicleRight =
-        req.files.vehicleRight[0].path;
-    }
-
-    await handover.save();
-
-    res.status(200).json({
-      success: true,
-      message: "Handover images uploaded successfully",
-      data: handover,
-    });
-  } catch (error) {
-    console.log("UPLOAD ERROR:", error);
-
-    res.status(500).json({
-      success: false,
-      message: error.message,
-    });
   }
 };
 

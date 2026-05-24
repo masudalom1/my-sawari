@@ -5,6 +5,7 @@ import { handoverUpload } from "../middlewares/upload.middleware.js";
 import {
   createHandover,
   deleteHandover,
+  getActiveHandovers,
   getAllHandovers,
   getSingleHandover,
   markVehicleReturned,
@@ -17,13 +18,10 @@ const router = express.Router();
 router.use(protect);
 
 router.post("/create", handoverUpload, createHandover);
+router.put("/upload-images/:handoverId",protect,handoverUpload,uploadHandoverImages,);
+router.get("/active-handovers",protect,getActiveHandovers);
+// no use
 router.get("/all", getAllHandovers);
-router.put(
-  "/upload-images/:handoverId",
-  protect,
-  handoverUpload,
-  uploadHandoverImages,
-);
 router.get("/:id", getSingleHandover);
 router.put("/update/:id", updateHandover);
 router.put("/return/:id", markVehicleReturned);
