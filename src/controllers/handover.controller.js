@@ -277,8 +277,17 @@ export const updateHandover = async (req, res, next) => {
       data: handover,
     });
   } catch (error) {
-    next(error);
-  }
+  console.log("========== CLOUDINARY ERROR ==========");
+  console.log(error);
+  console.log("MESSAGE:", error.message);
+  console.log("STACK:", error.stack);
+
+  return res.status(500).json({
+    success: false,
+    message: error.message,
+    fullError: error,
+  });
+}
 };
 
 export const markVehicleReturned = async (req, res, next) => {
