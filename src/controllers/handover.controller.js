@@ -165,6 +165,8 @@ export const getAllHandovers = async (req, res, next) => {
 
 export const uploadHandoverImages = async (req, res, next) => {
   try {
+    console.log("FILES RECEIVED:", req.files);
+
     const { handoverId } = req.params;
 
     const handover = await Handover.findById(handoverId);
@@ -214,7 +216,12 @@ export const uploadHandoverImages = async (req, res, next) => {
       data: handover,
     });
   } catch (error) {
-    next(error);
+    console.log("UPLOAD ERROR:", error);
+
+    res.status(500).json({
+      success: false,
+      message: error.message,
+    });
   }
 };
 
