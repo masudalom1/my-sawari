@@ -20,9 +20,10 @@ router.use(protect);
 router.post("/create", handoverUpload, createHandover);
 router.put("/upload-images/:handoverId",protect,handoverUpload,uploadHandoverImages,);
 router.get("/active-handovers",protect,getActiveHandovers);
+router.get("/single/:id",protect,getSingleHandover);
 // no use
 router.get("/all", getAllHandovers);
-router.get("/:id", getSingleHandover);
+router.get("single/:id", getSingleHandover);
 router.put("/update/:id", updateHandover);
 router.put("/return/:id", markVehicleReturned);
 router.delete("/delete/:id", deleteHandover);

@@ -253,16 +253,17 @@ export const getAllHandovers = async (req, res, next) => {
   }
 };
 
-export const getSingleHandover = async (req, res, next) => {
+export const getSingleHandover = async (req, res) => {
   try {
+    const { id } = req.params;
+
     const handover = await Handover.findOne({
-      _id: req.params.id,
+      _id: id,
       company: req.user.company || req.user._id,
       isDeleted: false,
     })
-      .populate("createdBy", "fullName email role")
-      .populate("vehicle.vehicleId")
-      .populate("returnDetails.returnedBy", "fullName role");
+      .populate("createdBy", "fullName email")
+      .populate("vehicle.vehicleId");
 
     if (!handover) {
       return res.status(404).json({
@@ -276,7 +277,12 @@ export const getSingleHandover = async (req, res, next) => {
       data: handover,
     });
   } catch (error) {
-    next(error);
+    console.log("GET SINGLE HANDOVER ERROR:", error);
+
+    res.status(500).json({
+      success: false,
+      message: error.message,
+    });
   }
 };
 
