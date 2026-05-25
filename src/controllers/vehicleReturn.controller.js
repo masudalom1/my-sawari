@@ -135,7 +135,7 @@ export const receiveVehicle = async (req, res) => {
     await vehicle.save();
 
     // COMPLETE HANDOVER
-    handover.handoverStatus = "completed";
+   handover.handoverStatus = "returned";
     await handover.save();
 
     res.status(201).json({
