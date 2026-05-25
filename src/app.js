@@ -14,6 +14,7 @@ import notFound from "./middlewares/notFound.middleware.js";
 import errorHandler from "./middlewares/error.middleware.js";
 import handoverRoutes from "./routes/handover.routes.js";
 import vehicleRoutes from "./routes/vehicle.routes.js";
+import vehicleReturnRoutes from "./routes/vehicle.routes.js"
 
 dotenv.config();
 
@@ -78,11 +79,11 @@ app.use(
   )
 );
 app.use("/uploads", express.static(path.resolve("uploads")));
-
 // routes
 app.use("/api/v1/auth", authRoutes);
 app.use("/api/v1/handover", handoverRoutes);
-app.use("/api/v1/vehicles",vehicleRoutes);
+app.use("/api/v1/vehicles", vehicleRoutes);
+app.use("/api/v1/vehicle-return", vehicleReturnRoutes);
 
 // 404
 app.use(notFound);
