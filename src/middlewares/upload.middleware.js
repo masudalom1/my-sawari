@@ -42,3 +42,11 @@ export const handoverUpload = upload.fields([
   { name: "vehicleLeft", maxCount: 1 },
   { name: "vehicleRight", maxCount: 1 },
 ]);
+
+export const vehicleReturnUpload = upload.fields([
+  { name: "vehicleFront", maxCount: 1 },
+  { name: "vehicleRear", maxCount: 1 },
+  { name: "vehicleLeft", maxCount: 1 },
+  { name: "vehicleRight", maxCount: 1 },
+  { name: "damageImage", maxCount: 1 },
+]);
