@@ -1,6 +1,6 @@
 import Vehicle from "../models/vehicle.model.js";
 
-
+// add vehicle screen
 export const createVehicle = async (req, res, next) => {
   try {
     const companyId = req.user.company || req.user._id;
@@ -85,23 +85,14 @@ export const createVehicle = async (req, res, next) => {
   }
 };
 
-export const getAllVehicles = async (
-  req,
-  res,
-  next
-) => {
+export const getAllVehicles = async (req, res, next) => {
   try {
-    const page =
-      Number(req.query.page) || 1;
-
-    const limit =
-      Number(req.query.limit) || 20;
-
+    const page = Number(req.query.page) || 1;
+    const limit = Number(req.query.limit) || 20;
     const skip = (page - 1) * limit;
 
     const filters = {
-      company:
-        req.user.company || req.user._id,
+      company: req.user.company || req.user._id,
       isDeleted: false,
     };
 
@@ -109,20 +100,34 @@ export const getAllVehicles = async (
       filters.status = req.query.status;
     }
 
-    const vehicles =
-      await Vehicle.find(filters)
-        .sort({ createdAt: -1 })
-        .skip(skip)
-        .limit(limit);
+    const vehicles = await Vehicle.find(filters)
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limit);
 
-    const total =
-      await Vehicle.countDocuments(filters);
+    const total = await Vehicle.countDocuments(filters);
+
+    const stats = await Vehicle.aggregate([
+      {
+        $match: {
+          company: req.user.company || req.user._id,
+          isDeleted: false,
+        },
+      },
+      {
+        $group: {
+          _id: "$status",
+          count: { $sum: 1 },
+        },
+      },
+    ]);
 
     res.status(200).json({
       success: true,
       total,
       page,
       pages: Math.ceil(total / limit),
+      stats,
       data: vehicles,
     });
   } catch (error) {
