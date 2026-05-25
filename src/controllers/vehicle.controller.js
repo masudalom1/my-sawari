@@ -1,9 +1,9 @@
 import Vehicle from "../models/vehicle.model.js";
 
+
 export const createVehicle = async (req, res, next) => {
   try {
-    const companyId =
-      req.user.company || req.user._id;
+    const companyId = req.user.company || req.user._id;
 
     const {
       vehicleName,
@@ -26,50 +26,52 @@ export const createVehicle = async (req, res, next) => {
       status,
     } = req.body;
 
-    const existingVehicle =
-      await Vehicle.findOne({
-        vehicleNumber:
-          vehicleNumber.toUpperCase(),
-        isDeleted: false,
+    if (!vehicleNumber) {
+      return res.status(400).json({
+        success: false,
+        message: "Vehicle number is required",
       });
+    }
+
+    const existingVehicle = await Vehicle.findOne({
+      vehicleNumber: vehicleNumber.toUpperCase(),
+      isDeleted: false,
+    });
 
     if (existingVehicle) {
       return res.status(400).json({
         success: false,
-        message:
-          "Vehicle with this number already exists",
+        message: "Vehicle with this number already exists",
       });
     }
 
     const images =
       req.files?.map((file) => ({
-        url: `/uploads/vehicles/${file.filename}`,
+        url: file.path,
+        public_id: file.filename,
       })) || [];
 
     const vehicle = await Vehicle.create({
       company: companyId,
       createdBy: req.user._id,
       vehicleName,
-      vehicleNumber:
-        vehicleNumber.toUpperCase(),
+      vehicleNumber: vehicleNumber.toUpperCase(),
       manufacturer,
       model,
       variant,
       vehicleType,
       fuelType,
       transmission,
-      seatingCapacity: Number(
-        seatingCapacity
-      ),
+      seatingCapacity: Number(seatingCapacity),
       color,
       chassisNumber,
       engineNumber,
-      registrationDate,
-      insuranceValidUpto,
-      pucValidUpto,
-      fitnessValidUpto,
+      registrationDate: registrationDate || null,
+      insuranceValidUpto: insuranceValidUpto || null,
+      pucValidUpto: pucValidUpto || null,
+      fitnessValidUpto: fitnessValidUpto || null,
       notes,
-      status,
+      status: status || "available",
       images,
     });
 

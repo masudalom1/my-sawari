@@ -11,17 +11,20 @@ import {
 } from "../controllers/vehicle.controller.js";
 
 import protect from "../middlewares/auth.middleware.js";
-
+import vehicleUpload from "../middlewares/vehicleUpload.js";
 const router = express.Router();
 
 router.use(protect);
 
-router.post("/create", upload.array("images", 5), createVehicle);
+
+router.post("/create", vehicleUpload.array("images", 5), createVehicle);
 
 router.get("/all", getAllVehicles);
 
+// Showing Available car in handover screen
 router.get("/available", protect, getAvailableVehicles);
 
+// NOT IN USED
 router.get("/:id", getSingleVehicle);
 
 router.put("/update/:id", upload.array("images", 5), updateVehicle);

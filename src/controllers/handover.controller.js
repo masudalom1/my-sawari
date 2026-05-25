@@ -1,5 +1,6 @@
 import Handover from "../models/handover.model.js";
 
+//Car Handover 
 export const createHandover = async (req, res, next) => {
   try {
     const {
@@ -82,7 +83,6 @@ export const createHandover = async (req, res, next) => {
     next(error);
   }
 };
-
 export const uploadHandoverImages = async (req, res, next) => {
   try {
     console.log("FILES RECEIVED:", req.files);
@@ -145,6 +145,7 @@ export const uploadHandoverImages = async (req, res, next) => {
   }
 };
 
+// active rental screen 
 export const getActiveHandovers = async (req, res) => {
   try {
     const activeHandovers = await Handover.find({
@@ -170,9 +171,40 @@ export const getActiveHandovers = async (req, res) => {
     });
   }
 };
+export const getSingleHandover = async (req, res) => {
+  try {
+    const { id } = req.params;
 
-//not uses right now
+    const handover = await Handover.findOne({
+      _id: id,
+      company: req.user.company || req.user._id,
+      isDeleted: false,
+    })
+      .populate("createdBy", "fullName email")
+      .populate("vehicle.vehicleId");
 
+    if (!handover) {
+      return res.status(404).json({
+        success: false,
+        message: "Handover not found",
+      });
+    }
+
+    res.status(200).json({
+      success: true,
+      data: handover,
+    });
+  } catch (error) {
+    console.log("GET SINGLE HANDOVER ERROR:", error);
+
+    res.status(500).json({
+      success: false,
+      message: error.message,
+    });
+  }
+};
+
+// NOT USED
 export const getAllHandovers = async (req, res, next) => {
   try {
     const page = Math.max(parseInt(req.query.page) || 1, 1);
@@ -250,39 +282,6 @@ export const getAllHandovers = async (req, res, next) => {
     });
   } catch (error) {
     next(error);
-  }
-};
-
-export const getSingleHandover = async (req, res) => {
-  try {
-    const { id } = req.params;
-
-    const handover = await Handover.findOne({
-      _id: id,
-      company: req.user.company || req.user._id,
-      isDeleted: false,
-    })
-      .populate("createdBy", "fullName email")
-      .populate("vehicle.vehicleId");
-
-    if (!handover) {
-      return res.status(404).json({
-        success: false,
-        message: "Handover not found",
-      });
-    }
-
-    res.status(200).json({
-      success: true,
-      data: handover,
-    });
-  } catch (error) {
-    console.log("GET SINGLE HANDOVER ERROR:", error);
-
-    res.status(500).json({
-      success: false,
-      message: error.message,
-    });
   }
 };
 
