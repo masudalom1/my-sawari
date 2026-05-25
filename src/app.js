@@ -14,7 +14,7 @@ import notFound from "./middlewares/notFound.middleware.js";
 import errorHandler from "./middlewares/error.middleware.js";
 import handoverRoutes from "./routes/handover.routes.js";
 import vehicleRoutes from "./routes/vehicle.routes.js";
-import vehicleReturnRoutes from "./routes/vehicle.routes.js"
+import vehicleReturnRoutes from "./routes/vehicleReturn.routes.js"
 
 dotenv.config();
 
