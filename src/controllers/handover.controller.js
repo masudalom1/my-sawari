@@ -274,6 +274,34 @@ export const getSingleHandover = async (req, res) => {
   }
 };
 
+export const getReceiveCarList = async (req, res) => {
+  try {
+    const handovers = await Handover.find({
+      isDeleted: false,
+      "vehicle.vehicleId": { $exists: true },
+      handoverStatus: { $ne: "completed" },
+    })
+      .populate("vehicle.vehicleId")
+      .sort({
+        "trip.dropDateTime": 1,
+        createdAt: -1,
+      });
+
+    res.status(200).json({
+      success: true,
+      count: handovers.length,
+      data: handovers,
+    });
+  } catch (error) {
+    console.log("RECEIVE CAR LIST ERROR:", error);
+
+    res.status(500).json({
+      success: false,
+      message: error.message,
+    });
+  }
+};
+
 // NOT USED
 export const getAllHandovers = async (req, res, next) => {
   try {
@@ -393,43 +421,6 @@ export const updateHandover = async (req, res, next) => {
 }
 };
 
-export const markVehicleReturned = async (req, res, next) => {
-  try {
-    const { remarks, vehicleCondition } = req.body;
-
-    const handover = await Handover.findOne({
-      _id: req.params.id,
-      company: req.user.company || req.user._id,
-      isDeleted: false,
-    });
-
-    if (!handover) {
-      return res.status(404).json({
-        success: false,
-        message: "Handover not found",
-      });
-    }
-
-    handover.handoverStatus = "returned";
-
-    handover.returnDetails = {
-      returnedAt: new Date(),
-      returnedBy: req.user._id,
-      remarks,
-      vehicleCondition,
-    };
-
-    await handover.save();
-
-    res.status(200).json({
-      success: true,
-      message: "Vehicle marked as returned",
-      data: handover,
-    });
-  } catch (error) {
-    next(error);
-  }
-};
 
 export const deleteHandover = async (req, res, next) => {
   try {
