@@ -84,7 +84,7 @@ export const createVehicle = async (req, res, next) => {
     next(error);
   }
 };
-
+// manage vehicle
 export const getAllVehicles = async (req, res, next) => {
   try {
     const page = Number(req.query.page) || 1;
