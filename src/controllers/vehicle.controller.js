@@ -92,7 +92,6 @@ export const getAllVehicles = async (req, res, next) => {
     const skip = (page - 1) * limit;
 
     const filters = {
-      company: req.user.company || req.user._id,
       isDeleted: false,
     };
 
@@ -110,7 +109,6 @@ export const getAllVehicles = async (req, res, next) => {
     const stats = await Vehicle.aggregate([
       {
         $match: {
-          company: req.user.company || req.user._id,
           isDeleted: false,
         },
       },
