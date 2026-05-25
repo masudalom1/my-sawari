@@ -1,6 +1,7 @@
 import Handover from "../models/handover.model.js";
+import Vehicle from "../models/vehicle.model.js";
 
-//Car Handover 
+// Car Handover
 export const createHandover = async (req, res, next) => {
   try {
     const {
@@ -15,64 +16,132 @@ export const createHandover = async (req, res, next) => {
 
     const files = req.files || {};
 
+    // Required validations
+    if (!customer?.fullName || !customer?.mobileNumber) {
+      return res.status(400).json({
+        success: false,
+        message: "Customer details are required",
+      });
+    }
+
+    if (!identity?.idType || !identity?.idNumber) {
+      return res.status(400).json({
+        success: false,
+        message: "Identity details are required",
+      });
+    }
+
+    if (!vehicle?.vehicleId) {
+      return res.status(400).json({
+        success: false,
+        message: "Vehicle selection is required",
+      });
+    }
+
+    if (!trip?.pickupDateTime || !trip?.dropDateTime) {
+      return res.status(400).json({
+        success: false,
+        message: "Trip dates are required",
+      });
+    }
+
+    // Check vehicle exists
+    const selectedVehicle = await Vehicle.findOne({
+      _id: vehicle.vehicleId,
+      isDeleted: false,
+    });
+
+    if (!selectedVehicle) {
+      return res.status(404).json({
+        success: false,
+        message: "Vehicle not found",
+      });
+    }
+
+    // Check vehicle availability
+    if (selectedVehicle.status !== "available") {
+      return res.status(400).json({
+        success: false,
+        message: "Selected vehicle is not available",
+      });
+    }
+
+    // Create handover
     const handover = await Handover.create({
       company: req.user.company || req.user._id,
       createdBy: req.user._id,
 
       customer: {
-        fullName: customer?.fullName,
-        mobileNumber: customer?.mobileNumber,
-        alternateMobileNumber: customer?.alternateMobileNumber || "",
-        occupation: customer?.occupation || "",
-        destination: customer?.destination,
+        fullName: customer.fullName,
+        mobileNumber: customer.mobileNumber,
+        alternateMobileNumber:
+          customer.alternateMobileNumber || "",
+        occupation: customer.occupation || "",
+        destination: customer.destination || "",
       },
 
       identity: {
-        idType: identity?.idType,
-        idNumber: identity?.idNumber,
+        idType: identity.idType,
+        idNumber: identity.idNumber,
       },
 
       vehicle: {
-        vehicleId: vehicle?.vehicleId,
-        vehicleName: vehicle?.vehicleName,
-        vehicleNumber: vehicle?.vehicleNumber,
-        vehicleColor: vehicle?.vehicleColor || "",
+        vehicleId: selectedVehicle._id,
+        vehicleName: selectedVehicle.vehicleName,
+        vehicleNumber: selectedVehicle.vehicleNumber,
+        vehicleColor: selectedVehicle.color || "",
       },
 
       trip: {
-        tripType: trip?.tripType || "local",
-        numberOfDays: Number(trip?.numberOfDays),
-        pickupDateTime: trip?.pickupDateTime,
-        dropDateTime: trip?.dropDateTime,
+        tripType: trip.tripType || "local",
+        numberOfDays: Number(trip.numberOfDays) || 1,
+        pickupDateTime: trip.pickupDateTime,
+        dropDateTime: trip.dropDateTime,
       },
 
       payment: {
         fuelLevel: payment?.fuelLevel || "medium",
-        fastTagBalance: Number(payment?.fastTagBalance) || 0,
+        fastTagBalance:
+          Number(payment?.fastTagBalance) || 0,
         fastTagPayableAmount:
           Number(payment?.fastTagPayableAmount) || 0,
-        totalFare: Number(payment?.totalFare),
-        amountReceived: Number(payment?.amountReceived),
+        totalFare: Number(payment?.totalFare) || 0,
+        amountReceived:
+          Number(payment?.amountReceived) || 0,
+        pendingAmount:
+          Number(payment?.pendingAmount) || 0,
         securityDeposit:
           Number(payment?.securityDeposit) || 0,
-        advancePaid: Number(payment?.advancePaid) || 0,
-        extraCharges: Number(payment?.extraCharges) || 0,
-        paymentMethod: payment?.paymentMethod,
+        advancePaid:
+          Number(payment?.advancePaid) || 0,
+        extraCharges:
+          Number(payment?.extraCharges) || 0,
+        paymentMethod:
+          payment?.paymentMethod || "cash",
       },
 
       notes: notes || "",
       bookingStatus: bookingStatus || "confirmed",
 
       images: {
-        customerPhoto: files.customerPhoto?.[0]?.path || "",
+        customerPhoto:
+          files.customerPhoto?.[0]?.path || "",
         customerWithVehicle:
           files.customerWithVehicle?.[0]?.path || "",
-        vehicleFront: files.vehicleFront?.[0]?.path || "",
-        vehicleRear: files.vehicleRear?.[0]?.path || "",
-        vehicleLeft: files.vehicleLeft?.[0]?.path || "",
-        vehicleRight: files.vehicleRight?.[0]?.path || "",
+        vehicleFront:
+          files.vehicleFront?.[0]?.path || "",
+        vehicleRear:
+          files.vehicleRear?.[0]?.path || "",
+        vehicleLeft:
+          files.vehicleLeft?.[0]?.path || "",
+        vehicleRight:
+          files.vehicleRight?.[0]?.path || "",
       },
     });
+
+    // Update vehicle status after successful handover
+    selectedVehicle.status = "rent";
+    await selectedVehicle.save();
 
     res.status(201).json({
       success: true,
@@ -83,6 +152,7 @@ export const createHandover = async (req, res, next) => {
     next(error);
   }
 };
+
 export const uploadHandoverImages = async (req, res, next) => {
   try {
     console.log("FILES RECEIVED:", req.files);
