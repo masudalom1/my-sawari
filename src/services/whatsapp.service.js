@@ -9,11 +9,17 @@ export const sendWhatsAppWelcomeMessage = async ({
   returnDate,
 }) => {
   try {
-    const cleanPhone = phoneNumber.replace(/\D/g, "");
+    console.log("ENV TOKEN:", process.env.WHATSAPP_TOKEN ? "FOUND" : "MISSING");
+    console.log("PHONE ID:", process.env.WHATSAPP_PHONE_NUMBER_ID);
+    console.log("RAW PHONE:", phoneNumber);
+
+    const cleanPhone = String(phoneNumber).replace(/\D/g, "");
 
     const formattedPhone = cleanPhone.startsWith("91")
       ? cleanPhone
       : `91${cleanPhone}`;
+
+    console.log("FORMATTED PHONE:", formattedPhone);
 
     const message = `Hello ${customerName} 👋
 
@@ -27,11 +33,9 @@ Vehicle Number: ${vehicleNumber}
 Pickup Time: ${pickupDate}
 Return Time: ${returnDate}
 
-Need help? Contact our support team.
-
 Thank you for choosing MySawari ❤️`;
 
-    await axios.post(
+    const response = await axios.post(
       `https://graph.facebook.com/v20.0/${process.env.WHATSAPP_PHONE_NUMBER_ID}/messages`,
       {
         messaging_product: "whatsapp",
@@ -49,10 +53,10 @@ Thank you for choosing MySawari ❤️`;
       }
     );
 
-    console.log("WhatsApp welcome message sent");
+    console.log("WHATSAPP SUCCESS:", response.data);
   } catch (error) {
     console.log(
-      "WHATSAPP ERROR:",
+      "WHATSAPP FULL ERROR:",
       error?.response?.data || error.message
     );
   }
