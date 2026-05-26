@@ -15,6 +15,7 @@ import errorHandler from "./middlewares/error.middleware.js";
 import handoverRoutes from "./routes/handover.routes.js";
 import vehicleRoutes from "./routes/vehicle.routes.js";
 import vehicleReturnRoutes from "./routes/vehicleReturn.routes.js"
+import customerRoutes from "./routes/customer.routes.js"
 
 dotenv.config();
 
@@ -84,6 +85,7 @@ app.use("/api/v1/auth", authRoutes);
 app.use("/api/v1/handover", handoverRoutes);
 app.use("/api/v1/vehicles", vehicleRoutes);
 app.use("/api/v1/vehicle-return", vehicleReturnRoutes);
+app.use("/api/v1/customers", customerRoutes);
 
 // 404
 app.use(notFound);
