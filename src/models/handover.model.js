@@ -72,32 +72,39 @@ const handoverSchema = new mongoose.Schema(
       },
     },
 
-    vehicle: {
-      vehicleId: {
-        type: mongoose.Schema.Types.ObjectId,
-        ref: "Vehicle",
-        required: true,
-      },
+   vehicle: {
+  vehicleId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: "Vehicle",
+    required: true,
+  },
 
-      vehicleName: {
-        type: String,
-        required: true,
-        trim: true,
-      },
+  vehicleName: {
+    type: String,
+    required: true,
+    trim: true,
+  },
 
-      vehicleNumber: {
-        type: String,
-        required: true,
-        trim: true,
-        uppercase: true,
-      },
+  vehicleNumber: {
+    type: String,
+    required: true,
+    trim: true,
+    uppercase: true,
+  },
 
-      vehicleColor: {
-        type: String,
-        trim: true,
-        default: "",
-      },
-    },
+  vehicleColor: {
+    type: String,
+    trim: true,
+    default: "",
+  },
+
+  handoverKm: {
+    type: Number,
+    required: true,
+    min: 0,
+    default: 0,
+  },
+},
 
     trip: {
       tripType: {

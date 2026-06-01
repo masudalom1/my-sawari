@@ -167,8 +167,26 @@ export const createHandover = async (req, res, next) => {
       bookingStatus,
     } = req.body;
 
+    // Validate vehicle
+    if (!vehicle?.vehicleId) {
+      return res.status(400).json({
+        success: false,
+        message: "Vehicle is required",
+      });
+    }
+
+    if (
+      vehicle?.handoverKm === undefined ||
+      vehicle?.handoverKm === null
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: "Handover KM is required",
+      });
+    }
+
     const selectedVehicle = await Vehicle.findById(
-      vehicle?.vehicleId
+      vehicle.vehicleId
     );
 
     if (!selectedVehicle) {
@@ -208,60 +226,93 @@ export const createHandover = async (req, res, next) => {
         vehicleName: vehicle?.vehicleName,
         vehicleNumber: vehicle?.vehicleNumber,
         vehicleColor: vehicle?.vehicleColor || "",
+        handoverKm: Number(vehicle?.handoverKm) || 0,
       },
 
       trip: {
         tripType: trip?.tripType || "local",
-        numberOfDays: Number(trip?.numberOfDays) || 1,
+        numberOfDays:
+          Number(trip?.numberOfDays) || 1,
         pickupDateTime: trip?.pickupDateTime,
         dropDateTime: trip?.dropDateTime,
       },
 
       payment: {
         fuelLevel: payment?.fuelLevel || "medium",
+
         fastTagBalance:
           Number(payment?.fastTagBalance) || 0,
+
         fastTagPayableAmount:
-          Number(payment?.fastTagPayableAmount) || 0,
-        totalFare: Number(payment?.totalFare) || 0,
+          Number(payment?.fastTagPayableAmount) ||
+          0,
+
+        totalFare:
+          Number(payment?.totalFare) || 0,
+
         amountReceived:
           Number(payment?.amountReceived) || 0,
+
         securityDeposit:
           Number(payment?.securityDeposit) || 0,
+
         advancePaid:
           Number(payment?.advancePaid) || 0,
+
         extraCharges:
           Number(payment?.extraCharges) || 0,
+
         paymentMethod:
           payment?.paymentMethod || "cash",
       },
 
       notes: notes || "",
-      bookingStatus: bookingStatus || "confirmed",
+      bookingStatus:
+        bookingStatus || "confirmed",
+
       handoverStatus: "active",
     });
 
-    // vehicle becomes rented
+    // Update vehicle status and KM
+    selectedVehicle.currentKm = Number(
+      vehicle?.handoverKm
+    );
+
     selectedVehicle.status = "rent";
+
     await selectedVehicle.save();
 
-    // send whatsapp
-    await sendWhatsAppWelcomeMessage({
-      phoneNumber: handover.customer.mobileNumber,
-      customerName: handover.customer.fullName,
-      vehicleName: handover.vehicle.vehicleName,
-      vehicleNumber: handover.vehicle.vehicleNumber,
-      pickupDate: new Date(
-        handover.trip.pickupDateTime
-      ).toLocaleString("en-IN"),
-      returnDate: new Date(
-        handover.trip.dropDateTime
-      ).toLocaleString("en-IN"),
-    });
+    // Send WhatsApp message
+    try {
+      await sendWhatsAppWelcomeMessage({
+        phoneNumber:
+          handover.customer.mobileNumber,
+        customerName:
+          handover.customer.fullName,
+        vehicleName:
+          handover.vehicle.vehicleName,
+        vehicleNumber:
+          handover.vehicle.vehicleNumber,
 
-    res.status(201).json({
+        pickupDate: new Date(
+          handover.trip.pickupDateTime
+        ).toLocaleString("en-IN"),
+
+        returnDate: new Date(
+          handover.trip.dropDateTime
+        ).toLocaleString("en-IN"),
+      });
+    } catch (whatsappError) {
+      console.log(
+        "WhatsApp Error:",
+        whatsappError.message
+      );
+    }
+
+    return res.status(201).json({
       success: true,
-      message: "Handover created successfully",
+      message:
+        "Handover created successfully",
       data: handover,
     });
   } catch (error) {
