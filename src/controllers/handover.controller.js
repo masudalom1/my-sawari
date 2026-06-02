@@ -1,9 +1,7 @@
 import Handover from "../models/handover.model.js";
 import Vehicle from "../models/vehicle.model.js";
-import { sendWhatsAppWelcomeMessage } from "../services/whatsapp.service.js";
 
 // Car Handover
-/* 
 export const createHandover = async (req, res, next) => {
   try {
     const {
@@ -148,171 +146,6 @@ export const createHandover = async (req, res, next) => {
     res.status(201).json({
       success: true,
       message: "Handover created successfully",
-      data: handover,
-    });
-  } catch (error) {
-    next(error);
-  }
-};
-*/
-export const createHandover = async (req, res, next) => {
-  try {
-    const {
-      customer,
-      identity,
-      vehicle,
-      trip,
-      payment,
-      notes,
-      bookingStatus,
-    } = req.body;
-
-    // Validate vehicle
-    if (!vehicle?.vehicleId) {
-      return res.status(400).json({
-        success: false,
-        message: "Vehicle is required",
-      });
-    }
-
-    if (
-      vehicle?.handoverKm === undefined ||
-      vehicle?.handoverKm === null
-    ) {
-      return res.status(400).json({
-        success: false,
-        message: "Handover KM is required",
-      });
-    }
-
-    const selectedVehicle = await Vehicle.findById(
-      vehicle.vehicleId
-    );
-
-    if (!selectedVehicle) {
-      return res.status(404).json({
-        success: false,
-        message: "Vehicle not found",
-      });
-    }
-
-    if (selectedVehicle.status !== "available") {
-      return res.status(400).json({
-        success: false,
-        message: "Vehicle is not available",
-      });
-    }
-
-    const handover = await Handover.create({
-      company: req.user.company || req.user._id,
-      createdBy: req.user._id,
-
-      customer: {
-        fullName: customer?.fullName,
-        mobileNumber: customer?.mobileNumber,
-        alternateMobileNumber:
-          customer?.alternateMobileNumber || "",
-        occupation: customer?.occupation || "",
-        destination: customer?.destination || "",
-      },
-
-      identity: {
-        idType: identity?.idType,
-        idNumber: identity?.idNumber,
-      },
-
-      vehicle: {
-        vehicleId: vehicle?.vehicleId,
-        vehicleName: vehicle?.vehicleName,
-        vehicleNumber: vehicle?.vehicleNumber,
-        vehicleColor: vehicle?.vehicleColor || "",
-        handoverKm: Number(vehicle?.handoverKm) || 0,
-      },
-
-      trip: {
-        tripType: trip?.tripType || "local",
-        numberOfDays:
-          Number(trip?.numberOfDays) || 1,
-        pickupDateTime: trip?.pickupDateTime,
-        dropDateTime: trip?.dropDateTime,
-      },
-
-      payment: {
-        fuelLevel: payment?.fuelLevel || "medium",
-
-        fastTagBalance:
-          Number(payment?.fastTagBalance) || 0,
-
-        fastTagPayableAmount:
-          Number(payment?.fastTagPayableAmount) ||
-          0,
-
-        totalFare:
-          Number(payment?.totalFare) || 0,
-
-        amountReceived:
-          Number(payment?.amountReceived) || 0,
-
-        securityDeposit:
-          Number(payment?.securityDeposit) || 0,
-
-        advancePaid:
-          Number(payment?.advancePaid) || 0,
-
-        extraCharges:
-          Number(payment?.extraCharges) || 0,
-
-        paymentMethod:
-          payment?.paymentMethod || "cash",
-      },
-
-      notes: notes || "",
-      bookingStatus:
-        bookingStatus || "confirmed",
-
-      handoverStatus: "active",
-    });
-
-    // Update vehicle status and KM
-    selectedVehicle.currentKm = Number(
-      vehicle?.handoverKm
-    );
-
-    selectedVehicle.status = "rent";
-
-    await selectedVehicle.save();
-
-    // Send WhatsApp message
-    try {
-      await sendWhatsAppWelcomeMessage({
-        phoneNumber:
-          handover.customer.mobileNumber,
-        customerName:
-          handover.customer.fullName,
-        vehicleName:
-          handover.vehicle.vehicleName,
-        vehicleNumber:
-          handover.vehicle.vehicleNumber,
-
-        pickupDate: new Date(
-          handover.trip.pickupDateTime
-        ).toLocaleString("en-IN"),
-
-        returnDate: new Date(
-          handover.trip.dropDateTime
-        ).toLocaleString("en-IN"),
-      });
-    } catch (whatsappError) {
-      console.log(
-        "WhatsApp Error:",
-        whatsappError.message
-      );
-    }
-
-    return res.status(201).json({
-      success: true,
-      message:
-        "Handover created successfully",
       data: handover,
     });
   } catch (error) {
@@ -467,7 +300,6 @@ export const getReceiveCarList = async (req, res) => {
     });
   }
 };
-
 // NOT USED
 export const getAllHandovers = async (req, res, next) => {
   try {
