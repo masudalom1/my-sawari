@@ -30,31 +30,44 @@ export const sendBookingConfirmation = async ({
       broadcast_name: `booking_${Date.now()}`,
       parameters: [
         {
-          name: "name",
+          name: "1",
           value: customer.fullName,
         },
         {
-          name: "vehicle",
+          name: "2",
           value: vehicle.vehicleName,
         },
         {
-          name: "pickup",
+          name: "3",
           value: new Date(
             trip.pickupDateTime
           ).toLocaleString("en-IN"),
         },
         {
-          name: "drop",
+          name: "4",
           value: new Date(
             trip.dropDateTime
           ).toLocaleString("en-IN"),
         },
         {
-          name: "fare",
-          value: String(payment.totalFare),
+          name: "5",
+          value: String(
+            payment.totalFare
+          ),
         },
       ],
     };
+
+    console.log(
+      "TEMPLATE PAYLOAD:"
+    );
+    console.log(
+      JSON.stringify(
+        payload,
+        null,
+        2
+      )
+    );
 
     const response = await axios.post(
       `${API_URL}/${TENANT_ID}/api/v2/sendTemplateMessage?whatsappNumber=${mobile}`,
@@ -62,7 +75,8 @@ export const sendBookingConfirmation = async ({
       {
         headers: {
           Authorization: `Bearer ${API_TOKEN}`,
-          "Content-Type": "application/json",
+          "Content-Type":
+            "application/json",
         },
       }
     );
@@ -84,8 +98,11 @@ export const sendBookingConfirmation = async ({
       "TEMPLATE ERROR:"
     );
     console.log(
-      error?.response?.data ||
-        error.message
+      JSON.stringify(
+        error?.response?.data,
+        null,
+        2
+      ) || error.message
     );
 
     return null;
