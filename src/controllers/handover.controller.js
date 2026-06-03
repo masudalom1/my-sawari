@@ -1,4 +1,3 @@
-
 import Handover from "../models/handover.model.js";
 import Vehicle from "../models/vehicle.model.js";
 import { sendBookingConfirmation } from "../services/wati.service.js";
@@ -8,15 +7,8 @@ import { sendBookingConfirmation } from "../services/wati.service.js";
 // ==========================================
 export const createHandover = async (req, res, next) => {
   try {
-    const {
-      customer,
-      identity,
-      vehicle,
-      trip,
-      payment,
-      notes,
-      bookingStatus,
-    } = req.body;
+    const { customer, identity, vehicle, trip, payment, notes, bookingStatus } =
+      req.body;
 
     const files = req.files || {};
 
@@ -83,8 +75,7 @@ export const createHandover = async (req, res, next) => {
       customer: {
         fullName: customer.fullName,
         mobileNumber: customer.mobileNumber,
-        alternateMobileNumber:
-          customer.alternateMobileNumber || "",
+        alternateMobileNumber: customer.alternateMobileNumber || "",
         occupation: customer.occupation || "",
         destination: customer.destination || "",
       },
@@ -99,74 +90,54 @@ export const createHandover = async (req, res, next) => {
         vehicleName: selectedVehicle.vehicleName,
         vehicleNumber: selectedVehicle.vehicleNumber,
         vehicleColor: selectedVehicle.color || "",
-        handoverKm:
-          Number(vehicle?.handoverKm) || 0,
+        handoverKm: Number(vehicle?.handoverKm) || 0,
       },
 
       trip: {
         tripType: trip?.tripType || "local",
-        numberOfDays:
-          Number(trip?.numberOfDays) || 1,
+        numberOfDays: Number(trip?.numberOfDays) || 1,
         pickupDateTime: trip.pickupDateTime,
         dropDateTime: trip.dropDateTime,
       },
 
       payment: {
-        fuelLevel:
-          payment?.fuelLevel || "medium",
+        fuelLevel: payment?.fuelLevel || "medium",
 
-        fastTagBalance:
-          Number(payment?.fastTagBalance) || 0,
+        fastTagBalance: Number(payment?.fastTagBalance) || 0,
 
-        fastTagPayableAmount:
-          Number(payment?.fastTagPayableAmount) || 0,
+        fastTagPayableAmount: Number(payment?.fastTagPayableAmount) || 0,
 
-        totalFare:
-          Number(payment?.totalFare) || 0,
+        totalFare: Number(payment?.totalFare) || 0,
 
-        amountReceived:
-          Number(payment?.amountReceived) || 0,
+        amountReceived: Number(payment?.amountReceived) || 0,
 
-        pendingAmount:
-          Number(payment?.pendingAmount) || 0,
+        pendingAmount: Number(payment?.pendingAmount) || 0,
 
-        securityDeposit:
-          Number(payment?.securityDeposit) || 0,
+        securityDeposit: Number(payment?.securityDeposit) || 0,
 
-        advancePaid:
-          Number(payment?.advancePaid) || 0,
+        advancePaid: Number(payment?.advancePaid) || 0,
 
-        extraCharges:
-          Number(payment?.extraCharges) || 0,
+        extraCharges: Number(payment?.extraCharges) || 0,
 
-        paymentMethod:
-          payment?.paymentMethod || "cash",
+        paymentMethod: payment?.paymentMethod || "cash",
       },
 
       notes: notes || "",
 
-      bookingStatus:
-        bookingStatus || "confirmed",
+      bookingStatus: bookingStatus || "confirmed",
 
       images: {
-        customerPhoto:
-          files?.customerPhoto?.[0]?.path || "",
+        customerPhoto: files?.customerPhoto?.[0]?.path || "",
 
-        customerWithVehicle:
-          files?.customerWithVehicle?.[0]?.path ||
-          "",
+        customerWithVehicle: files?.customerWithVehicle?.[0]?.path || "",
 
-        vehicleFront:
-          files?.vehicleFront?.[0]?.path || "",
+        vehicleFront: files?.vehicleFront?.[0]?.path || "",
 
-        vehicleRear:
-          files?.vehicleRear?.[0]?.path || "",
+        vehicleRear: files?.vehicleRear?.[0]?.path || "",
 
-        vehicleLeft:
-          files?.vehicleLeft?.[0]?.path || "",
+        vehicleLeft: files?.vehicleLeft?.[0]?.path || "",
 
-        vehicleRight:
-          files?.vehicleRight?.[0]?.path || "",
+        vehicleRight: files?.vehicleRight?.[0]?.path || "",
       },
     });
 
@@ -176,8 +147,7 @@ export const createHandover = async (req, res, next) => {
     selectedVehicle.status = "rent";
 
     if (vehicle?.handoverKm) {
-      selectedVehicle.currentKm =
-        Number(vehicle.handoverKm);
+      selectedVehicle.currentKm = Number(vehicle.handoverKm);
     }
 
     await selectedVehicle.save();
@@ -193,14 +163,18 @@ export const createHandover = async (req, res, next) => {
         payment: handover.payment,
       });
 
-      console.log(
-        `WhatsApp sent successfully to ${handover.customer.mobileNumber}`
-      );
+      const result = await sendBookingConfirmation({
+        customer: handover.customer,
+        vehicle: handover.vehicle,
+        trip: handover.trip,
+        payment: handover.payment,
+      });
+
+      console.log("WATI RESPONSE:", result);
     } catch (whatsappError) {
       console.error(
         "WhatsApp Error:",
-        whatsappError?.response?.data ||
-          whatsappError?.message
+        whatsappError?.response?.data || whatsappError?.message,
       );
 
       // Booking should still be created
@@ -215,10 +189,7 @@ export const createHandover = async (req, res, next) => {
       data: handover,
     });
   } catch (error) {
-    console.error(
-      "Create Handover Error:",
-      error
-    );
+    console.error("Create Handover Error:", error);
 
     next(error);
   }
@@ -240,8 +211,7 @@ export const uploadHandoverImages = async (req, res, next) => {
     }
 
     if (req.files?.customerPhoto?.[0]) {
-      handover.images.customerPhoto =
-        req.files.customerPhoto[0].path;
+      handover.images.customerPhoto = req.files.customerPhoto[0].path;
     }
 
     if (req.files?.customerWithVehicle?.[0]) {
@@ -250,23 +220,19 @@ export const uploadHandoverImages = async (req, res, next) => {
     }
 
     if (req.files?.vehicleFront?.[0]) {
-      handover.images.vehicleFront =
-        req.files.vehicleFront[0].path;
+      handover.images.vehicleFront = req.files.vehicleFront[0].path;
     }
 
     if (req.files?.vehicleRear?.[0]) {
-      handover.images.vehicleRear =
-        req.files.vehicleRear[0].path;
+      handover.images.vehicleRear = req.files.vehicleRear[0].path;
     }
 
     if (req.files?.vehicleLeft?.[0]) {
-      handover.images.vehicleLeft =
-        req.files.vehicleLeft[0].path;
+      handover.images.vehicleLeft = req.files.vehicleLeft[0].path;
     }
 
     if (req.files?.vehicleRight?.[0]) {
-      handover.images.vehicleRight =
-        req.files.vehicleRight[0].path;
+      handover.images.vehicleRight = req.files.vehicleRight[0].path;
     }
 
     await handover.save();
@@ -286,7 +252,7 @@ export const uploadHandoverImages = async (req, res, next) => {
   }
 };
 
-// active rental screen 
+// active rental screen
 export const getActiveHandovers = async (req, res) => {
   try {
     const activeHandovers = await Handover.find({
@@ -478,19 +444,18 @@ export const updateHandover = async (req, res, next) => {
       data: handover,
     });
   } catch (error) {
-  console.log("========== CLOUDINARY ERROR ==========");
-  console.log(error);
-  console.log("MESSAGE:", error.message);
-  console.log("STACK:", error.stack);
+    console.log("========== CLOUDINARY ERROR ==========");
+    console.log(error);
+    console.log("MESSAGE:", error.message);
+    console.log("STACK:", error.stack);
 
-  return res.status(500).json({
-    success: false,
-    message: error.message,
-    fullError: error,
-  });
-}
+    return res.status(500).json({
+      success: false,
+      message: error.message,
+      fullError: error,
+    });
+  }
 };
-
 
 export const deleteHandover = async (req, res, next) => {
   try {
