@@ -4,14 +4,9 @@ const API_URL = process.env.WATI_API_URL;
 const TENANT_ID = process.env.WATI_TENANT_ID;
 const API_TOKEN = process.env.WATI_API_TOKEN;
 
+// Keep phone number exactly as customer entered
 const formatPhone = (phone) => {
-  let mobile = String(phone || "").replace(/\D/g, "");
-
-  if (!mobile.startsWith("91")) {
-    mobile = `91${mobile}`;
-  }
-
-  return mobile;
+  return String(phone || "").replace(/\D/g, "");
 };
 
 export const sendBookingConfirmation = async ({
@@ -21,7 +16,9 @@ export const sendBookingConfirmation = async ({
   payment,
 }) => {
   try {
-    const mobile = formatPhone(customer.mobileNumber);
+    const mobile = formatPhone(
+      customer.mobileNumber
+    );
 
     const pickupDate = new Date(
       trip.pickupDateTime
@@ -31,28 +28,37 @@ export const sendBookingConfirmation = async ({
       trip.dropDateTime
     ).toLocaleString("en-IN");
 
-    const message = `MY SAWARI BOOKING CONFIRMED
+    const message = `🚗 MY SAWARI BOOKING CONFIRMED
 
 Customer: ${customer.fullName}
 
-Vehicle: ${vehicle.vehicleName}
+Vehicle:
+${vehicle.vehicleName}
 ${vehicle.vehicleNumber}
 
-Pickup: ${pickupDate}
-Drop: ${dropDate}
+Pickup:
+${pickupDate}
 
-Fare: ₹${payment.totalFare}
-Received: ₹${payment.amountReceived}
-Pending: ₹${payment.pendingAmount}
+Drop:
+${dropDate}
 
-Support: +918638294494`;
+Fare:
+₹${payment.totalFare}
+
+Received:
+₹${payment.amountReceived}
+
+Pending:
+₹${payment.pendingAmount}
+
+Support:
++91 8638294494`;
 
     console.log("================================");
     console.log("PHONE:", mobile);
     console.log("MESSAGE:", message);
     console.log("================================");
 
-    // WATI expects form-urlencoded data
     const params = new URLSearchParams();
     params.append("messageText", message);
 
@@ -68,21 +74,33 @@ Support: +918638294494`;
       }
     );
 
-    console.log("WATI RESPONSE:");
-    console.log(JSON.stringify(response.data, null, 2));
+    console.log("========== WATI RESPONSE ==========");
+    console.log(
+      JSON.stringify(response.data, null, 2)
+    );
+    console.log("===================================");
 
     return response.data;
   } catch (error) {
     console.log("========== WATI ERROR ==========");
-    console.log("STATUS:", error?.response?.status);
+    console.log(
+      "STATUS:",
+      error?.response?.status
+    );
     console.log(
       "DATA:",
-      JSON.stringify(error?.response?.data, null, 2)
+      JSON.stringify(
+        error?.response?.data,
+        null,
+        2
+      )
     );
-    console.log("MESSAGE:", error?.message);
+    console.log(
+      "MESSAGE:",
+      error?.message
+    );
     console.log("================================");
 
     return null;
   }
 };
-
