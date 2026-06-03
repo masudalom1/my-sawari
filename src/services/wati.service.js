@@ -4,11 +4,6 @@ const API_URL = process.env.WATI_API_URL;
 const TENANT_ID = process.env.WATI_TENANT_ID;
 const API_TOKEN = process.env.WATI_API_TOKEN;
 
-const getHeaders = () => ({
-  Authorization: `Bearer ${API_TOKEN}`,
-  "Content-Type": "application/json",
-});
-
 const formatPhone = (phone) => {
   let mobile = String(phone || "").replace(/\D/g, "");
 
@@ -54,23 +49,22 @@ Support: +918638294494`;
 
     console.log("================================");
     console.log("PHONE:", mobile);
-    console.log("MESSAGE:");
-    console.log(message);
-    console.log("MESSAGE LENGTH:", message.length);
+    console.log("MESSAGE:", message);
     console.log("================================");
 
-    const payload = {
-      messageText: message,
-    };
-
-    console.log("PAYLOAD:");
-    console.log(JSON.stringify(payload, null, 2));
+    // WATI expects form-urlencoded data
+    const params = new URLSearchParams();
+    params.append("messageText", message);
 
     const response = await axios.post(
       `${API_URL}/${TENANT_ID}/api/v1/sendSessionMessage/${mobile}`,
-      payload,
+      params,
       {
-        headers: getHeaders(),
+        headers: {
+          Authorization: `Bearer ${API_TOKEN}`,
+          "Content-Type":
+            "application/x-www-form-urlencoded",
+        },
       }
     );
 
@@ -81,10 +75,14 @@ Support: +918638294494`;
   } catch (error) {
     console.log("========== WATI ERROR ==========");
     console.log("STATUS:", error?.response?.status);
-    console.log("DATA:", error?.response?.data);
+    console.log(
+      "DATA:",
+      JSON.stringify(error?.response?.data, null, 2)
+    );
     console.log("MESSAGE:", error?.message);
     console.log("================================");
 
     return null;
   }
 };
+
