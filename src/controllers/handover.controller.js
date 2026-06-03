@@ -156,13 +156,6 @@ export const createHandover = async (req, res, next) => {
     // SEND WHATSAPP BOOKING MESSAGE
     // ==========================
     try {
-      await sendBookingConfirmation({
-        customer: handover.customer,
-        vehicle: handover.vehicle,
-        trip: handover.trip,
-        payment: handover.payment,
-      });
-
       const result = await sendBookingConfirmation({
         customer: handover.customer,
         vehicle: handover.vehicle,

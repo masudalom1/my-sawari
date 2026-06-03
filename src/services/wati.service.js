@@ -10,7 +10,7 @@ const getHeaders = () => ({
 });
 
 const formatPhone = (phone) => {
-  let mobile = String(phone).replace(/\D/g, "");
+  let mobile = String(phone || "").replace(/\D/g, "");
 
   if (!mobile.startsWith("91")) {
     mobile = `91${mobile}`;
@@ -28,63 +28,62 @@ export const sendBookingConfirmation = async ({
   try {
     const mobile = formatPhone(customer.mobileNumber);
 
-    const pickupDate = new Date(trip.pickupDateTime).toLocaleString("en-IN");
+    const pickupDate = new Date(
+      trip.pickupDateTime
+    ).toLocaleString("en-IN");
 
-    const dropDate = new Date(trip.dropDateTime).toLocaleString("en-IN");
+    const dropDate = new Date(
+      trip.dropDateTime
+    ).toLocaleString("en-IN");
 
-    const message = `🚗 MY SAWARI BOOKING CONFIRMED
+    const message = `MY SAWARI BOOKING CONFIRMED
 
-Dear ${customer.fullName},
+Customer: ${customer.fullName}
 
-Your booking has been confirmed.
+Vehicle: ${vehicle.vehicleName}
+${vehicle.vehicleNumber}
 
-━━━━━━━━━━━━━━
+Pickup: ${pickupDate}
+Drop: ${dropDate}
 
-Vehicle:
-${vehicle.vehicleName}
-(${vehicle.vehicleNumber})
+Fare: ₹${payment.totalFare}
+Received: ₹${payment.amountReceived}
+Pending: ₹${payment.pendingAmount}
 
-Destination:
-${customer.destination}
+Support: +918638294494`;
 
-Pickup:
-${pickupDate}
+    console.log("================================");
+    console.log("PHONE:", mobile);
+    console.log("MESSAGE:");
+    console.log(message);
+    console.log("MESSAGE LENGTH:", message.length);
+    console.log("================================");
 
-Drop:
-${dropDate}
+    const payload = {
+      messageText: message,
+    };
 
-Fare:
-₹${payment.totalFare}
-
-Received:
-₹${payment.amountReceived}
-
-Pending:
-₹${payment.pendingAmount}
-
-━━━━━━━━━━━━━━
-
-Thank you for choosing My Sawari.
-
-For support:
-📞 +918638294494`;
+    console.log("PAYLOAD:");
+    console.log(JSON.stringify(payload, null, 2));
 
     const response = await axios.post(
       `${API_URL}/${TENANT_ID}/api/v1/sendSessionMessage/${mobile}`,
-      {
-        messageText: message,
-      },
+      payload,
       {
         headers: getHeaders(),
-      },
+      }
     );
 
-    console.log("WATI RESPONSE DATA:");
+    console.log("WATI RESPONSE:");
     console.log(JSON.stringify(response.data, null, 2));
 
     return response.data;
   } catch (error) {
-    console.error("WATI ERROR:", error?.response?.data || error.message);
+    console.log("========== WATI ERROR ==========");
+    console.log("STATUS:", error?.response?.status);
+    console.log("DATA:", error?.response?.data);
+    console.log("MESSAGE:", error?.message);
+    console.log("================================");
 
     return null;
   }
