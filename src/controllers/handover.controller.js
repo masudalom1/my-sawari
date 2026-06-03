@@ -1,7 +1,11 @@
+
 import Handover from "../models/handover.model.js";
 import Vehicle from "../models/vehicle.model.js";
+import { sendBookingConfirmation } from "../services/wati.service.js";
 
-// Car Handover
+// ==========================================
+// CREATE HANDOVER
+// ==========================================
 export const createHandover = async (req, res, next) => {
   try {
     const {
@@ -16,7 +20,9 @@ export const createHandover = async (req, res, next) => {
 
     const files = req.files || {};
 
-    // Required validations
+    // ==========================
+    // VALIDATIONS
+    // ==========================
     if (!customer?.fullName || !customer?.mobileNumber) {
       return res.status(400).json({
         success: false,
@@ -45,7 +51,9 @@ export const createHandover = async (req, res, next) => {
       });
     }
 
-    // Check vehicle exists
+    // ==========================
+    // CHECK VEHICLE
+    // ==========================
     const selectedVehicle = await Vehicle.findOne({
       _id: vehicle.vehicleId,
       isDeleted: false,
@@ -58,7 +66,6 @@ export const createHandover = async (req, res, next) => {
       });
     }
 
-    // Check vehicle availability
     if (selectedVehicle.status !== "available") {
       return res.status(400).json({
         success: false,
@@ -66,7 +73,9 @@ export const createHandover = async (req, res, next) => {
       });
     }
 
-    // Create handover
+    // ==========================
+    // CREATE HANDOVER
+    // ==========================
     const handover = await Handover.create({
       company: req.user.company || req.user._id,
       createdBy: req.user._id,
@@ -90,68 +99,131 @@ export const createHandover = async (req, res, next) => {
         vehicleName: selectedVehicle.vehicleName,
         vehicleNumber: selectedVehicle.vehicleNumber,
         vehicleColor: selectedVehicle.color || "",
+        handoverKm:
+          Number(vehicle?.handoverKm) || 0,
       },
 
       trip: {
-        tripType: trip.tripType || "local",
-        numberOfDays: Number(trip.numberOfDays) || 1,
+        tripType: trip?.tripType || "local",
+        numberOfDays:
+          Number(trip?.numberOfDays) || 1,
         pickupDateTime: trip.pickupDateTime,
         dropDateTime: trip.dropDateTime,
       },
 
       payment: {
-        fuelLevel: payment?.fuelLevel || "medium",
+        fuelLevel:
+          payment?.fuelLevel || "medium",
+
         fastTagBalance:
           Number(payment?.fastTagBalance) || 0,
+
         fastTagPayableAmount:
           Number(payment?.fastTagPayableAmount) || 0,
-        totalFare: Number(payment?.totalFare) || 0,
+
+        totalFare:
+          Number(payment?.totalFare) || 0,
+
         amountReceived:
           Number(payment?.amountReceived) || 0,
+
         pendingAmount:
           Number(payment?.pendingAmount) || 0,
+
         securityDeposit:
           Number(payment?.securityDeposit) || 0,
+
         advancePaid:
           Number(payment?.advancePaid) || 0,
+
         extraCharges:
           Number(payment?.extraCharges) || 0,
+
         paymentMethod:
           payment?.paymentMethod || "cash",
       },
 
       notes: notes || "",
-      bookingStatus: bookingStatus || "confirmed",
+
+      bookingStatus:
+        bookingStatus || "confirmed",
 
       images: {
         customerPhoto:
-          files.customerPhoto?.[0]?.path || "",
+          files?.customerPhoto?.[0]?.path || "",
+
         customerWithVehicle:
-          files.customerWithVehicle?.[0]?.path || "",
+          files?.customerWithVehicle?.[0]?.path ||
+          "",
+
         vehicleFront:
-          files.vehicleFront?.[0]?.path || "",
+          files?.vehicleFront?.[0]?.path || "",
+
         vehicleRear:
-          files.vehicleRear?.[0]?.path || "",
+          files?.vehicleRear?.[0]?.path || "",
+
         vehicleLeft:
-          files.vehicleLeft?.[0]?.path || "",
+          files?.vehicleLeft?.[0]?.path || "",
+
         vehicleRight:
-          files.vehicleRight?.[0]?.path || "",
+          files?.vehicleRight?.[0]?.path || "",
       },
     });
 
-    // Update vehicle status after successful handover
+    // ==========================
+    // UPDATE VEHICLE STATUS
+    // ==========================
     selectedVehicle.status = "rent";
+
+    if (vehicle?.handoverKm) {
+      selectedVehicle.currentKm =
+        Number(vehicle.handoverKm);
+    }
+
     await selectedVehicle.save();
 
-    res.status(201).json({
+    // ==========================
+    // SEND WHATSAPP BOOKING MESSAGE
+    // ==========================
+    try {
+      await sendBookingConfirmation({
+        customer: handover.customer,
+        vehicle: handover.vehicle,
+        trip: handover.trip,
+        payment: handover.payment,
+      });
+
+      console.log(
+        `WhatsApp sent successfully to ${handover.customer.mobileNumber}`
+      );
+    } catch (whatsappError) {
+      console.error(
+        "WhatsApp Error:",
+        whatsappError?.response?.data ||
+          whatsappError?.message
+      );
+
+      // Booking should still be created
+    }
+
+    // ==========================
+    // SUCCESS RESPONSE
+    // ==========================
+    return res.status(201).json({
       success: true,
       message: "Handover created successfully",
       data: handover,
     });
   } catch (error) {
+    console.error(
+      "Create Handover Error:",
+      error
+    );
+
     next(error);
   }
 };
+
 export const uploadHandoverImages = async (req, res, next) => {
   try {
     console.log("FILES RECEIVED:", req.files);
