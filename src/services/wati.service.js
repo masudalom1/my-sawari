@@ -26,17 +26,11 @@ export const sendBookingConfirmation = async ({
   payment,
 }) => {
   try {
-    const mobile = formatPhone(
-      customer.mobileNumber
-    );
+    const mobile = formatPhone(customer.mobileNumber);
 
-    const pickupDate = new Date(
-      trip.pickupDateTime
-    ).toLocaleString("en-IN");
+    const pickupDate = new Date(trip.pickupDateTime).toLocaleString("en-IN");
 
-    const dropDate = new Date(
-      trip.dropDateTime
-    ).toLocaleString("en-IN");
+    const dropDate = new Date(trip.dropDateTime).toLocaleString("en-IN");
 
     const message = `🚗 MY SAWARI BOOKING CONFIRMED
 
@@ -82,15 +76,15 @@ For support:
       },
       {
         headers: getHeaders(),
-      }
+      },
     );
+
+    console.log("WATI RESPONSE DATA:");
+    console.log(JSON.stringify(response.data, null, 2));
 
     return response.data;
   } catch (error) {
-    console.error(
-      "WATI ERROR:",
-      error?.response?.data || error.message
-    );
+    console.error("WATI ERROR:", error?.response?.data || error.message);
 
     return null;
   }
