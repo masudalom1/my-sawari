@@ -14,6 +14,16 @@ const formatPhone = (phone) => {
   return mobile;
 };
 
+const formatDateTime = (date) => {
+  return new Date(date).toLocaleString("en-IN", {
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+};
+
 export const sendBookingConfirmation = async ({
   customer,
   vehicle,
@@ -21,52 +31,48 @@ export const sendBookingConfirmation = async ({
   payment,
 }) => {
   try {
-    const mobile = formatPhone(
-      customer.mobileNumber
-    );
+    const mobile = formatPhone(customer.mobileNumber);
 
     const payload = {
-      template_name: "booking_confirmation",
+      template_name: "booking_confirmation_v2",
       broadcast_name: `booking_${Date.now()}`,
       parameters: [
         {
           name: "1",
-          value: customer.fullName,
+          value: customer.fullName || "Customer",
         },
         {
           name: "2",
-          value: vehicle.vehicleName,
+          value:
+            vehicle.vehicleName ||
+            vehicle.vehicleNumber ||
+            "Vehicle",
         },
         {
           name: "3",
-          value: new Date(
+          value: formatDateTime(
             trip.pickupDateTime
-          ).toLocaleString("en-IN"),
+          ),
         },
         {
           name: "4",
-          value: new Date(
+          value: formatDateTime(
             trip.dropDateTime
-          ).toLocaleString("en-IN"),
+          ),
         },
         {
           name: "5",
           value: String(
-            payment.totalFare
+            payment.totalFare || 0
           ),
         },
       ],
     };
 
+    console.log("========== WATI TEMPLATE REQUEST ==========");
+    console.log("Mobile:", mobile);
     console.log(
-      "TEMPLATE PAYLOAD:"
-    );
-    console.log(
-      JSON.stringify(
-        payload,
-        null,
-        2
-      )
+      JSON.stringify(payload, null, 2)
     );
 
     const response = await axios.post(
@@ -75,15 +81,12 @@ export const sendBookingConfirmation = async ({
       {
         headers: {
           Authorization: `Bearer ${API_TOKEN}`,
-          "Content-Type":
-            "application/json",
+          "Content-Type": "application/json",
         },
       }
     );
 
-    console.log(
-      "TEMPLATE RESPONSE:"
-    );
+    console.log("========== WATI SUCCESS ==========");
     console.log(
       JSON.stringify(
         response.data,
@@ -92,19 +95,35 @@ export const sendBookingConfirmation = async ({
       )
     );
 
-    return response.data;
+    return {
+      success: true,
+      data: response.data,
+    };
   } catch (error) {
+    console.log("========== WATI ERROR ==========");
+
+    console.log("Status:");
     console.log(
-      "TEMPLATE ERROR:"
+      error?.response?.status
     );
+
+    console.log("Response:");
     console.log(
       JSON.stringify(
         error?.response?.data,
         null,
         2
-      ) || error.message
+      )
     );
 
-    return null;
+    console.log("Message:");
+    console.log(error.message);
+
+    return {
+      success: false,
+      error:
+        error?.response?.data ||
+        error.message,
+    };
   }
 };
