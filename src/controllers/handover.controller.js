@@ -306,11 +306,11 @@ export const getSingleHandover = async (req, res) => {
 
 export const getReceiveCarList = async (req, res) => {
   try {
-   const handovers = await Handover.find({
-  isDeleted: false,
-  "vehicle.vehicleId": { $exists: true },
-  handoverStatus: { $nin: ["returned", "cancelled"] },
-})
+    const handovers = await Handover.find({
+      isDeleted: false,
+      "vehicle.vehicleId": { $exists: true },
+      handoverStatus: { $nin: ["returned", "cancelled"] },
+    })
       .populate("vehicle.vehicleId")
       .sort({
         "trip.dropDateTime": 1,
