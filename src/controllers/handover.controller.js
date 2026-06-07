@@ -194,6 +194,13 @@ export const uploadHandoverImages = async (req, res, next) => {
 
     const { handoverId } = req.params;
 
+    if (!handoverId) {
+      return res.status(400).json({
+        success: false,
+        message: "Handover ID is required",
+      });
+    }
+
     const handover = await Handover.findById(handoverId);
 
     if (!handover) {
@@ -203,8 +210,15 @@ export const uploadHandoverImages = async (req, res, next) => {
       });
     }
 
+    // Ensure images object exists
+    if (!handover.images) {
+      handover.images = {};
+    }
+
+    // Customer Images
     if (req.files?.customerPhoto?.[0]) {
-      handover.images.customerPhoto = req.files.customerPhoto[0].path;
+      handover.images.customerPhoto =
+        req.files.customerPhoto[0].path;
     }
 
     if (req.files?.customerWithVehicle?.[0]) {
@@ -212,35 +226,52 @@ export const uploadHandoverImages = async (req, res, next) => {
         req.files.customerWithVehicle[0].path;
     }
 
+    // ID Card Images
+    if (req.files?.idCardFront?.[0]) {
+      handover.images.idCardFront =
+        req.files.idCardFront[0].path;
+    }
+
+    if (req.files?.idCardBack?.[0]) {
+      handover.images.idCardBack =
+        req.files.idCardBack[0].path;
+    }
+
+    // Vehicle Images
     if (req.files?.vehicleFront?.[0]) {
-      handover.images.vehicleFront = req.files.vehicleFront[0].path;
+      handover.images.vehicleFront =
+        req.files.vehicleFront[0].path;
     }
 
     if (req.files?.vehicleRear?.[0]) {
-      handover.images.vehicleRear = req.files.vehicleRear[0].path;
+      handover.images.vehicleRear =
+        req.files.vehicleRear[0].path;
     }
 
     if (req.files?.vehicleLeft?.[0]) {
-      handover.images.vehicleLeft = req.files.vehicleLeft[0].path;
+      handover.images.vehicleLeft =
+        req.files.vehicleLeft[0].path;
     }
 
     if (req.files?.vehicleRight?.[0]) {
-      handover.images.vehicleRight = req.files.vehicleRight[0].path;
+      handover.images.vehicleRight =
+        req.files.vehicleRight[0].path;
     }
 
     await handover.save();
 
-    res.status(200).json({
+    return res.status(200).json({
       success: true,
       message: "Handover images uploaded successfully",
       data: handover,
     });
   } catch (error) {
-    console.log("UPLOAD ERROR:", error);
+    console.error("UPLOAD ERROR:", error);
 
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
-      message: error.message,
+      message:
+        error.message || "Failed to upload handover images",
     });
   }
 };

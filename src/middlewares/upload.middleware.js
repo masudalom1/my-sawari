@@ -37,6 +37,12 @@ const upload = multer({
 export const handoverUpload = upload.fields([
   { name: "customerPhoto", maxCount: 1 },
   { name: "customerWithVehicle", maxCount: 1 },
+
+  // ID Card Images
+  { name: "idCardFront", maxCount: 1 },
+  { name: "idCardBack", maxCount: 1 },
+
+  // Vehicle Images
   { name: "vehicleFront", maxCount: 1 },
   { name: "vehicleRear", maxCount: 1 },
   { name: "vehicleLeft", maxCount: 1 },

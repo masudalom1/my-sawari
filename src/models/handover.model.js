@@ -72,39 +72,39 @@ const handoverSchema = new mongoose.Schema(
       },
     },
 
-   vehicle: {
-  vehicleId: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: "Vehicle",
-    required: true,
-  },
+    vehicle: {
+      vehicleId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "Vehicle",
+        required: true,
+      },
 
-  vehicleName: {
-    type: String,
-    required: true,
-    trim: true,
-  },
+      vehicleName: {
+        type: String,
+        required: true,
+        trim: true,
+      },
 
-  vehicleNumber: {
-    type: String,
-    required: true,
-    trim: true,
-    uppercase: true,
-  },
+      vehicleNumber: {
+        type: String,
+        required: true,
+        trim: true,
+        uppercase: true,
+      },
 
-  vehicleColor: {
-    type: String,
-    trim: true,
-    default: "",
-  },
+      vehicleColor: {
+        type: String,
+        trim: true,
+        default: "",
+      },
 
-  handoverKm: {
-    type: Number,
-    required: true,
-    min: 0,
-    default: 0,
-  },
-},
+      handoverKm: {
+        type: Number,
+        required: true,
+        min: 0,
+        default: 0,
+      },
+    },
 
     trip: {
       tripType: {
@@ -187,23 +187,13 @@ const handoverSchema = new mongoose.Schema(
 
       paymentMethod: {
         type: String,
-        enum: [
-          "cash",
-          "upi",
-          "card",
-          "bank",
-          "mixed",
-        ],
+        enum: ["cash", "upi", "card", "bank", "mixed"],
         required: true,
       },
 
       paymentStatus: {
         type: String,
-        enum: [
-          "paid",
-          "partial",
-          "pending",
-        ],
+        enum: ["paid", "partial", "pending"],
         default: "pending",
       },
     },
@@ -222,6 +212,16 @@ const handoverSchema = new mongoose.Schema(
       },
 
       customerWithVehicle: {
+        type: String,
+        default: "",
+      },
+
+      idCardFront: {
+        type: String,
+        default: "",
+      },
+
+      idCardBack: {
         type: String,
         default: "",
       },
@@ -246,25 +246,18 @@ const handoverSchema = new mongoose.Schema(
         default: "",
       },
     },
-
     bookingStatus: {
       type: String,
-      enum: [
-        "draft",
-        "confirmed",
-        "active",
-        "completed",
-        "cancelled",
-      ],
+      enum: ["draft", "confirmed", "active", "completed", "cancelled"],
       default: "confirmed",
       index: true,
     },
 
-  handoverStatus: {
-  type: String,
-  enum: ["active", "returned", "cancelled"],
-  default: "active",
-},
+    handoverStatus: {
+      type: String,
+      enum: ["active", "returned", "cancelled"],
+      default: "active",
+    },
 
     returnDetails: {
       returnedAt: {
