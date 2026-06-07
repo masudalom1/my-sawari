@@ -100,19 +100,30 @@ export const createEmployee = asyncHandler(async (req, res) => {
   if (superAdmin.role !== "SUPER_ADMIN") {
     throw new ApiError(
       403,
-      "Only Super Admin can create employee accounts"
+      "Only Super Admin can create employees"
     );
   }
-
-  validateRegisterInput(req.body);
 
   const {
     fullName,
     mobileNumber,
     email,
     password,
-    role = "EMPLOYEE",
+    role,
   } = req.body;
+
+  if (
+    !fullName ||
+    !mobileNumber ||
+    !email ||
+    !password ||
+    !role
+  ) {
+    throw new ApiError(
+      400,
+      "All fields are required"
+    );
+  }
 
   const existingUser = await User.findOne({
     $or: [
@@ -143,7 +154,8 @@ export const createEmployee = asyncHandler(async (req, res) => {
     fullName,
     mobileNumber,
     email: email.toLowerCase(),
-    businessName: superAdmin.businessName,
+    businessName:
+      superAdmin.businessName,
     password,
     role,
     createdBy: superAdmin._id,
@@ -151,7 +163,8 @@ export const createEmployee = asyncHandler(async (req, res) => {
 
   res.status(201).json({
     success: true,
-    message: "Employee created successfully",
+    message:
+      "Employee created successfully",
     data: {
       user: {
         id: employee._id,
