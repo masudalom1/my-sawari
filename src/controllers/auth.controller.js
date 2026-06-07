@@ -94,6 +94,77 @@ export const registerUser = asyncHandler(async (req, res) => {
   await sendAuthResponse(user, res, 201);
 });
 
+export const createEmployee = asyncHandler(async (req, res) => {
+  const superAdmin = req.user;
+
+  if (superAdmin.role !== "SUPER_ADMIN") {
+    throw new ApiError(
+      403,
+      "Only Super Admin can create employee accounts"
+    );
+  }
+
+  validateRegisterInput(req.body);
+
+  const {
+    fullName,
+    mobileNumber,
+    email,
+    password,
+    role = "EMPLOYEE",
+  } = req.body;
+
+  const existingUser = await User.findOne({
+    $or: [
+      { email: email.toLowerCase() },
+      { mobileNumber },
+    ],
+  });
+
+  if (existingUser) {
+    if (existingUser.email === email.toLowerCase()) {
+      throw new ApiError(
+        409,
+        "Email already registered"
+      );
+    }
+
+    if (
+      existingUser.mobileNumber === mobileNumber
+    ) {
+      throw new ApiError(
+        409,
+        "Mobile number already registered"
+      );
+    }
+  }
+
+  const employee = await User.create({
+    fullName,
+    mobileNumber,
+    email: email.toLowerCase(),
+    businessName: superAdmin.businessName,
+    password,
+    role,
+    createdBy: superAdmin._id,
+  });
+
+  res.status(201).json({
+    success: true,
+    message: "Employee created successfully",
+    data: {
+      user: {
+        id: employee._id,
+        fullName: employee.fullName,
+        email: employee.email,
+        mobileNumber:
+          employee.mobileNumber,
+        role: employee.role,
+      },
+    },
+  });
+});
+
 export const loginUser = asyncHandler(async (req, res) => {
   validateLoginInput(req.body);
 
