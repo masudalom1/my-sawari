@@ -12,11 +12,19 @@ export const receiveVehicle = async (req, res) => {
       hasDamage,
       damageNotes,
       inspection,
+
+      repairEstimate,
+      repairDays,
+      amountCollected,
+      paymentMode,
     } = req.body;
 
     const files = req.files || {};
 
-    // validations
+    /* ==========================
+       VALIDATIONS
+    ========================== */
+
     if (!fuelLevel || !kilometersAtReturn) {
       return res.status(400).json({
         success: false,
@@ -36,6 +44,10 @@ export const receiveVehicle = async (req, res) => {
       });
     }
 
+    /* ==========================
+       FIND HANDOVER
+    ========================== */
+
     const handover = await Handover.findOne({
       _id: handoverId,
       company: req.user.company || req.user._id,
@@ -49,12 +61,16 @@ export const receiveVehicle = async (req, res) => {
       });
     }
 
-    if (handover.handoverStatus === "completed") {
+    if (handover.handoverStatus === "returned") {
       return res.status(400).json({
         success: false,
         message: "Vehicle already received",
       });
     }
+
+    /* ==========================
+       FIND VEHICLE
+    ========================== */
 
     const vehicle = await Vehicle.findById(
       handover.vehicle.vehicleId
@@ -67,7 +83,6 @@ export const receiveVehicle = async (req, res) => {
       });
     }
 
-    // must be rented
     if (vehicle.status !== "rent") {
       return res.status(400).json({
         success: false,
@@ -75,9 +90,14 @@ export const receiveVehicle = async (req, res) => {
       });
     }
 
-    const existingReturn = await VehicleReturn.findOne({
-      handover: handoverId,
-    });
+    /* ==========================
+       CHECK EXISTING RETURN
+    ========================== */
+
+    const existingReturn =
+      await VehicleReturn.findOne({
+        handover: handoverId,
+      });
 
     if (existingReturn) {
       return res.status(400).json({
@@ -86,69 +106,169 @@ export const receiveVehicle = async (req, res) => {
       });
     }
 
+    /* ==========================
+       PARSE INSPECTION
+    ========================== */
+
     let parsedInspection = [];
 
     if (inspection) {
       try {
-        parsedInspection = JSON.parse(inspection);
+        parsedInspection =
+          typeof inspection === "string"
+            ? JSON.parse(inspection)
+            : inspection;
       } catch {
         parsedInspection = [];
       }
     }
 
-    const vehicleReturn = await VehicleReturn.create({
-      company: req.user.company || req.user._id,
-      createdBy: req.user._id,
+    /* ==========================
+       DAMAGE IMAGES
+    ========================== */
 
-      handover: handover._id,
-      vehicle: vehicle._id,
+    const damageImages =
+      files.damageImages?.map(
+        (file) => file.path
+      ) || [];
 
-      customerName: handover.customer.fullName,
+    /* ==========================
+       DAMAGE COST DETAILS
+    ========================== */
 
-      fuelLevel: Number(fuelLevel),
-      kilometersAtReturn: Number(kilometersAtReturn),
+    const isDamaged =
+      hasDamage === true ||
+      hasDamage === "true";
 
-      hasDamage:
-        hasDamage === true ||
-        hasDamage === "true",
+    const estimate =
+      Number(repairEstimate) || 0;
 
-      damageNotes: damageNotes || "",
+    const collected =
+      Number(amountCollected) || 0;
 
-      inspection: parsedInspection,
+    let collectionStatus = "Pending";
 
-      images: {
-        vehicleFront:
-          files.vehicleFront?.[0]?.path || "",
-        vehicleRear:
-          files.vehicleRear?.[0]?.path || "",
-        vehicleLeft:
-          files.vehicleLeft?.[0]?.path || "",
-        vehicleRight:
-          files.vehicleRight?.[0]?.path || "",
-        damageImage:
-          files.damageImage?.[0]?.path || "",
-      },
-    });
+    if (isDamaged) {
+      if (collected > 0) {
+        collectionStatus =
+          collected >= estimate
+            ? "Collected"
+            : "Partially Collected";
+      }
+    }
 
-    // AVAILABLE AGAIN
+    /* ==========================
+       CREATE RETURN ENTRY
+    ========================== */
+
+    const vehicleReturn =
+      await VehicleReturn.create({
+        company:
+          req.user.company ||
+          req.user._id,
+
+        createdBy: req.user._id,
+
+        handover: handover._id,
+
+        vehicle: vehicle._id,
+
+        customerName:
+          handover.customer.fullName,
+
+        fuelLevel: Number(fuelLevel),
+
+        kilometersAtReturn: Number(
+          kilometersAtReturn
+        ),
+
+        hasDamage: isDamaged,
+
+        damageNotes: damageNotes || "",
+
+        inspection: parsedInspection,
+
+        images: {
+          vehicleFront:
+            files.vehicleFront?.[0]
+              ?.path || "",
+
+          vehicleRear:
+            files.vehicleRear?.[0]
+              ?.path || "",
+
+          vehicleLeft:
+            files.vehicleLeft?.[0]
+              ?.path || "",
+
+          vehicleRight:
+            files.vehicleRight?.[0]
+              ?.path || "",
+        },
+
+        damageImages,
+
+        damageCostDetails: isDamaged
+          ? {
+              repairEstimate:
+                estimate,
+
+              repairDays:
+                Number(repairDays) ||
+                0,
+
+              amountCollected:
+                collected,
+
+              paymentMode:
+                paymentMode ||
+                "Cash",
+
+              status:
+                collectionStatus,
+            }
+          : undefined,
+      });
+
+    /* ==========================
+       UPDATE VEHICLE STATUS
+    ========================== */
+
     vehicle.status = "available";
+
     await vehicle.save();
 
-    // COMPLETE HANDOVER
-   handover.handoverStatus = "returned";
+    /* ==========================
+       UPDATE HANDOVER STATUS
+    ========================== */
+
+    handover.handoverStatus =
+      "returned";
+
     await handover.save();
 
-    res.status(201).json({
+    /* ==========================
+       RESPONSE
+    ========================== */
+
+    return res.status(201).json({
       success: true,
-      message: "Vehicle received successfully",
+      message:
+        "Vehicle received successfully",
+
       data: vehicleReturn,
     });
   } catch (error) {
-    console.log("RECEIVE VEHICLE ERROR:", error);
+    console.error(
+      "RECEIVE VEHICLE ERROR:",
+      error
+    );
 
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
-      message: error.message,
+      message:
+        error.message ||
+        "Internal Server Error",
     });
   }
 };

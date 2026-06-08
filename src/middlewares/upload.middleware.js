@@ -22,7 +22,9 @@ const storage = new CloudinaryStorage({
   params: async (req, file) => ({
     folder: "my-sawari/handover",
     allowed_formats: ["jpg", "jpeg", "png", "webp"],
-    public_id: `${Date.now()}-${file.originalname.split(".")[0]}`,
+    public_id: `${Date.now()}-${
+      file.originalname.split(".")[0]
+    }`,
   }),
 });
 
@@ -30,10 +32,13 @@ const upload = multer({
   storage,
   fileFilter,
   limits: {
-    fileSize: 10 * 1024 * 1024,
+    fileSize: 10 * 1024 * 1024, // 10 MB
   },
 });
 
+/* ===============================
+   HANDOVER IMAGES
+================================ */
 export const handoverUpload = upload.fields([
   { name: "customerPhoto", maxCount: 1 },
   { name: "customerWithVehicle", maxCount: 1 },
@@ -49,10 +54,19 @@ export const handoverUpload = upload.fields([
   { name: "vehicleRight", maxCount: 1 },
 ]);
 
+/* ===============================
+   VEHICLE RETURN IMAGES
+================================ */
 export const vehicleReturnUpload = upload.fields([
+  // Mandatory return vehicle photos
   { name: "vehicleFront", maxCount: 1 },
   { name: "vehicleRear", maxCount: 1 },
   { name: "vehicleLeft", maxCount: 1 },
   { name: "vehicleRight", maxCount: 1 },
-  { name: "damageImage", maxCount: 1 },
+
+  // Multiple damage images
+  { name: "damageImages", maxCount: 10 },
+
+  // Repair bill upload (optional)
+  { name: "repairBill", maxCount: 1 },
 ]);
