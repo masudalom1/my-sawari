@@ -109,17 +109,27 @@ export const createHandover = async (req, res, next) => {
 
         totalFare: Number(payment?.totalFare) || 0,
 
-        amountReceived: Number(payment?.amountReceived) || 0,
-
-        pendingAmount: Number(payment?.pendingAmount) || 0,
-
         securityDeposit: Number(payment?.securityDeposit) || 0,
-
-        advancePaid: Number(payment?.advancePaid) || 0,
 
         extraCharges: Number(payment?.extraCharges) || 0,
 
+        totalAmount: Number(payment?.totalAmount) || 0,
+
+        bookingAmountPaid: Number(payment?.bookingAmountPaid) || 0,
+
+        amountReceivedNow: Number(payment?.amountReceivedNow) || 0,
+
+        balanceAmount: Number(payment?.balanceAmount) || 0,
+
         paymentMethod: payment?.paymentMethod || "cash",
+
+        paymentBreakdown: {
+          cash: Number(payment?.paymentBreakdown?.cash) || 0,
+
+          phonePe: Number(payment?.paymentBreakdown?.phonePe) || 0,
+
+          razorpay: Number(payment?.paymentBreakdown?.razorpay) || 0,
+        },
       },
 
       notes: notes || "",
@@ -217,8 +227,7 @@ export const uploadHandoverImages = async (req, res, next) => {
 
     // Customer Images
     if (req.files?.customerPhoto?.[0]) {
-      handover.images.customerPhoto =
-        req.files.customerPhoto[0].path;
+      handover.images.customerPhoto = req.files.customerPhoto[0].path;
     }
 
     if (req.files?.customerWithVehicle?.[0]) {
@@ -228,34 +237,28 @@ export const uploadHandoverImages = async (req, res, next) => {
 
     // ID Card Images
     if (req.files?.idCardFront?.[0]) {
-      handover.images.idCardFront =
-        req.files.idCardFront[0].path;
+      handover.images.idCardFront = req.files.idCardFront[0].path;
     }
 
     if (req.files?.idCardBack?.[0]) {
-      handover.images.idCardBack =
-        req.files.idCardBack[0].path;
+      handover.images.idCardBack = req.files.idCardBack[0].path;
     }
 
     // Vehicle Images
     if (req.files?.vehicleFront?.[0]) {
-      handover.images.vehicleFront =
-        req.files.vehicleFront[0].path;
+      handover.images.vehicleFront = req.files.vehicleFront[0].path;
     }
 
     if (req.files?.vehicleRear?.[0]) {
-      handover.images.vehicleRear =
-        req.files.vehicleRear[0].path;
+      handover.images.vehicleRear = req.files.vehicleRear[0].path;
     }
 
     if (req.files?.vehicleLeft?.[0]) {
-      handover.images.vehicleLeft =
-        req.files.vehicleLeft[0].path;
+      handover.images.vehicleLeft = req.files.vehicleLeft[0].path;
     }
 
     if (req.files?.vehicleRight?.[0]) {
-      handover.images.vehicleRight =
-        req.files.vehicleRight[0].path;
+      handover.images.vehicleRight = req.files.vehicleRight[0].path;
     }
 
     await handover.save();
@@ -270,8 +273,7 @@ export const uploadHandoverImages = async (req, res, next) => {
 
     return res.status(500).json({
       success: false,
-      message:
-        error.message || "Failed to upload handover images",
+      message: error.message || "Failed to upload handover images",
     });
   }
 };

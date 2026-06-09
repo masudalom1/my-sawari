@@ -155,25 +155,7 @@ const handoverSchema = new mongoose.Schema(
         min: 0,
       },
 
-      amountReceived: {
-        type: Number,
-        required: true,
-        min: 0,
-      },
-
-      pendingAmount: {
-        type: Number,
-        default: 0,
-        min: 0,
-      },
-
       securityDeposit: {
-        type: Number,
-        default: 0,
-        min: 0,
-      },
-
-      advancePaid: {
         type: Number,
         default: 0,
         min: 0,
@@ -185,10 +167,54 @@ const handoverSchema = new mongoose.Schema(
         min: 0,
       },
 
+      totalAmount: {
+        type: Number,
+        required: true,
+        min: 0,
+      },
+
+      bookingAmountPaid: {
+        type: Number,
+        default: 0,
+        min: 0,
+      },
+
+      amountReceivedNow: {
+        type: Number,
+        required: true,
+        min: 0,
+      },
+
+      balanceAmount: {
+        type: Number,
+        default: 0,
+        min: 0,
+      },
+
       paymentMethod: {
         type: String,
-        enum: ["cash", "upi", "card", "bank", "mixed"],
+        enum: ["cash", "phonepe", "razorpay", "mixed"],
         required: true,
+      },
+
+      paymentBreakdown: {
+        cash: {
+          type: Number,
+          default: 0,
+          min: 0,
+        },
+
+        phonePe: {
+          type: Number,
+          default: 0,
+          min: 0,
+        },
+
+        razorpay: {
+          type: Number,
+          default: 0,
+          min: 0,
+        },
       },
 
       paymentStatus: {
@@ -293,10 +319,24 @@ const handoverSchema = new mongoose.Schema(
 
 handoverSchema.pre("save", function () {
   if (this.payment?.totalFare !== undefined) {
-    const totalFare = Number(this.payment.totalFare) || 0;
-    const received = Number(this.payment.amountReceived) || 0;
+    const totalAmount = Number(this.payment.totalAmount) || 0;
 
-    this.payment.pendingAmount = totalFare - received;
+    const bookingPaid = Number(this.payment.bookingAmountPaid) || 0;
+
+    const receivedNow = Number(this.payment.amountReceivedNow) || 0;
+
+    this.payment.balanceAmount = Math.max(
+      0,
+      totalAmount - bookingPaid - receivedNow,
+    );
+
+    if (this.payment.balanceAmount <= 0) {
+      this.payment.paymentStatus = "paid";
+    } else if (bookingPaid + receivedNow > 0) {
+      this.payment.paymentStatus = "partial";
+    } else {
+      this.payment.paymentStatus = "pending";
+    }
 
     if (this.payment.pendingAmount <= 0) {
       this.payment.pendingAmount = 0;
