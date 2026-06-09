@@ -8,8 +8,10 @@ import {
   getActiveHandovers,
   getAllHandovers,
   getReceiveCarList,
+  getRentalDetails,
   getSingleHandover,
   updateHandover,
+  updateRental,
   uploadHandoverImages,
 } from "../controllers/handover.controller.js";
 
@@ -22,6 +24,11 @@ router.put("/upload-images/:handoverId",protect,handoverUpload,uploadHandoverIma
 router.get("/active-handovers",protect,getActiveHandovers);
 router.get("/single/:id",protect,getSingleHandover);
 router.get("/receive-list", getReceiveCarList);
+
+// ACTIVE RENTAL EDIT APIS
+router.get("/rentals/:id",protect,getRentalDetails);
+
+router.put("/rentals/edit/:id",protect,updateRental);
 // no use
 router.get("/all", getAllHandovers);
 router.get("single/:id", getSingleHandover);
