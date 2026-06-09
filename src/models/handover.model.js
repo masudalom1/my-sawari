@@ -317,7 +317,7 @@ const handoverSchema = new mongoose.Schema(
   },
 );
 
-handoverSchema.pre("save", function (next) {
+handoverSchema.pre("save", function () {
   if (this.payment) {
     const totalAmount =
       Number(this.payment.totalAmount) || 0;
@@ -343,8 +343,6 @@ handoverSchema.pre("save", function (next) {
       this.payment.paymentStatus = "pending";
     }
   }
-
-  next();
 });
 
 const Handover = mongoose.model("Handover", handoverSchema);
