@@ -317,36 +317,34 @@ const handoverSchema = new mongoose.Schema(
   },
 );
 
-handoverSchema.pre("save", function () {
-  if (this.payment?.totalFare !== undefined) {
-    const totalAmount = Number(this.payment.totalAmount) || 0;
+handoverSchema.pre("save", function (next) {
+  if (this.payment) {
+    const totalAmount =
+      Number(this.payment.totalAmount) || 0;
 
-    const bookingPaid = Number(this.payment.bookingAmountPaid) || 0;
+    const bookingPaid =
+      Number(this.payment.bookingAmountPaid) || 0;
 
-    const receivedNow = Number(this.payment.amountReceivedNow) || 0;
+    const receivedNow =
+      Number(this.payment.amountReceivedNow) || 0;
+
+    const totalPaid = bookingPaid + receivedNow;
 
     this.payment.balanceAmount = Math.max(
       0,
-      totalAmount - bookingPaid - receivedNow,
+      totalAmount - totalPaid
     );
 
-    if (this.payment.balanceAmount <= 0) {
+    if (this.payment.balanceAmount === 0) {
       this.payment.paymentStatus = "paid";
-    } else if (bookingPaid + receivedNow > 0) {
-      this.payment.paymentStatus = "partial";
-    } else {
-      this.payment.paymentStatus = "pending";
-    }
-
-    if (this.payment.pendingAmount <= 0) {
-      this.payment.pendingAmount = 0;
-      this.payment.paymentStatus = "paid";
-    } else if (received > 0) {
+    } else if (totalPaid > 0) {
       this.payment.paymentStatus = "partial";
     } else {
       this.payment.paymentStatus = "pending";
     }
   }
+
+  next();
 });
 
 const Handover = mongoose.model("Handover", handoverSchema);
