@@ -333,7 +333,7 @@ const vehicleReturnSchema = new mongoose.Schema(
    VALIDATIONS
 ========================== */
 
-vehicleReturnSchema.pre("save", function (next) {
+vehicleReturnSchema.pre("save", async function () {
   const settlement =
     this.settlementDetails || {};
 
@@ -341,14 +341,10 @@ vehicleReturnSchema.pre("save", function (next) {
     settlement.finalBalance > 0 &&
     !settlement.balanceReason?.trim()
   ) {
-    return next(
-      new Error(
-        "Reason is required when balance amount remains"
-      )
+    throw new Error(
+      "Reason is required when balance amount remains"
     );
   }
-
-  next();
 });
 
 /* ==========================
