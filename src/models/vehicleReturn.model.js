@@ -23,6 +23,10 @@ const inspectionItemSchema = new mongoose.Schema(
   { _id: false }
 );
 
+/* ==========================
+   DAMAGE COST DETAILS
+========================== */
+
 const damageCostDetailsSchema = new mongoose.Schema(
   {
     repairEstimate: {
@@ -37,31 +41,6 @@ const damageCostDetailsSchema = new mongoose.Schema(
       min: 0,
     },
 
-    amountCollected: {
-      type: Number,
-      default: 0,
-      min: 0,
-    },
-
-    paymentMode: {
-      type: String,
-      enum: ["Cash", "UPI", "Card", "Bank Transfer"],
-      default: "Cash",
-    },
-
-    status: {
-      type: String,
-      enum: [
-        "Pending",
-        "Partially Collected",
-        "Collected",
-        "Pending Collection",
-        "Refund Required",
-        "Closed",
-      ],
-      default: "Pending",
-    },
-
     actualRepairCost: {
       type: Number,
       default: 0,
@@ -73,16 +52,6 @@ const damageCostDetailsSchema = new mongoose.Schema(
       default: "",
     },
 
-    balanceAmount: {
-      type: Number,
-      default: 0,
-    },
-
-    refundAmount: {
-      type: Number,
-      default: 0,
-    },
-
     repairedAt: {
       type: Date,
     },
@@ -92,9 +61,146 @@ const damageCostDetailsSchema = new mongoose.Schema(
       default: "",
       trim: true,
     },
+
+    status: {
+      type: String,
+      enum: [
+        "Pending",
+        "Under Repair",
+        "Completed",
+        "Closed",
+      ],
+      default: "Pending",
+    },
   },
   { _id: false }
 );
+
+/* ==========================
+   PAYMENT SETTLEMENT DETAILS
+========================== */
+
+const settlementDetailsSchema = new mongoose.Schema(
+  {
+    /*
+      Existing pending amount
+      from booking/handover
+    */
+    pendingAmount: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+
+    /*
+      Auto calculated
+      editable by executive
+    */
+    lateReturnFine: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+
+    /*
+      Auto calculated
+      editable by executive
+    */
+    extraKmFine: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+
+    /*
+      Fuel shortage amount
+    */
+    fuelUsageAmount: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+
+    /*
+      Damage estimate included
+      for settlement calculations
+    */
+    damageAmount: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+
+    /*
+      Pending + fines + fuel + damage
+    */
+    totalBalanceAmount: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+
+    /*
+      Amount collected
+      during return
+    */
+    amountCollected: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+
+    paymentMode: {
+      type: String,
+      enum: [
+        "Cash",
+        "UPI",
+        "Card",
+        "Bank Transfer",
+      ],
+      default: "Cash",
+    },
+
+    /*
+      Remaining amount
+    */
+    finalBalance: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+
+    /*
+      Mandatory if
+      finalBalance > 0
+    */
+    balanceReason: {
+      type: String,
+      default: "",
+      trim: true,
+    },
+
+    status: {
+      type: String,
+      enum: [
+        "Collected",
+        "Partially Collected",
+        "Pending Collection",
+      ],
+      default: "Pending Collection",
+    },
+
+    settledAt: {
+      type: Date,
+      default: Date.now,
+    },
+  },
+  { _id: false }
+);
+
+/* ==========================
+   MAIN SCHEMA
+========================== */
 
 const vehicleReturnSchema = new mongoose.Schema(
   {
@@ -159,7 +265,10 @@ const vehicleReturnSchema = new mongoose.Schema(
       default: [],
     },
 
-    // Mandatory vehicle images
+    /* ======================
+       VEHICLE RETURN IMAGES
+    ====================== */
+
     images: {
       vehicleFront: {
         type: String,
@@ -182,15 +291,30 @@ const vehicleReturnSchema = new mongoose.Schema(
       },
     },
 
-    // Multiple damage images
+    /* ======================
+       DAMAGE IMAGES
+    ====================== */
+
     damageImages: {
       type: [String],
       default: [],
     },
 
-    // Damage collection details
+    /* ======================
+       DAMAGE DETAILS
+    ====================== */
+
     damageCostDetails: {
       type: damageCostDetailsSchema,
+      default: () => ({}),
+    },
+
+    /* ======================
+       RETURN SETTLEMENT
+    ====================== */
+
+    settlementDetails: {
+      type: settlementDetailsSchema,
       default: () => ({}),
     },
 
@@ -205,14 +329,62 @@ const vehicleReturnSchema = new mongoose.Schema(
   }
 );
 
-// Indexes for filtering Damage Cost Collection screen
+/* ==========================
+   VALIDATIONS
+========================== */
+
+vehicleReturnSchema.pre("save", function (next) {
+  const settlement =
+    this.settlementDetails || {};
+
+  if (
+    settlement.finalBalance > 0 &&
+    !settlement.balanceReason?.trim()
+  ) {
+    return next(
+      new Error(
+        "Reason is required when balance amount remains"
+      )
+    );
+  }
+
+  next();
+});
+
+/* ==========================
+   INDEXES
+========================== */
+
+// Pending collections
+vehicleReturnSchema.index({
+  "settlementDetails.status": 1,
+});
+
+// Outstanding balances
+vehicleReturnSchema.index({
+  "settlementDetails.finalBalance": 1,
+});
+
+// Damage workflow
 vehicleReturnSchema.index({
   "damageCostDetails.status": 1,
 });
 
+// Company dashboard
 vehicleReturnSchema.index({
   company: 1,
   createdAt: -1,
+});
+
+// Vehicle history
+vehicleReturnSchema.index({
+  vehicle: 1,
+  createdAt: -1,
+});
+
+// Customer collections
+vehicleReturnSchema.index({
+  customerName: 1,
 });
 
 export default mongoose.model(
