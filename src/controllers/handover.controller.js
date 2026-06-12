@@ -64,6 +64,16 @@ export const createHandover = async (req, res, next) => {
         message: "Selected vehicle is not available",
       });
     }
+    if (
+      payment?.fuelLevel === undefined ||
+      payment.fuelLevel < 0 ||
+      payment.fuelLevel > 7
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid fuel level",
+      });
+    }
 
     // ==========================
     // CREATE HANDOVER
@@ -101,7 +111,8 @@ export const createHandover = async (req, res, next) => {
       },
 
       payment: {
-        fuelLevel: payment?.fuelLevel || "medium",
+        fuelLevel:
+          payment?.fuelLevel !== undefined ? Number(payment.fuelLevel) : 7,
 
         fastTagBalance: Number(payment?.fastTagBalance) || 0,
 
@@ -399,39 +410,27 @@ export const getRentalDetails = async (req, res) => {
 
         totalFare: handover.payment.totalFare,
 
-        fastagCharges:
-          handover.payment.fastTagPayableAmount,
+        fastagCharges: handover.payment.fastTagPayableAmount,
 
-        securityDeposit:
-          handover.payment.securityDeposit,
+        securityDeposit: handover.payment.securityDeposit,
 
-        extraCharges:
-          handover.payment.extraCharges,
+        extraCharges: handover.payment.extraCharges,
 
-        bookingAmountPaid:
-          handover.payment.bookingAmountPaid,
+        bookingAmountPaid: handover.payment.bookingAmountPaid,
 
-        amountReceivedPreviously:
-          handover.payment.amountReceivedNow,
+        amountReceivedPreviously: handover.payment.amountReceivedNow,
 
-        totalAmount:
-          handover.payment.totalAmount,
+        totalAmount: handover.payment.totalAmount,
 
-        balanceAmount:
-          handover.payment.balanceAmount,
+        balanceAmount: handover.payment.balanceAmount,
 
-        paymentMethod:
-          handover.payment.paymentMethod,
+        paymentMethod: handover.payment.paymentMethod,
 
-        paymentStatus:
-          handover.payment.paymentStatus,
+        paymentStatus: handover.payment.paymentStatus,
       },
     });
   } catch (error) {
-    console.log(
-      "GET RENTAL DETAILS ERROR:",
-      error,
-    );
+    console.log("GET RENTAL DETAILS ERROR:", error);
 
     return res.status(500).json({
       success: false,
@@ -439,10 +438,7 @@ export const getRentalDetails = async (req, res) => {
     });
   }
 };
-export const updateRental = async (
-  req,
-  res,
-) => {
+export const updateRental = async (req, res) => {
   try {
     const { id } = req.params;
 
@@ -456,106 +452,73 @@ export const updateRental = async (
       reasonForChange,
     } = req.body;
 
-    const handover =
-      await Handover.findOne({
-        _id: id,
-        company:
-          req.user.company ||
-          req.user._id,
-        handoverStatus: "active",
-        isDeleted: false,
-      });
+    const handover = await Handover.findOne({
+      _id: id,
+      company: req.user.company || req.user._id,
+      handoverStatus: "active",
+      isDeleted: false,
+    });
 
     if (!handover) {
       return res.status(404).json({
         success: false,
-        message:
-          "Active rental not found",
+        message: "Active rental not found",
       });
     }
 
     // Update trip
     if (dropDateTime) {
-      handover.trip.dropDateTime =
-        new Date(dropDateTime);
+      handover.trip.dropDateTime = new Date(dropDateTime);
 
-      const pickup =
-        handover.trip.pickupDateTime;
+      const pickup = handover.trip.pickupDateTime;
 
-      const drop = new Date(
-        dropDateTime,
-      );
+      const drop = new Date(dropDateTime);
 
-      const days = Math.ceil(
-        (drop - pickup) /
-          (1000 * 60 * 60 * 24),
-      );
+      const days = Math.ceil((drop - pickup) / (1000 * 60 * 60 * 24));
 
-      handover.trip.numberOfDays =
-        Math.max(1, days);
+      handover.trip.numberOfDays = Math.max(1, days);
     }
 
     // Update payments
-    handover.payment.totalFare =
-      Number(totalFare) || 0;
+    handover.payment.totalFare = Number(totalFare) || 0;
 
-    handover.payment.fastTagPayableAmount =
-      Number(fastagCharges) || 0;
+    handover.payment.fastTagPayableAmount = Number(fastagCharges) || 0;
 
-    handover.payment.securityDeposit =
-      Number(securityDeposit) || 0;
+    handover.payment.securityDeposit = Number(securityDeposit) || 0;
 
-    handover.payment.extraCharges =
-      Number(extraCharges) || 0;
+    handover.payment.extraCharges = Number(extraCharges) || 0;
 
     // Calculate total amount
     handover.payment.totalAmount =
       handover.payment.totalFare +
-      handover.payment
-        .fastTagPayableAmount +
-      handover.payment
-        .securityDeposit +
-      handover.payment
-        .extraCharges;
+      handover.payment.fastTagPayableAmount +
+      handover.payment.securityDeposit +
+      handover.payment.extraCharges;
 
     // Add newly collected payment
-    handover.payment.amountReceivedNow +=
-      Number(amountReceivedNow) || 0;
+    handover.payment.amountReceivedNow += Number(amountReceivedNow) || 0;
 
     // Recalculate balance
     const totalPaid =
-      handover.payment
-        .bookingAmountPaid +
-      handover.payment
-        .amountReceivedNow;
+      handover.payment.bookingAmountPaid + handover.payment.amountReceivedNow;
 
-    handover.payment.balanceAmount =
-      Math.max(
-        0,
-        handover.payment.totalAmount -
-          totalPaid,
-      );
+    handover.payment.balanceAmount = Math.max(
+      0,
+      handover.payment.totalAmount - totalPaid,
+    );
 
     // Payment status
-    if (
-      handover.payment.balanceAmount ===
-      0
-    ) {
-      handover.payment.paymentStatus =
-        "paid";
+    if (handover.payment.balanceAmount === 0) {
+      handover.payment.paymentStatus = "paid";
     } else if (totalPaid > 0) {
-      handover.payment.paymentStatus =
-        "partial";
+      handover.payment.paymentStatus = "partial";
     } else {
-      handover.payment.paymentStatus =
-        "pending";
+      handover.payment.paymentStatus = "pending";
     }
 
     // Save edit note
     if (reasonForChange) {
-      handover.notes = `${
-        handover.notes || ""
-      }
+      handover.notes = `${handover.notes || ""}
 
 [Rental Updated - ${new Date().toLocaleString()}]
 ${reasonForChange}`.trim();
@@ -565,15 +528,11 @@ ${reasonForChange}`.trim();
 
     return res.status(200).json({
       success: true,
-      message:
-        "Rental updated successfully",
+      message: "Rental updated successfully",
       data: handover,
     });
   } catch (error) {
-    console.log(
-      "UPDATE RENTAL ERROR:",
-      error,
-    );
+    console.log("UPDATE RENTAL ERROR:", error);
 
     return res.status(500).json({
       success: false,

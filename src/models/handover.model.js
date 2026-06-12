@@ -132,9 +132,10 @@ const handoverSchema = new mongoose.Schema(
 
     payment: {
       fuelLevel: {
-        type: String,
-        enum: ["low", "medium", "high", "full"],
-        default: "medium",
+        type: Number,
+        min: 0,
+        max: 7,
+        default: 1,
       },
 
       fastTagBalance: {
@@ -319,21 +320,15 @@ const handoverSchema = new mongoose.Schema(
 
 handoverSchema.pre("save", function () {
   if (this.payment) {
-    const totalAmount =
-      Number(this.payment.totalAmount) || 0;
+    const totalAmount = Number(this.payment.totalAmount) || 0;
 
-    const bookingPaid =
-      Number(this.payment.bookingAmountPaid) || 0;
+    const bookingPaid = Number(this.payment.bookingAmountPaid) || 0;
 
-    const receivedNow =
-      Number(this.payment.amountReceivedNow) || 0;
+    const receivedNow = Number(this.payment.amountReceivedNow) || 0;
 
     const totalPaid = bookingPaid + receivedNow;
 
-    this.payment.balanceAmount = Math.max(
-      0,
-      totalAmount - totalPaid
-    );
+    this.payment.balanceAmount = Math.max(0, totalAmount - totalPaid);
 
     if (this.payment.balanceAmount === 0) {
       this.payment.paymentStatus = "paid";
