@@ -237,11 +237,11 @@ const vehicleReturnSchema = new mongoose.Schema(
       trim: true,
     },
 
-    fuelLevel: {
-      type: Number,
-      enum: [0, 25, 50, 75, 100],
-      required: true,
-    },
+   fuelLevel: {
+  type: Number,
+  min: 0,
+  max: 7,
+},
 
     kilometersAtReturn: {
       type: Number,
