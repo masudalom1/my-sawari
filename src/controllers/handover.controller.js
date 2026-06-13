@@ -351,8 +351,14 @@ export const getSingleHandover = async (req, res) => {
 
 export const getReceiveCarList = async (req, res) => {
   try {
-    // Get all handovers except cancelled
+    const companyId = req.user.company || req.user._id;
+
+    /* ==========================
+       GET ALL HANDOVERS
+    ========================== */
+
     const handovers = await Handover.find({
+      company: companyId,
       isDeleted: false,
       "vehicle.vehicleId": { $exists: true },
       handoverStatus: { $ne: "cancelled" },
@@ -364,53 +370,124 @@ export const getReceiveCarList = async (req, res) => {
         createdAt: -1,
       });
 
-    // Get all completed vehicle returns
-    const vehicleReturns = await VehicleReturn.find(
-      {
-        returnStatus: "completed",
-      },
-      {
-        handover: 1,
-        returnStatus: 1,
-      }
-    );
+    /* ==========================
+       GET COMPLETED RETURNS
+    ========================== */
 
-    // Create lookup map
+    const vehicleReturns = await VehicleReturn.find({
+      company: companyId,
+      returnStatus: "completed",
+    })
+      .populate("receivedBy", "fullName")
+      .select(
+        `
+        handover
+        returnStatus
+        receivedBy
+        receivingTime
+        scheduledReturnTime
+        timeStatus
+        delayText
+        settlementDetails
+      `
+      );
+
+    /* ==========================
+       CREATE LOOKUP MAP
+    ========================== */
+
     const completedMap = new Map(
       vehicleReturns.map((item) => [
         item.handover.toString(),
-        item.returnStatus,
+        item,
       ])
     );
 
-    // Merge status into handover response
+    /* ==========================
+       MERGE DATA
+    ========================== */
+
     const finalData = handovers.map((handover) => {
       const obj = handover.toObject();
 
-      obj.returnStatus =
-        completedMap.get(handover._id.toString()) || null;
+      const returnData = completedMap.get(
+        handover._id.toString()
+      );
+
+      if (returnData) {
+        obj.returnStatus = "completed";
+
+        obj.returnDetails = {
+          receivedBy:
+            returnData.receivedBy || null,
+
+          receivingTime:
+            returnData.receivingTime || null,
+
+          scheduledReturnTime:
+            returnData.scheduledReturnTime ||
+            null,
+
+          timeStatus:
+            returnData.timeStatus ||
+            "On Time",
+
+          delayText:
+            returnData.delayText ||
+            "0 minutes",
+
+          pendingAmount:
+            returnData
+              .settlementDetails
+              ?.finalBalance || 0,
+        };
+      } else {
+        obj.returnStatus = null;
+      }
 
       return obj;
     });
 
-    res.status(200).json({
+    /* ==========================
+       COUNTS
+    ========================== */
+
+    const completedCount =
+      finalData.filter(
+        (item) =>
+          item.returnStatus ===
+          "completed"
+      ).length;
+
+    const activeCount =
+      finalData.filter(
+        (item) =>
+          item.returnStatus !==
+          "completed"
+      ).length;
+
+    /* ==========================
+       RESPONSE
+    ========================== */
+
+    return res.status(200).json({
       success: true,
+
       count: finalData.length,
 
-      activeCount: finalData.filter(
-        (item) => item.returnStatus !== "completed"
-      ).length,
+      activeCount,
 
-      completedCount: finalData.filter(
-        (item) => item.returnStatus === "completed"
-      ).length,
+      completedCount,
 
       data: finalData,
     });
   } catch (error) {
-    console.error("GET RECEIVE CAR LIST ERROR:", error);
+    console.error(
+      "GET RECEIVE CAR LIST ERROR:",
+      error
+    );
 
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
       message:
         error.message ||
