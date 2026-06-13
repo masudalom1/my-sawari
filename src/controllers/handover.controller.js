@@ -350,39 +350,60 @@ export const getSingleHandover = async (req, res) => {
 
 export const getReceiveCarList = async (req, res) => {
   try {
+    // Get all handovers except cancelled
     const handovers = await Handover.find({
       isDeleted: false,
       "vehicle.vehicleId": { $exists: true },
-      handoverStatus: {
-        $ne: "cancelled",
-      },
+      handoverStatus: { $ne: "cancelled" },
     })
       .populate("vehicle.vehicleId")
       .populate("customer")
       .sort({
-        handoverStatus: 1, // returned records will appear after active ones
         "trip.dropDateTime": 1,
         createdAt: -1,
       });
 
-    // Separate active and completed tasks
-    const activeTasks = handovers.filter(
-      (item) => item.handoverStatus !== "returned"
+    // Get all completed vehicle returns
+    const vehicleReturns = await VehicleReturn.find(
+      {
+        returnStatus: "completed",
+      },
+      {
+        handover: 1,
+        returnStatus: 1,
+      }
     );
 
-    const completedTasks = handovers.filter(
-      (item) => item.handoverStatus === "returned"
+    // Create lookup map
+    const completedMap = new Map(
+      vehicleReturns.map((item) => [
+        item.handover.toString(),
+        item.returnStatus,
+      ])
     );
 
-    // Active first, completed last
-    const finalData = [...activeTasks, ...completedTasks];
+    // Merge status into handover response
+    const finalData = handovers.map((handover) => {
+      const obj = handover.toObject();
+
+      obj.returnStatus =
+        completedMap.get(handover._id.toString()) || null;
+
+      return obj;
+    });
 
     res.status(200).json({
       success: true,
-      message: "Receive car list fetched successfully",
       count: finalData.length,
-      activeCount: activeTasks.length,
-      completedCount: completedTasks.length,
+
+      activeCount: finalData.filter(
+        (item) => item.returnStatus !== "completed"
+      ).length,
+
+      completedCount: finalData.filter(
+        (item) => item.returnStatus === "completed"
+      ).length,
+
       data: finalData,
     });
   } catch (error) {
@@ -390,7 +411,9 @@ export const getReceiveCarList = async (req, res) => {
 
     res.status(500).json({
       success: false,
-      message: error.message || "Failed to fetch receive car list",
+      message:
+        error.message ||
+        "Failed to fetch receive car list",
     });
   }
 };
