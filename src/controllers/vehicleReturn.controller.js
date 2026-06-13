@@ -2,318 +2,6 @@ import Handover from "../models/handover.model.js";
 import Vehicle from "../models/vehicle.model.js";
 import VehicleReturn from "../models/vehicleReturn.model.js";
 
-export const receiveVehicles = async (req, res) => {
-  try {
-    const { handoverId } = req.params;
-
-    const {
-      fuelLevel,
-      kilometersAtReturn,
-      hasDamage,
-      damageNotes,
-      inspection,
-      repairEstimate,
-      repairDays,
-      amountCollected,
-      paymentMode,
-    } = req.body;
-
-    const files = req.files || {};
-
-    const companyId =
-      req.user.company || req.user._id;
-
-    /* ==========================
-       BASIC VALIDATION
-    ========================== */
-
-    if (!fuelLevel || !kilometersAtReturn) {
-      return res.status(400).json({
-        success: false,
-        message:
-          "Fuel level and kilometers at return are required",
-      });
-    }
-
-    if (
-      !files.vehicleFront?.[0] ||
-      !files.vehicleRear?.[0] ||
-      !files.vehicleLeft?.[0] ||
-      !files.vehicleRight?.[0]
-    ) {
-      return res.status(400).json({
-        success: false,
-        message:
-          "Front, Rear, Left and Right vehicle images are required",
-      });
-    }
-
-    /* ==========================
-       FIND HANDOVER
-    ========================== */
-
-    const handover =
-      await Handover.findOne({
-        _id: handoverId,
-        company: companyId,
-        isDeleted: false,
-      });
-
-    if (!handover) {
-      return res.status(404).json({
-        success: false,
-        message: "Handover not found",
-      });
-    }
-
-    if (
-      handover.handoverStatus ===
-      "returned"
-    ) {
-      return res.status(400).json({
-        success: false,
-        message:
-          "Vehicle already received",
-      });
-    }
-
-    /* ==========================
-       FIND VEHICLE
-    ========================== */
-
-    const vehicleId =
-      handover.vehicle?.vehicleId ||
-      handover.vehicle;
-
-    const vehicle =
-      await Vehicle.findById(vehicleId);
-
-    if (!vehicle) {
-      return res.status(404).json({
-        success: false,
-        message: "Vehicle not found",
-      });
-    }
-
-    if (vehicle.status !== "rent") {
-      return res.status(400).json({
-        success: false,
-        message:
-          "Vehicle is not currently on rent",
-      });
-    }
-
-    /* ==========================
-       EXISTING RETURN CHECK
-    ========================== */
-
-    const existingReturn =
-      await VehicleReturn.findOne({
-        handover: handoverId,
-      });
-
-    if (existingReturn) {
-      return res.status(400).json({
-        success: false,
-        message:
-          "Return already submitted",
-      });
-    }
-
-    /* ==========================
-       INSPECTION PARSE
-    ========================== */
-
-    let parsedInspection = [];
-
-    try {
-      if (inspection) {
-        parsedInspection =
-          typeof inspection ===
-          "string"
-            ? JSON.parse(inspection)
-            : inspection;
-      }
-    } catch (error) {
-      return res.status(400).json({
-        success: false,
-        message:
-          "Invalid inspection data format",
-      });
-    }
-
-    /* ==========================
-       DAMAGE DATA
-    ========================== */
-
-    const isDamaged =
-      hasDamage === true ||
-      hasDamage === "true";
-
-    const damageImages =
-      files.damageImages?.map(
-        (file) => file.path
-      ) || [];
-
-    if (
-      isDamaged &&
-      damageImages.length === 0
-    ) {
-      return res.status(400).json({
-        success: false,
-        message:
-          "Damage images are required when damage is reported",
-      });
-    }
-
-    const estimate =
-      Number(repairEstimate) || 0;
-
-    const collected =
-      Number(amountCollected) || 0;
-
-    const days =
-      Number(repairDays) || 0;
-
-    const balanceAmount =
-      Math.max(
-        estimate - collected,
-        0
-      );
-
-    let collectionStatus =
-      "Pending Collection";
-
-    if (estimate > 0) {
-      if (collected >= estimate) {
-        collectionStatus =
-          "Collected";
-      } else if (collected > 0) {
-        collectionStatus =
-          "Partially Collected";
-      }
-    }
-
-    /* ==========================
-       CREATE RETURN
-    ========================== */
-
-    const vehicleReturn =
-      await VehicleReturn.create({
-        company: companyId,
-
-        createdBy: req.user._id,
-
-        handover: handover._id,
-
-        vehicle: vehicle._id,
-
-        customerName:
-          handover.customer?.fullName ||
-          "",
-
-        fuelLevel:
-          Number(fuelLevel),
-
-        kilometersAtReturn:
-          Number(
-            kilometersAtReturn
-          ),
-
-        hasDamage: isDamaged,
-
-        damageNotes:
-          damageNotes || "",
-
-        inspection:
-          parsedInspection,
-
-        images: {
-          vehicleFront:
-            files.vehicleFront?.[0]
-              ?.path || "",
-
-          vehicleRear:
-            files.vehicleRear?.[0]
-              ?.path || "",
-
-          vehicleLeft:
-            files.vehicleLeft?.[0]
-              ?.path || "",
-
-          vehicleRight:
-            files.vehicleRight?.[0]
-              ?.path || "",
-        },
-
-        damageImages,
-
-        damageCostDetails:
-          isDamaged
-            ? {
-                repairEstimate:
-                  estimate,
-
-                repairDays:
-                  days,
-
-                amountCollected:
-                  collected,
-
-                balanceAmount,
-
-                paymentMode:
-                  paymentMode ||
-                  "Cash",
-
-                status:
-                  collectionStatus,
-              }
-            : undefined,
-      });
-
-    /* ==========================
-       UPDATE VEHICLE
-    ========================== */
-
-    vehicle.status = "available";
-
-    await vehicle.save();
-
-    /* ==========================
-       UPDATE HANDOVER
-    ========================== */
-
-    handover.handoverStatus =
-      "returned";
-
-    await handover.save();
-
-    /* ==========================
-       RESPONSE
-    ========================== */
-
-    return res.status(201).json({
-      success: true,
-      message:
-        "Vehicle received successfully",
-      data: vehicleReturn,
-    });
-  } catch (error) {
-    console.error(
-      "RECEIVE VEHICLE ERROR:",
-      error
-    );
-
-    return res.status(500).json({
-      success: false,
-      message:
-        error.message ||
-        "Internal Server Error",
-    });
-  }
-};
-
 export const receiveVehicle = async (req, res) => {
   try {
     const { handoverId } = req.params;
@@ -340,8 +28,7 @@ export const receiveVehicle = async (req, res) => {
 
     const files = req.files || {};
 
-    const companyId =
-      req.user.company || req.user._id;
+    const companyId = req.user.company || req.user._id;
 
     /* ==========================
        BASIC VALIDATION
@@ -350,8 +37,7 @@ export const receiveVehicle = async (req, res) => {
     if (!fuelLevel || !kilometersAtReturn) {
       return res.status(400).json({
         success: false,
-        message:
-          "Fuel level and kilometers at return are required",
+        message: "Fuel level and kilometers at return are required",
       });
     }
 
@@ -363,8 +49,7 @@ export const receiveVehicle = async (req, res) => {
     ) {
       return res.status(400).json({
         success: false,
-        message:
-          "Front, Rear, Left and Right vehicle images are required",
+        message: "Front, Rear, Left and Right vehicle images are required",
       });
     }
 
@@ -372,12 +57,11 @@ export const receiveVehicle = async (req, res) => {
        FIND HANDOVER
     ========================== */
 
-    const handover =
-      await Handover.findOne({
-        _id: handoverId,
-        company: companyId,
-        isDeleted: false,
-      });
+    const handover = await Handover.findOne({
+      _id: handoverId,
+      company: companyId,
+      isDeleted: false,
+    });
 
     if (!handover) {
       return res.status(404).json({
@@ -386,14 +70,10 @@ export const receiveVehicle = async (req, res) => {
       });
     }
 
-    if (
-      handover.handoverStatus ===
-      "returned"
-    ) {
+    if (handover.handoverStatus === "returned") {
       return res.status(400).json({
         success: false,
-        message:
-          "Vehicle already received",
+        message: "Vehicle already received",
       });
     }
 
@@ -401,12 +81,9 @@ export const receiveVehicle = async (req, res) => {
        FIND VEHICLE
     ========================== */
 
-    const vehicleId =
-      handover.vehicle?.vehicleId ||
-      handover.vehicle;
+    const vehicleId = handover.vehicle?.vehicleId || handover.vehicle;
 
-    const vehicle =
-      await Vehicle.findById(vehicleId);
+    const vehicle = await Vehicle.findById(vehicleId);
 
     if (!vehicle) {
       return res.status(404).json({
@@ -418,8 +95,7 @@ export const receiveVehicle = async (req, res) => {
     if (vehicle.status !== "rent") {
       return res.status(400).json({
         success: false,
-        message:
-          "Vehicle is not currently on rent",
+        message: "Vehicle is not currently on rent",
       });
     }
 
@@ -427,16 +103,14 @@ export const receiveVehicle = async (req, res) => {
        EXISTING RETURN CHECK
     ========================== */
 
-    const existingReturn =
-      await VehicleReturn.findOne({
-        handover: handoverId,
-      });
+    const existingReturn = await VehicleReturn.findOne({
+      handover: handoverId,
+    });
 
     if (existingReturn) {
       return res.status(400).json({
         success: false,
-        message:
-          "Return already submitted",
+        message: "Return already submitted",
       });
     }
 
@@ -449,15 +123,12 @@ export const receiveVehicle = async (req, res) => {
     try {
       if (inspection) {
         parsedInspection =
-          typeof inspection === "string"
-            ? JSON.parse(inspection)
-            : inspection;
+          typeof inspection === "string" ? JSON.parse(inspection) : inspection;
       }
     } catch (error) {
       return res.status(400).json({
         success: false,
-        message:
-          "Invalid inspection data format",
+        message: "Invalid inspection data format",
       });
     }
 
@@ -465,80 +136,48 @@ export const receiveVehicle = async (req, res) => {
        DAMAGE DATA
     ========================== */
 
-    const isDamaged =
-      hasDamage === true ||
-      hasDamage === "true";
+    const isDamaged = hasDamage === true || hasDamage === "true";
 
-    const damageImages =
-      files.damageImages?.map(
-        (file) => file.path
-      ) || [];
+    const damageImages = files.damageImages?.map((file) => file.path) || [];
 
-    if (
-      isDamaged &&
-      damageImages.length === 0
-    ) {
+    if (isDamaged && damageImages.length === 0) {
       return res.status(400).json({
         success: false,
-        message:
-          "Damage images are required when damage is reported",
+        message: "Damage images are required when damage is reported",
       });
     }
 
-    const estimate =
-      Number(repairEstimate) || 0;
+    const estimate = Number(repairEstimate) || 0;
 
-    const repairDuration =
-      Number(repairDays) || 0;
+    const repairDuration = Number(repairDays) || 0;
 
     /* ==========================
        SETTLEMENT CALCULATIONS
     ========================== */
 
-    const pendingAmount =
-      Number(
-        handover.payment
-          ?.balanceAmount
-      ) || 0;
+    const pendingAmount = Number(handover.payment?.balanceAmount) || 0;
 
-    const lateFine =
-      Number(lateReturnFine) || 0;
+    const lateFine = Number(lateReturnFine) || 0;
 
-    const kmFine =
-      Number(extraKmFine) || 0;
+    const kmFine = Number(extraKmFine) || 0;
 
-    const fuelFine =
-      Number(fuelUsageAmount) || 0;
+    const fuelFine = Number(fuelUsageAmount) || 0;
 
-    const collected =
-      Number(amountCollected) || 0;
+    const collected = Number(amountCollected) || 0;
 
     const totalBalanceAmount =
-      pendingAmount +
-      lateFine +
-      kmFine +
-      fuelFine +
-      estimate;
+      pendingAmount + lateFine + kmFine + fuelFine + estimate;
 
-    const finalBalance =
-      Math.max(
-        totalBalanceAmount -
-          collected,
-        0
-      );
+    const finalBalance = Math.max(totalBalanceAmount - collected, 0);
 
     /* ==========================
        VALIDATE REASON
     ========================== */
 
-    if (
-      finalBalance > 0 &&
-      !balanceReason?.trim()
-    ) {
+    if (finalBalance > 0 && !balanceReason?.trim()) {
       return res.status(400).json({
         success: false,
-        message:
-          "Reason is required when full amount is not collected",
+        message: "Reason is required when full amount is not collected",
       });
     }
 
@@ -546,135 +185,168 @@ export const receiveVehicle = async (req, res) => {
        SETTLEMENT STATUS
     ========================== */
 
-    let settlementStatus =
-      "Pending Collection";
+    let settlementStatus = "Pending Collection";
 
-    if (
-      totalBalanceAmount === 0 ||
-      collected >=
-        totalBalanceAmount
-    ) {
-      settlementStatus =
-        "Collected";
-    } else if (
-      collected > 0
-    ) {
-      settlementStatus =
-        "Partially Collected";
+    if (totalBalanceAmount === 0 || collected >= totalBalanceAmount) {
+      settlementStatus = "Collected";
+    } else if (collected > 0) {
+      settlementStatus = "Partially Collected";
+    }
+    /* ==========================
+   TIME CALCULATIONS
+========================== */
+
+    const actualReceivingTime = new Date();
+
+    const scheduledReturnTime = new Date(handover.trip.dropDateTime);
+
+    const diffMs = actualReceivingTime - scheduledReturnTime;
+
+    const diffMinutes = Math.floor(diffMs / (1000 * 60));
+
+    let timeStatus = "On Time";
+    let delayInMinutes = 0;
+    let delayText = "0 minutes";
+
+    if (diffMinutes > 15) {
+      // More than 15 minutes late
+      timeStatus = "Delayed";
+
+      delayInMinutes = diffMinutes;
+
+      const days = Math.floor(delayInMinutes / (24 * 60));
+
+      const hours = Math.floor((delayInMinutes % (24 * 60)) / 60);
+
+      const mins = delayInMinutes % 60;
+
+      delayText =
+        `${days > 0 ? `${days}d ` : ""}` +
+        `${hours > 0 ? `${hours}h ` : ""}` +
+        `${mins}m`;
+    } else if (diffMinutes < -15) {
+      // More than 15 minutes early
+      timeStatus = "Before Time";
+
+      delayText = "Received Early";
     }
 
     /* ==========================
        CREATE RETURN
     ========================== */
 
-    const vehicleReturn =
-      await VehicleReturn.create({
-        company: companyId,
+    const vehicleReturn = await VehicleReturn.create({
+      company: companyId,
 
-        createdBy: req.user._id,
+      createdBy: req.user._id,
 
-        handover: handover._id,
+      // New fields
+      receivedBy: req.user._id,
 
-        vehicle: vehicle._id,
+      receivingTime: actualReceivingTime,
 
-        customerName:
-          handover.customer
-            ?.fullName || "",
+      scheduledReturnTime,
 
-        fuelLevel:
-          Number(fuelLevel),
+      timeStatus,
 
-        kilometersAtReturn:
-          Number(
-            kilometersAtReturn
-          ),
+      delayInMinutes,
 
-        hasDamage: isDamaged,
+      delayText,
 
-        damageNotes:
-          damageNotes || "",
+      handover: handover._id,
 
-        inspection:
-          parsedInspection,
+      vehicle: vehicle._id,
 
-        images: {
-          vehicleFront:
-            files.vehicleFront?.[0]
-              ?.path || "",
+      customerName: handover.customer?.fullName || "",
 
-          vehicleRear:
-            files.vehicleRear?.[0]
-              ?.path || "",
+      fuelLevel: Number(fuelLevel),
 
-          vehicleLeft:
-            files.vehicleLeft?.[0]
-              ?.path || "",
+      kilometersAtReturn: Number(kilometersAtReturn),
 
-          vehicleRight:
-            files.vehicleRight?.[0]
-              ?.path || "",
-        },
+      hasDamage: isDamaged,
 
-        damageImages,
+      damageNotes: damageNotes || "",
 
-        damageCostDetails:
-          isDamaged
-            ? {
-                repairEstimate:
-                  estimate,
+      inspection: parsedInspection,
 
-                repairDays:
-                  repairDuration,
+      /* ======================
+     VEHICLE RETURN IMAGES
+  ====================== */
 
-                status:
-                  "Pending",
-              }
-            : undefined,
+      images: {
+        vehicleFront: files.vehicleFront?.[0]?.path || "",
 
-        settlementDetails: {
-          pendingAmount,
+        vehicleRear: files.vehicleRear?.[0]?.path || "",
 
-          lateReturnFine:
-            lateFine,
+        vehicleLeft: files.vehicleLeft?.[0]?.path || "",
 
-          extraKmFine:
-            kmFine,
+        vehicleRight: files.vehicleRight?.[0]?.path || "",
+      },
 
-          fuelUsageAmount:
-            fuelFine,
+      /* ======================
+     DAMAGE IMAGES
+  ====================== */
 
-          damageAmount:
-            estimate,
+      damageImages,
 
-          totalBalanceAmount,
+      /* ======================
+     DAMAGE DETAILS
+  ====================== */
 
-          amountCollected:
-            collected,
+      damageCostDetails: isDamaged
+        ? {
+            repairEstimate: estimate,
 
-          paymentMode:
-            paymentMode ||
-            "Cash",
+            repairDays: repairDuration,
 
-          finalBalance,
+            actualRepairCost: 0,
 
-          balanceReason:
-            balanceReason ||
-            "",
+            repairedAt: null,
 
-          status:
-            settlementStatus,
+            remarks: "",
 
-          settledAt:
-            new Date(),
-        },
-      });
+            status: "Pending",
+          }
+        : undefined,
+
+      /* ======================
+     SETTLEMENT DETAILS
+  ====================== */
+
+      settlementDetails: {
+        pendingAmount,
+
+        lateReturnFine: lateFine,
+
+        extraKmFine: kmFine,
+
+        fuelUsageAmount: fuelFine,
+
+        damageAmount: estimate,
+
+        totalBalanceAmount,
+
+        amountCollected: collected,
+
+        paymentMode: paymentMode || "Cash",
+
+        finalBalance,
+
+        balanceReason: balanceReason || "",
+
+        status: settlementStatus,
+
+        settledAt: new Date(),
+      },
+
+      returnStatus: "completed",
+    });
 
     /* ==========================
        UPDATE VEHICLE
     ========================== */
 
-    vehicle.status =
-      "available";
+    vehicle.status = "available";
 
     await vehicle.save();
 
@@ -682,33 +354,22 @@ export const receiveVehicle = async (req, res) => {
        UPDATE HANDOVER
     ========================== */
 
-    handover.handoverStatus =
-      "returned";
+    handover.handoverStatus = "returned";
 
     handover.returnDetails = {
       returnedAt: new Date(),
-      returnedBy:
-        req.user._id,
-      remarks:
-        balanceReason || "",
+      returnedBy: req.user._id,
+      remarks: balanceReason || "",
     };
 
-    handover.payment.balanceAmount =
-      finalBalance;
+    handover.payment.balanceAmount = finalBalance;
 
-    if (
-      finalBalance === 0
-    ) {
-      handover.payment.paymentStatus =
-        "paid";
-    } else if (
-      collected > 0
-    ) {
-      handover.payment.paymentStatus =
-        "partial";
+    if (finalBalance === 0) {
+      handover.payment.paymentStatus = "paid";
+    } else if (collected > 0) {
+      handover.payment.paymentStatus = "partial";
     } else {
-      handover.payment.paymentStatus =
-        "pending";
+      handover.payment.paymentStatus = "pending";
     }
 
     await handover.save();
@@ -719,21 +380,15 @@ export const receiveVehicle = async (req, res) => {
 
     return res.status(201).json({
       success: true,
-      message:
-        "Vehicle received successfully",
+      message: "Vehicle received successfully",
       data: vehicleReturn,
     });
   } catch (error) {
-    console.error(
-      "RECEIVE VEHICLE ERROR:",
-      error
-    );
+    console.error("RECEIVE VEHICLE ERROR:", error);
 
     return res.status(500).json({
       success: false,
-      message:
-        error.message ||
-        "Internal Server Error",
+      message: error.message || "Internal Server Error",
     });
   }
 };

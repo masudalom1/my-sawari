@@ -20,7 +20,7 @@ const inspectionItemSchema = new mongoose.Schema(
       trim: true,
     },
   },
-  { _id: false }
+  { _id: false },
 );
 
 /* ==========================
@@ -64,16 +64,11 @@ const damageCostDetailsSchema = new mongoose.Schema(
 
     status: {
       type: String,
-      enum: [
-        "Pending",
-        "Under Repair",
-        "Completed",
-        "Closed",
-      ],
+      enum: ["Pending", "Under Repair", "Completed", "Closed"],
       default: "Pending",
     },
   },
-  { _id: false }
+  { _id: false },
 );
 
 /* ==========================
@@ -152,12 +147,7 @@ const settlementDetailsSchema = new mongoose.Schema(
 
     paymentMode: {
       type: String,
-      enum: [
-        "Cash",
-        "UPI",
-        "Card",
-        "Bank Transfer",
-      ],
+      enum: ["Cash", "UPI", "Card", "Bank Transfer"],
       default: "Cash",
     },
 
@@ -182,11 +172,7 @@ const settlementDetailsSchema = new mongoose.Schema(
 
     status: {
       type: String,
-      enum: [
-        "Collected",
-        "Partially Collected",
-        "Pending Collection",
-      ],
+      enum: ["Collected", "Partially Collected", "Pending Collection"],
       default: "Pending Collection",
     },
 
@@ -195,7 +181,7 @@ const settlementDetailsSchema = new mongoose.Schema(
       default: Date.now,
     },
   },
-  { _id: false }
+  { _id: false },
 );
 
 /* ==========================
@@ -237,11 +223,11 @@ const vehicleReturnSchema = new mongoose.Schema(
       trim: true,
     },
 
-   fuelLevel: {
-  type: Number,
-  min: 0,
-  max: 7,
-},
+    fuelLevel: {
+      type: Number,
+      min: 0,
+      max: 7,
+    },
 
     kilometersAtReturn: {
       type: Number,
@@ -323,10 +309,38 @@ const vehicleReturnSchema = new mongoose.Schema(
       enum: ["completed"],
       default: "completed",
     },
+    receivedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+    },
+
+    receivingTime: {
+      type: Date,
+    },
+
+    scheduledReturnTime: {
+      type: Date,
+    },
+
+    timeStatus: {
+      type: String,
+      enum: ["Before Time", "On Time", "Delayed"],
+    },
+
+    delayInMinutes: {
+      type: Number,
+      default: 0,
+    },
+
+    delayText: {
+      type: String,
+      default: "",
+    },
   },
+
   {
     timestamps: true,
-  }
+  },
 );
 
 /* ==========================
@@ -334,16 +348,10 @@ const vehicleReturnSchema = new mongoose.Schema(
 ========================== */
 
 vehicleReturnSchema.pre("save", async function () {
-  const settlement =
-    this.settlementDetails || {};
+  const settlement = this.settlementDetails || {};
 
-  if (
-    settlement.finalBalance > 0 &&
-    !settlement.balanceReason?.trim()
-  ) {
-    throw new Error(
-      "Reason is required when balance amount remains"
-    );
+  if (settlement.finalBalance > 0 && !settlement.balanceReason?.trim()) {
+    throw new Error("Reason is required when balance amount remains");
   }
 });
 
@@ -383,7 +391,4 @@ vehicleReturnSchema.index({
   customerName: 1,
 });
 
-export default mongoose.model(
-  "VehicleReturn",
-  vehicleReturnSchema
-);
+export default mongoose.model("VehicleReturn", vehicleReturnSchema);
