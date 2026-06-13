@@ -353,25 +353,44 @@ export const getReceiveCarList = async (req, res) => {
     const handovers = await Handover.find({
       isDeleted: false,
       "vehicle.vehicleId": { $exists: true },
-      handoverStatus: { $nin: ["returned", "cancelled"] },
+      handoverStatus: {
+        $ne: "cancelled",
+      },
     })
       .populate("vehicle.vehicleId")
+      .populate("customer")
       .sort({
+        handoverStatus: 1, // returned records will appear after active ones
         "trip.dropDateTime": 1,
         createdAt: -1,
       });
 
+    // Separate active and completed tasks
+    const activeTasks = handovers.filter(
+      (item) => item.handoverStatus !== "returned"
+    );
+
+    const completedTasks = handovers.filter(
+      (item) => item.handoverStatus === "returned"
+    );
+
+    // Active first, completed last
+    const finalData = [...activeTasks, ...completedTasks];
+
     res.status(200).json({
       success: true,
-      count: handovers.length,
-      data: handovers,
+      message: "Receive car list fetched successfully",
+      count: finalData.length,
+      activeCount: activeTasks.length,
+      completedCount: completedTasks.length,
+      data: finalData,
     });
   } catch (error) {
-    console.log("RECEIVE CAR LIST ERROR:", error);
+    console.error("GET RECEIVE CAR LIST ERROR:", error);
 
     res.status(500).json({
       success: false,
-      message: error.message,
+      message: error.message || "Failed to fetch receive car list",
     });
   }
 };
