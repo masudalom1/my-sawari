@@ -1,7 +1,7 @@
 import Handover from "../models/handover.model.js";
 import Vehicle from "../models/vehicle.model.js";
 import { sendBookingConfirmation } from "../services/wati.service.js";
-import vehicleReturnModel from "../models/vehicleReturn.model.js";
+import VehicleReturn from "../models/vehicleReturn.model.js";
 
 // ==========================================
 // CREATE HANDOVER
