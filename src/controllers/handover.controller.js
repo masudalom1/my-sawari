@@ -377,30 +377,23 @@ export const getReceiveCarList = async (req, res) => {
     const vehicleReturns = await VehicleReturn.find({
       company: companyId,
       returnStatus: "completed",
-    })
-      .populate("receivedBy", "fullName")
-      .select(
-        `
-        handover
-        returnStatus
-        receivedBy
-        receivingTime
-        scheduledReturnTime
-        timeStatus
-        delayText
-        settlementDetails
-      `
-      );
+    }).populate("receivedBy", "fullName role email mobileNumber").select(`
+    handover
+    returnStatus
+    receivedBy
+    receivingTime
+    scheduledReturnTime
+    timeStatus
+    delayText
+    settlementDetails
+  `);
 
     /* ==========================
        CREATE LOOKUP MAP
     ========================== */
 
     const completedMap = new Map(
-      vehicleReturns.map((item) => [
-        item.handover.toString(),
-        item,
-      ])
+      vehicleReturns.map((item) => [item.handover.toString(), item]),
     );
 
     /* ==========================
@@ -410,36 +403,29 @@ export const getReceiveCarList = async (req, res) => {
     const finalData = handovers.map((handover) => {
       const obj = handover.toObject();
 
-      const returnData = completedMap.get(
-        handover._id.toString()
-      );
+      const returnData = completedMap.get(handover._id.toString());
 
       if (returnData) {
         obj.returnStatus = "completed";
 
         obj.returnDetails = {
-          receivedBy:
-            returnData.receivedBy || null,
+          receivedBy: returnData.receivedBy
+            ? {
+                _id: returnData.receivedBy._id,
+                fullName: returnData.receivedBy.fullName,
+                role: returnData.receivedBy.role,
+              }
+            : null,
 
-          receivingTime:
-            returnData.receivingTime || null,
+          receivingTime: returnData.receivingTime || null,
 
-          scheduledReturnTime:
-            returnData.scheduledReturnTime ||
-            null,
+          scheduledReturnTime: returnData.scheduledReturnTime || null,
 
-          timeStatus:
-            returnData.timeStatus ||
-            "On Time",
+          timeStatus: returnData.timeStatus || "On Time",
 
-          delayText:
-            returnData.delayText ||
-            "0 minutes",
+          delayText: returnData.delayText || "0 minutes",
 
-          pendingAmount:
-            returnData
-              .settlementDetails
-              ?.finalBalance || 0,
+          pendingAmount: returnData.settlementDetails?.finalBalance || 0,
         };
       } else {
         obj.returnStatus = null;
@@ -452,19 +438,13 @@ export const getReceiveCarList = async (req, res) => {
        COUNTS
     ========================== */
 
-    const completedCount =
-      finalData.filter(
-        (item) =>
-          item.returnStatus ===
-          "completed"
-      ).length;
+    const completedCount = finalData.filter(
+      (item) => item.returnStatus === "completed",
+    ).length;
 
-    const activeCount =
-      finalData.filter(
-        (item) =>
-          item.returnStatus !==
-          "completed"
-      ).length;
+    const activeCount = finalData.filter(
+      (item) => item.returnStatus !== "completed",
+    ).length;
 
     /* ==========================
        RESPONSE
@@ -482,16 +462,11 @@ export const getReceiveCarList = async (req, res) => {
       data: finalData,
     });
   } catch (error) {
-    console.error(
-      "GET RECEIVE CAR LIST ERROR:",
-      error
-    );
+    console.error("GET RECEIVE CAR LIST ERROR:", error);
 
     return res.status(500).json({
       success: false,
-      message:
-        error.message ||
-        "Failed to fetch receive car list",
+      message: error.message || "Failed to fetch receive car list",
     });
   }
 };
