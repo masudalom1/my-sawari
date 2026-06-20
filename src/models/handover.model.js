@@ -49,28 +49,20 @@ const handoverSchema = new mongoose.Schema(
       },
     },
 
-    identity: {
-      idType: {
-        type: String,
-        required: true,
-        enum: [
-          "aadhaar",
-          "voter",
-          "license",
-          "pan",
-          "company",
-          "passport",
-          "other",
-        ],
-      },
+ identity: {
+  aadhaarNumber: {
+    type: String,
+    required: true,
+    trim: true,
+  },
 
-      idNumber: {
-        type: String,
-        required: true,
-        trim: true,
-        uppercase: true,
-      },
-    },
+  drivingLicenseNumber: {
+    type: String,
+    required: true,
+    trim: true,
+    uppercase: true,
+  },
+},
 
     vehicle: {
       vehicleId: {

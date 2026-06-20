@@ -23,12 +23,15 @@ export const createHandover = async (req, res, next) => {
       });
     }
 
-    if (!identity?.idType || !identity?.idNumber) {
-      return res.status(400).json({
-        success: false,
-        message: "Identity details are required",
-      });
-    }
+if (
+  !identity?.aadhaarNumber ||
+  !identity?.drivingLicenseNumber
+) {
+  return res.status(400).json({
+    success: false,
+    message: "Aadhaar and Driving License are required",
+  });
+}
 
     if (!vehicle?.vehicleId) {
       return res.status(400).json({
@@ -91,10 +94,10 @@ export const createHandover = async (req, res, next) => {
         destination: customer.destination || "",
       },
 
-      identity: {
-        idType: identity.idType,
-        idNumber: identity.idNumber,
-      },
+     identity: {
+  aadhaarNumber: identity.aadhaarNumber,
+  drivingLicenseNumber: identity.drivingLicenseNumber,
+},
 
       vehicle: {
         vehicleId: selectedVehicle._id,
