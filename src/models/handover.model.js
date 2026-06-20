@@ -229,6 +229,10 @@ const handoverSchema = new mongoose.Schema(
         type: String,
         default: "",
       },
+      customerProfileImage: {
+  type: String,
+  default: "",
+},
 
       customerWithVehicle: {
         type: String,

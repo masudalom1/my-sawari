@@ -67,6 +67,7 @@ export const handoverUpload = upload.fields([
     name: "customerPhoto",
     maxCount: 1,
   },
+  { name: "customerProfileImage", maxCount: 1 },
   {
     name: "customerWithVehicle",
     maxCount: 1,

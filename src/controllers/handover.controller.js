@@ -241,6 +241,10 @@ export const uploadHandoverImages = async (req, res, next) => {
     if (req.files?.customerPhoto?.[0]) {
       handover.images.customerPhoto = req.files.customerPhoto[0].path;
     }
+    if (req.files?.customerProfileImage?.[0]) {
+  handover.images.customerProfileImage =
+    req.files.customerProfileImage[0].path;
+}
 
     if (req.files?.customerWithVehicle?.[0]) {
       handover.images.customerWithVehicle =
