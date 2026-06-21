@@ -242,9 +242,9 @@ export const uploadHandoverImages = async (req, res, next) => {
       handover.images.customerPhoto = req.files.customerPhoto[0].path;
     }
     if (req.files?.customerProfileImage?.[0]) {
-  handover.images.customerProfileImage =
-    req.files.customerProfileImage[0].path;
-}
+      handover.images.customerProfileImage =
+        req.files.customerProfileImage[0].path;
+    }
 
     if (req.files?.customerWithVehicle?.[0]) {
       handover.images.customerWithVehicle =
@@ -429,7 +429,13 @@ export const getReceiveCarList = async (req, res) => {
 
           delayText: returnData.delayText || "0 minutes",
 
-          pendingAmount: returnData.settlementDetails?.finalBalance || 0,
+          pendingAmount:
+            returnData.settlementDetails?.pendingAmount ??
+            returnData.settlementDetails?.balanceAmount ??
+            returnData.settlementDetails?.finalBalance ??
+            0,
+
+          settlementDetails: returnData.settlementDetails || {},
         };
       } else {
         obj.returnStatus = null;

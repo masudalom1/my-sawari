@@ -49,20 +49,20 @@ const handoverSchema = new mongoose.Schema(
       },
     },
 
- identity: {
-  aadhaarNumber: {
-    type: String,
-    required: true,
-    trim: true,
-  },
+    identity: {
+      aadhaarNumber: {
+        type: String,
+        required: true,
+        trim: true,
+      },
 
-  drivingLicenseNumber: {
-    type: String,
-    required: true,
-    trim: true,
-    uppercase: true,
-  },
-},
+      drivingLicenseNumber: {
+        type: String,
+        required: true,
+        trim: true,
+        uppercase: true,
+      },
+    },
 
     vehicle: {
       vehicleId: {
@@ -230,9 +230,9 @@ const handoverSchema = new mongoose.Schema(
         default: "",
       },
       customerProfileImage: {
-  type: String,
-  default: "",
-},
+        type: String,
+        default: "",
+      },
 
       customerWithVehicle: {
         type: String,
