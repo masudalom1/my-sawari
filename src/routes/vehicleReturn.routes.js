@@ -1,7 +1,7 @@
 import express from "express";
 import protect from "../middlewares/auth.middleware.js";
 import { vehicleReturnUpload } from "../middlewares/upload.middleware.js";
-import { getServiceVehicles, receiveVehicle } from "../controllers/vehicleReturn.controller.js";
+import { getServiceVehicles, markVehicleAvailable, receiveVehicle } from "../controllers/vehicleReturn.controller.js";
 
 const router = express.Router();
 
@@ -11,5 +11,6 @@ router.post("/receive/:handoverId",vehicleReturnUpload,receiveVehicle);
 
 // menu/service
 router.get("/service",protect,getServiceVehicles);
+router.put("/service/complete/:id",protect,markVehicleAvailable);
 
 export default router;

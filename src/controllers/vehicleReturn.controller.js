@@ -468,7 +468,6 @@ export const receiveVehicle = async (req, res) => {
 };
 
 // menu/service
-
 export const getServiceVehicles = async (req, res) => {
   try {
     const companyId = req.user.company || req.user._id;
@@ -560,6 +559,52 @@ export const getServiceVehicles = async (req, res) => {
       message:
         error.message ||
         "Failed to fetch service vehicles",
+    });
+  }
+};
+export const markVehicleAvailable = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const companyId = req.user.company || req.user._id;
+
+    const vehicle = await Vehicle.findOne({
+      _id: id,
+      company: companyId,
+      isDeleted: false,
+    });
+
+    if (!vehicle) {
+      return res.status(404).json({
+        success: false,
+        message: "Vehicle not found",
+      });
+    }
+
+    vehicle.status = "available";
+
+    vehicle.maintenance = {
+      required: false,
+      reason: "",
+      estimatedDays: 0,
+      estimatedCompletionDate: null,
+      markedBy: null,
+      markedAt: null,
+    };
+
+    await vehicle.save();
+
+    return res.status(200).json({
+      success: true,
+      message: "Vehicle marked as available",
+      data: vehicle,
+    });
+  } catch (error) {
+    console.error("MARK AVAILABLE ERROR:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: error.message,
     });
   }
 };
