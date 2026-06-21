@@ -324,13 +324,22 @@ export const getSingleHandover = async (req, res) => {
   try {
     const { id } = req.params;
 
+    const companyId = req.user.company || req.user._id;
+
     const handover = await Handover.findOne({
       _id: id,
-      company: req.user.company || req.user._id,
+      company: companyId,
       isDeleted: false,
     })
-      .populate("createdBy", "fullName email")
-      .populate("vehicle.vehicleId");
+      .populate(
+        "createdBy",
+        "fullName email mobileNumber role"
+      )
+      .populate("vehicle.vehicleId")
+      .populate(
+        "returnDetails.returnedBy",
+        "fullName email mobileNumber role"
+      );
 
     if (!handover) {
       return res.status(404).json({
@@ -339,16 +348,162 @@ export const getSingleHandover = async (req, res) => {
       });
     }
 
-    res.status(200).json({
+    const vehicleReturn = await VehicleReturn.findOne({
+      handover: handover._id,
+    }).populate(
+      "receivedBy",
+      "fullName email mobileNumber role"
+    );
+
+    const data = handover.toObject();
+
+    data.gallery = {
+      handover: [
+        {
+          label: "Customer Photo",
+          image: handover.images?.customerPhoto || "",
+        },
+        {
+          label: "Customer Profile",
+          image: handover.images?.customerProfileImage || "",
+        },
+        {
+          label: "Customer With Vehicle",
+          image: handover.images?.customerWithVehicle || "",
+        },
+        {
+          label: "ID Card Front",
+          image: handover.images?.idCardFront || "",
+        },
+        {
+          label: "ID Card Back",
+          image: handover.images?.idCardBack || "",
+        },
+        {
+          label: "Vehicle Front",
+          image: handover.images?.vehicleFront || "",
+        },
+        {
+          label: "Vehicle Rear",
+          image: handover.images?.vehicleRear || "",
+        },
+        {
+          label: "Vehicle Left",
+          image: handover.images?.vehicleLeft || "",
+        },
+        {
+          label: "Vehicle Right",
+          image: handover.images?.vehicleRight || "",
+        },
+      ].filter((item) => item.image),
+    };
+
+    if (vehicleReturn) {
+      data.vehicleReturn = {
+        _id: vehicleReturn._id,
+
+        receivedBy: vehicleReturn.receivedBy
+          ? {
+              _id: vehicleReturn.receivedBy._id,
+              fullName: vehicleReturn.receivedBy.fullName,
+              role: vehicleReturn.receivedBy.role,
+              email: vehicleReturn.receivedBy.email,
+              mobileNumber:
+                vehicleReturn.receivedBy.mobileNumber,
+            }
+          : null,
+
+        receivingTime: vehicleReturn.receivingTime,
+        scheduledReturnTime:
+          vehicleReturn.scheduledReturnTime,
+
+        timeStatus: vehicleReturn.timeStatus,
+        delayInMinutes:
+          vehicleReturn.delayInMinutes || 0,
+        delayText:
+          vehicleReturn.delayText || "0 minutes",
+
+        fuelLevel: vehicleReturn.fuelLevel,
+        kilometersAtReturn:
+          vehicleReturn.kilometersAtReturn,
+
+        hasDamage: vehicleReturn.hasDamage,
+        damageNotes: vehicleReturn.damageNotes,
+
+        inspection: vehicleReturn.inspection || [],
+
+        settlementDetails:
+          vehicleReturn.settlementDetails || {},
+
+        damageCostDetails:
+          vehicleReturn.damageCostDetails || null,
+
+        returnStatus:
+          vehicleReturn.returnStatus || "completed",
+
+        images: {
+          vehicleFront:
+            vehicleReturn.images?.vehicleFront || "",
+          vehicleRear:
+            vehicleReturn.images?.vehicleRear || "",
+          vehicleLeft:
+            vehicleReturn.images?.vehicleLeft || "",
+          vehicleRight:
+            vehicleReturn.images?.vehicleRight || "",
+        },
+
+        damageImages:
+          vehicleReturn.damageImages || [],
+
+        createdAt: vehicleReturn.createdAt,
+      };
+
+      data.gallery.returnImages = [
+        {
+          label: "Return Front",
+          image: vehicleReturn.images?.vehicleFront || "",
+        },
+        {
+          label: "Return Rear",
+          image: vehicleReturn.images?.vehicleRear || "",
+        },
+        {
+          label: "Return Left",
+          image: vehicleReturn.images?.vehicleLeft || "",
+        },
+        {
+          label: "Return Right",
+          image: vehicleReturn.images?.vehicleRight || "",
+        },
+      ].filter((item) => item.image);
+
+      data.gallery.damageImages =
+        (vehicleReturn.damageImages || []).map(
+          (img, index) => ({
+            label: `Damage ${index + 1}`,
+            image: img,
+          })
+        );
+    } else {
+      data.vehicleReturn = null;
+      data.gallery.returnImages = [];
+      data.gallery.damageImages = [];
+    }
+
+    return res.status(200).json({
       success: true,
-      data: handover,
+      data,
     });
   } catch (error) {
-    console.log("GET SINGLE HANDOVER ERROR:", error);
+    console.error(
+      "GET SINGLE HANDOVER ERROR:",
+      error
+    );
 
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
-      message: error.message,
+      message:
+        error.message || "Failed to fetch handover",
     });
   }
 };
