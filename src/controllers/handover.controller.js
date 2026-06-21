@@ -422,18 +422,9 @@ export const getReceiveCarList = async (req, res) => {
             : null,
 
           receivingTime: returnData.receivingTime || null,
-
           scheduledReturnTime: returnData.scheduledReturnTime || null,
-
           timeStatus: returnData.timeStatus || "On Time",
-
           delayText: returnData.delayText || "0 minutes",
-
-          pendingAmount:
-            returnData.settlementDetails?.pendingAmount ??
-            returnData.settlementDetails?.balanceAmount ??
-            returnData.settlementDetails?.finalBalance ??
-            0,
 
           settlementDetails: returnData.settlementDetails || {},
         };
