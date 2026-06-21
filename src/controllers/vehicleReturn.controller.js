@@ -13,17 +13,19 @@ export const receiveVehicle = async (req, res) => {
       damageNotes,
       inspection,
 
-      // Damage
       repairEstimate,
       repairDays,
 
-      // Settlement
       lateReturnFine,
       extraKmFine,
       fuelUsageAmount,
       amountCollected,
       paymentMode,
       balanceReason,
+
+      needsMaintenance,
+      maintenanceReason,
+      maintenanceDays,
     } = req.body;
 
     const files = req.files || {};
@@ -144,6 +146,28 @@ export const receiveVehicle = async (req, res) => {
       return res.status(400).json({
         success: false,
         message: "Damage images are required when damage is reported",
+      });
+    }
+
+    const maintenanceRequired =
+      needsMaintenance === true ||
+      needsMaintenance === "true" ||
+      needsMaintenance === "yes";
+
+    if (maintenanceRequired && !maintenanceReason?.trim()) {
+      return res.status(400).json({
+        success: false,
+        message: "Maintenance reason is required",
+      });
+    }
+
+    if (
+      maintenanceRequired &&
+      (!maintenanceDays || Number(maintenanceDays) <= 0)
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: "Maintenance days are required",
       });
     }
 
@@ -269,6 +293,18 @@ export const receiveVehicle = async (req, res) => {
 
       inspection: parsedInspection,
 
+      maintenanceDetails: {
+        required: maintenanceRequired,
+
+        reason: maintenanceReason || "",
+
+        estimatedDays: Number(maintenanceDays) || 0,
+
+        estimatedCompletionDate: maintenanceRequired
+          ? new Date(Date.now() + Number(maintenanceDays) * 24 * 60 * 60 * 1000)
+          : null,
+      },
+
       /* ======================
      VEHICLE RETURN IMAGES
   ====================== */
@@ -346,7 +382,45 @@ export const receiveVehicle = async (req, res) => {
        UPDATE VEHICLE
     ========================== */
 
-    vehicle.status = "available";
+    if (maintenanceRequired) {
+      const estimatedDays = Number(maintenanceDays) || 0;
+
+      const completionDate = new Date();
+
+      completionDate.setDate(completionDate.getDate() + estimatedDays);
+
+      vehicle.status = "service";
+
+      vehicle.maintenance = {
+        required: true,
+
+        reason: maintenanceReason || "",
+
+        estimatedDays,
+
+        estimatedCompletionDate: completionDate,
+
+        markedBy: req.user._id,
+
+        markedAt: new Date(),
+      };
+    } else {
+      vehicle.status = "available";
+
+      vehicle.maintenance = {
+        required: false,
+
+        reason: "",
+
+        estimatedDays: 0,
+
+        estimatedCompletionDate: null,
+
+        markedBy: null,
+
+        markedAt: null,
+      };
+    }
 
     await vehicle.save();
 

@@ -148,6 +148,40 @@ const vehicleSchema = new mongoose.Schema(
       index: true,
     },
 
+    maintenance: {
+  required: {
+    type: Boolean,
+    default: false,
+  },
+
+  reason: {
+    type: String,
+    default: "",
+    trim: true,
+  },
+
+  estimatedDays: {
+    type: Number,
+    default: 0,
+  },
+
+  estimatedCompletionDate: {
+    type: Date,
+    default: null,
+  },
+
+  markedBy: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: "User",
+    default: null,
+  },
+
+  markedAt: {
+    type: Date,
+    default: null,
+  },
+},
+
     isDeleted: {
       type: Boolean,
       default: false,
