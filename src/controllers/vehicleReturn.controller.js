@@ -466,3 +466,100 @@ export const receiveVehicle = async (req, res) => {
     });
   }
 };
+
+// menu/service
+
+export const getServiceVehicles = async (req, res) => {
+  try {
+    const companyId = req.user.company || req.user._id;
+
+    const vehicles = await Vehicle.find({
+      company: companyId,
+      isDeleted: false,
+      status: "service",
+    })
+      .populate("maintenance.markedBy", "fullName role")
+      .sort({
+        "maintenance.markedAt": -1,
+      });
+
+    const data = vehicles.map((vehicle) => {
+      const today = new Date();
+
+      const completionDate =
+        vehicle.maintenance?.estimatedCompletionDate;
+
+      let remainingDays = 0;
+
+      if (completionDate) {
+        remainingDays = Math.ceil(
+          (new Date(completionDate) - today) /
+            (1000 * 60 * 60 * 24)
+        );
+      }
+
+      return {
+        _id: vehicle._id,
+
+        vehicleName: vehicle.vehicleName,
+        vehicleNumber: vehicle.vehicleNumber,
+        manufacturer: vehicle.manufacturer,
+        model: vehicle.model,
+        variant: vehicle.variant,
+        color: vehicle.color,
+
+        vehicleType: vehicle.vehicleType,
+        fuelType: vehicle.fuelType,
+        transmission: vehicle.transmission,
+        seatingCapacity: vehicle.seatingCapacity,
+
+        status: vehicle.status,
+
+        images: vehicle.images,
+
+        maintenance: {
+          required: vehicle.maintenance?.required || false,
+
+          reason: vehicle.maintenance?.reason || "",
+
+          estimatedDays:
+            vehicle.maintenance?.estimatedDays || 0,
+
+          estimatedCompletionDate:
+            vehicle.maintenance?.estimatedCompletionDate,
+
+          remainingDays,
+
+          markedAt: vehicle.maintenance?.markedAt,
+
+          markedBy: vehicle.maintenance?.markedBy
+            ? {
+                _id: vehicle.maintenance.markedBy._id,
+                fullName:
+                  vehicle.maintenance.markedBy.fullName,
+                role: vehicle.maintenance.markedBy.role,
+              }
+            : null,
+        },
+      };
+    });
+
+    return res.status(200).json({
+      success: true,
+      count: data.length,
+      data,
+    });
+  } catch (error) {
+    console.error(
+      "GET SERVICE VEHICLES ERROR:",
+      error
+    );
+
+    return res.status(500).json({
+      success: false,
+      message:
+        error.message ||
+        "Failed to fetch service vehicles",
+    });
+  }
+};
