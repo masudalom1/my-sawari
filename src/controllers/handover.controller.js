@@ -123,9 +123,11 @@ export const createHandover = async (req, res, next) => {
 
         securityDeposit: Number(payment?.securityDeposit) || 0,
 
-        extraCharges: Number(payment?.extraCharges) || 0,
+      extraCharges: Number(payment?.extraCharges) || 0,
 
-        totalAmount: Number(payment?.totalAmount) || 0,
+discountAmount: Number(payment?.discountAmount) || 0,
+
+totalAmount: Number(payment?.totalAmount) || 0,
 
         bookingAmountPaid: Number(payment?.bookingAmountPaid) || 0,
 
