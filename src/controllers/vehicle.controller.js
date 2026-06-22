@@ -159,14 +159,10 @@ export const getSingleVehicle = async (
   next
 ) => {
   try {
-    const vehicle =
-      await Vehicle.findOne({
-        _id: req.params.id,
-        company:
-          req.user.company ||
-          req.user._id,
-        isDeleted: false,
-      });
+    const vehicle = await Vehicle.findOne({
+      _id: req.params.id,
+      isDeleted: false,
+    });
 
     if (!vehicle) {
       return res.status(404).json({
@@ -175,7 +171,7 @@ export const getSingleVehicle = async (
       });
     }
 
-    res.status(200).json({
+    return res.status(200).json({
       success: true,
       data: vehicle,
     });
