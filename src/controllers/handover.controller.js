@@ -123,11 +123,11 @@ export const createHandover = async (req, res, next) => {
 
         securityDeposit: Number(payment?.securityDeposit) || 0,
 
-      extraCharges: Number(payment?.extraCharges) || 0,
+        extraCharges: Number(payment?.extraCharges) || 0,
 
-discountAmount: Number(payment?.discountAmount) || 0,
+        discountAmount: Number(payment?.discountAmount) || 0,
 
-totalAmount: Number(payment?.totalAmount) || 0,
+        totalAmount: Number(payment?.totalAmount) || 0,
 
         bookingAmountPaid: Number(payment?.bookingAmountPaid) || 0,
 
@@ -333,15 +333,9 @@ export const getSingleHandover = async (req, res) => {
       company: companyId,
       isDeleted: false,
     })
-      .populate(
-        "createdBy",
-        "fullName email mobileNumber role"
-      )
+      .populate("createdBy", "fullName email mobileNumber role")
       .populate("vehicle.vehicleId")
-      .populate(
-        "returnDetails.returnedBy",
-        "fullName email mobileNumber role"
-      );
+      .populate("returnDetails.returnedBy", "fullName email mobileNumber role");
 
     if (!handover) {
       return res.status(404).json({
@@ -352,10 +346,7 @@ export const getSingleHandover = async (req, res) => {
 
     const vehicleReturn = await VehicleReturn.findOne({
       handover: handover._id,
-    }).populate(
-      "receivedBy",
-      "fullName email mobileNumber role"
-    );
+    }).populate("receivedBy", "fullName email mobileNumber role");
 
     const data = handover.toObject();
 
@@ -410,52 +401,39 @@ export const getSingleHandover = async (req, res) => {
               fullName: vehicleReturn.receivedBy.fullName,
               role: vehicleReturn.receivedBy.role,
               email: vehicleReturn.receivedBy.email,
-              mobileNumber:
-                vehicleReturn.receivedBy.mobileNumber,
+              mobileNumber: vehicleReturn.receivedBy.mobileNumber,
             }
           : null,
 
         receivingTime: vehicleReturn.receivingTime,
-        scheduledReturnTime:
-          vehicleReturn.scheduledReturnTime,
+        scheduledReturnTime: vehicleReturn.scheduledReturnTime,
 
         timeStatus: vehicleReturn.timeStatus,
-        delayInMinutes:
-          vehicleReturn.delayInMinutes || 0,
-        delayText:
-          vehicleReturn.delayText || "0 minutes",
+        delayInMinutes: vehicleReturn.delayInMinutes || 0,
+        delayText: vehicleReturn.delayText || "0 minutes",
 
         fuelLevel: vehicleReturn.fuelLevel,
-        kilometersAtReturn:
-          vehicleReturn.kilometersAtReturn,
+        kilometersAtReturn: vehicleReturn.kilometersAtReturn,
 
         hasDamage: vehicleReturn.hasDamage,
         damageNotes: vehicleReturn.damageNotes,
 
         inspection: vehicleReturn.inspection || [],
 
-        settlementDetails:
-          vehicleReturn.settlementDetails || {},
+        settlementDetails: vehicleReturn.settlementDetails || {},
 
-        damageCostDetails:
-          vehicleReturn.damageCostDetails || null,
+        damageCostDetails: vehicleReturn.damageCostDetails || null,
 
-        returnStatus:
-          vehicleReturn.returnStatus || "completed",
+        returnStatus: vehicleReturn.returnStatus || "completed",
 
         images: {
-          vehicleFront:
-            vehicleReturn.images?.vehicleFront || "",
-          vehicleRear:
-            vehicleReturn.images?.vehicleRear || "",
-          vehicleLeft:
-            vehicleReturn.images?.vehicleLeft || "",
-          vehicleRight:
-            vehicleReturn.images?.vehicleRight || "",
+          vehicleFront: vehicleReturn.images?.vehicleFront || "",
+          vehicleRear: vehicleReturn.images?.vehicleRear || "",
+          vehicleLeft: vehicleReturn.images?.vehicleLeft || "",
+          vehicleRight: vehicleReturn.images?.vehicleRight || "",
         },
 
-        damageImages:
-          vehicleReturn.damageImages || [],
+        damageImages: vehicleReturn.damageImages || [],
 
         createdAt: vehicleReturn.createdAt,
       };
@@ -479,13 +457,12 @@ export const getSingleHandover = async (req, res) => {
         },
       ].filter((item) => item.image);
 
-      data.gallery.damageImages =
-        (vehicleReturn.damageImages || []).map(
-          (img, index) => ({
-            label: `Damage ${index + 1}`,
-            image: img,
-          })
-        );
+      data.gallery.damageImages = (vehicleReturn.damageImages || []).map(
+        (img, index) => ({
+          label: `Damage ${index + 1}`,
+          image: img,
+        }),
+      );
     } else {
       data.vehicleReturn = null;
       data.gallery.returnImages = [];
@@ -497,15 +474,11 @@ export const getSingleHandover = async (req, res) => {
       data,
     });
   } catch (error) {
-    console.error(
-      "GET SINGLE HANDOVER ERROR:",
-      error
-    );
+    console.error("GET SINGLE HANDOVER ERROR:", error);
 
     return res.status(500).json({
       success: false,
-      message:
-        error.message || "Failed to fetch handover",
+      message: error.message || "Failed to fetch handover",
     });
   }
 };
@@ -534,12 +507,7 @@ export const getReceiveCarList = async (req, res) => {
 
     const vehicleReturns = await VehicleReturn.find({
       returnStatus: "completed",
-    })
-      .populate(
-        "receivedBy",
-        "fullName role email mobileNumber"
-      )
-      .select(`
+    }).populate("receivedBy", "fullName role email mobileNumber").select(`
         handover
         returnStatus
         receivedBy
@@ -555,10 +523,7 @@ export const getReceiveCarList = async (req, res) => {
     ========================== */
 
     const completedMap = new Map(
-      vehicleReturns.map((item) => [
-        item.handover.toString(),
-        item,
-      ])
+      vehicleReturns.map((item) => [item.handover.toString(), item]),
     );
 
     /* ==========================
@@ -568,9 +533,7 @@ export const getReceiveCarList = async (req, res) => {
     const finalData = handovers.map((handover) => {
       const obj = handover.toObject();
 
-      const returnData = completedMap.get(
-        handover._id.toString()
-      );
+      const returnData = completedMap.get(handover._id.toString());
 
       if (returnData) {
         obj.returnStatus = "completed";
@@ -579,31 +542,22 @@ export const getReceiveCarList = async (req, res) => {
           receivedBy: returnData.receivedBy
             ? {
                 _id: returnData.receivedBy._id,
-                fullName:
-                  returnData.receivedBy.fullName,
+                fullName: returnData.receivedBy.fullName,
                 role: returnData.receivedBy.role,
-                email:
-                  returnData.receivedBy.email,
-                mobileNumber:
-                  returnData.receivedBy.mobileNumber,
+                email: returnData.receivedBy.email,
+                mobileNumber: returnData.receivedBy.mobileNumber,
               }
             : null,
 
-          receivingTime:
-            returnData.receivingTime || null,
+          receivingTime: returnData.receivingTime || null,
 
-          scheduledReturnTime:
-            returnData.scheduledReturnTime ||
-            null,
+          scheduledReturnTime: returnData.scheduledReturnTime || null,
 
-          timeStatus:
-            returnData.timeStatus || "On Time",
+          timeStatus: returnData.timeStatus || "On Time",
 
-          delayText:
-            returnData.delayText || "0 minutes",
+          delayText: returnData.delayText || "0 minutes",
 
-          settlementDetails:
-            returnData.settlementDetails || {},
+          settlementDetails: returnData.settlementDetails || {},
         };
       } else {
         obj.returnStatus = null;
@@ -618,11 +572,11 @@ export const getReceiveCarList = async (req, res) => {
     ========================== */
 
     const completedCount = finalData.filter(
-      (item) => item.returnStatus === "completed"
+      (item) => item.returnStatus === "completed",
     ).length;
 
     const activeCount = finalData.filter(
-      (item) => item.returnStatus !== "completed"
+      (item) => item.returnStatus !== "completed",
     ).length;
 
     /* ==========================
@@ -637,16 +591,11 @@ export const getReceiveCarList = async (req, res) => {
       data: finalData,
     });
   } catch (error) {
-    console.error(
-      "GET RECEIVE CAR LIST ERROR:",
-      error
-    );
+    console.error("GET RECEIVE CAR LIST ERROR:", error);
 
     return res.status(500).json({
       success: false,
-      message:
-        error.message ||
-        "Failed to fetch receive car list",
+      message: error.message || "Failed to fetch receive car list",
     });
   }
 };

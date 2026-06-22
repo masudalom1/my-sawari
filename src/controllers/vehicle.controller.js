@@ -88,7 +88,7 @@ export const createVehicle = async (req, res, next) => {
 export const getAllVehicles = async (req, res, next) => {
   try {
     const page = Number(req.query.page) || 1;
-    const limit = Number(req.query.limit) || 20;
+    const limit = Number(req.query.limit) || 1000;
     const skip = (page - 1) * limit;
 
     const filters = {
