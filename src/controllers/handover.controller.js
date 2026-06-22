@@ -300,7 +300,6 @@ export const uploadHandoverImages = async (req, res, next) => {
 export const getActiveHandovers = async (req, res) => {
   try {
     const activeHandovers = await Handover.find({
-      company: req.user.company || req.user._id,
       handoverStatus: "active",
       isDeleted: false,
     })
@@ -308,7 +307,7 @@ export const getActiveHandovers = async (req, res) => {
       .populate("createdBy", "fullName")
       .sort({ createdAt: -1 });
 
-    res.status(200).json({
+    return res.status(200).json({
       success: true,
       count: activeHandovers.length,
       data: activeHandovers,
@@ -316,9 +315,9 @@ export const getActiveHandovers = async (req, res) => {
   } catch (error) {
     console.log("ACTIVE HANDOVER ERROR:", error);
 
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
-      message: error.message,
+      message: error.message || "Failed to fetch active handovers",
     });
   }
 };
