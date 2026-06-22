@@ -310,3 +310,37 @@ export const getCurrentUser = asyncHandler(async (req, res) => {
     },
   });
 });
+
+export const resetPassword = asyncHandler(
+  async (req, res) => {
+    const { email, password } = req.body;
+
+    if (!email || !password) {
+      throw new ApiError(
+        400,
+        "Email and password are required"
+      );
+    }
+
+    const user = await User.findOne({
+      email: email.toLowerCase(),
+    }).select("+password");
+
+    if (!user) {
+      throw new ApiError(404, "User not found");
+    }
+
+    user.password = password;
+
+    // Optional
+    user.failedLoginAttempts = 0;
+    user.lockUntil = null;
+
+    await user.save();
+
+    res.status(200).json({
+      success: true,
+      message: "Password updated successfully",
+    });
+  }
+);
