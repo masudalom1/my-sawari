@@ -3,7 +3,6 @@ import Handover from "../models/handover.model.js";
 export const getAllCustomers = async (req, res) => {
   try {
     const handovers = await Handover.find({
-      company: req.user.company || req.user._id,
       isDeleted: false,
     }).sort({ createdAt: -1 });
 
@@ -14,14 +13,22 @@ export const getAllCustomers = async (req, res) => {
 
       if (!phone) return;
 
-      if (!customerMap.has(phone)) {
+      const existing = customerMap.get(phone);
+
+      if (
+        !existing ||
+        new Date(handover.createdAt) > new Date(existing.createdAt)
+      ) {
         customerMap.set(phone, {
           id: handover._id,
-          name: handover.customer.fullName || "-",
-          phone: handover.customer.mobileNumber || "-",
-          email: handover.customer.email || "-",
-          idNo: handover.identity?.idNumber || "-",
-          profession: handover.customer.occupation || "-",
+          name: handover.customer?.fullName || "-",
+          phone: handover.customer?.mobileNumber || "-",
+          email: handover.customer?.email || "-",
+          idNo:
+            handover.identity?.aadhaarNumber ||
+            handover.identity?.drivingLicenseNumber ||
+            "-",
+          profession: handover.customer?.occupation || "-",
           status:
             handover.handoverStatus === "active"
               ? "Active"
@@ -41,26 +48,33 @@ export const getAllCustomers = async (req, res) => {
 
     const stats = {
       total: customers.length,
-      active: customers.filter((c) => c.status === "Active").length,
-      inactive: customers.filter((c) => c.status === "Inactive").length,
-      newThisMonth: customers.filter((c) => {
-        const d = new Date(c.createdAt);
+      active: customers.filter(
+        (customer) => customer.status === "Active"
+      ).length,
+      inactive: customers.filter(
+        (customer) => customer.status === "Inactive"
+      ).length,
+      newThisMonth: customers.filter((customer) => {
+        const date = new Date(customer.createdAt);
+
         return (
-          d.getMonth() === currentMonth &&
-          d.getFullYear() === currentYear
+          date.getMonth() === currentMonth &&
+          date.getFullYear() === currentYear
         );
       }).length,
     };
 
-    res.status(200).json({
+    return res.status(200).json({
       success: true,
       stats,
       data: customers,
     });
   } catch (error) {
-    res.status(500).json({
+    console.error("Get Customers Error:", error);
+
+    return res.status(500).json({
       success: false,
-      message: error.message,
+      message: error.message || "Failed to fetch customers",
     });
   }
 };
