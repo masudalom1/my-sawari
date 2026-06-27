@@ -20,8 +20,6 @@ export const createLead = async (req, res) => {
 
       priority,
 
-      leadOwner,
-
       missedCalls,
 
       cabService,
@@ -45,7 +43,6 @@ export const createLead = async (req, res) => {
       longBookingLead,
 
       strategyForClosing,
-      strategyPreparedBy,
 
       quotationSent,
       quotationAmount,
@@ -55,7 +52,6 @@ export const createLead = async (req, res) => {
       reasonForDealLoss,
 
       remarksFeedback,
-      feedbackBy,
 
       notes,
     } = req.body;
@@ -89,8 +85,10 @@ export const createLead = async (req, res) => {
     // Duplicate Check
     // =============================
 
+    const companyId = req.user.company || req.user._id;
+
     const existingLead = await Lead.findOne({
-      company: req.user.company,
+      company: companyId,
       mobileNumber: mobileNumber.trim(),
       isDeleted: false,
       status: {
@@ -110,21 +108,19 @@ export const createLead = async (req, res) => {
     // Create Lead
     // =============================
 
+    const companyId = req.user.company || req.user._id;
+
     const lead = new Lead({
       leadDate: leadDate || new Date(),
-
       leadTime,
 
       customerName: customerName.trim(),
-
       mobileNumber: mobileNumber.trim(),
 
       vehicleType,
-
       vehicleName,
 
       fromDate,
-
       toDate,
 
       residents,
@@ -133,7 +129,8 @@ export const createLead = async (req, res) => {
 
       priority,
 
-      leadOwner: leadOwner || req.user._id,
+      // Always assign to logged-in user
+      leadOwner: req.user._id,
 
       missedCalls,
 
@@ -142,9 +139,7 @@ export const createLead = async (req, res) => {
       source,
 
       campaignName,
-
       utmSource,
-
       utmMedium,
 
       status,
@@ -154,23 +149,17 @@ export const createLead = async (req, res) => {
       detailedConversation,
 
       lastContactedDate,
-
       lastFollowupDate,
-
       nextFollowupDate,
 
       nextActionItem,
 
       mondayLead,
-
       longBookingLead,
 
       strategyForClosing,
 
-      strategyPreparedBy,
-
       quotationSent,
-
       quotationAmount,
 
       bookingId,
@@ -179,22 +168,15 @@ export const createLead = async (req, res) => {
 
       remarksFeedback,
 
-      feedbackBy,
-
-      company: req.user.company,
+      company: companyId,
 
       createdBy: req.user._id,
     });
-
     // =============================
     // First Note
     // =============================
 
-    if (
-      notes &&
-      Array.isArray(notes) &&
-      notes.length > 0
-    ) {
+    if (notes && Array.isArray(notes) && notes.length > 0) {
       lead.notes = notes.map((note) => ({
         message: note.message,
         type: note.type || "call",
@@ -206,10 +188,7 @@ export const createLead = async (req, res) => {
     // Auto Create Summary Note
     // =============================
 
-    if (
-      conversationSummary &&
-      conversationSummary.trim() !== ""
-    ) {
+    if (conversationSummary && conversationSummary.trim() !== "") {
       lead.notes.push({
         message: conversationSummary,
         type: "call",
@@ -261,10 +240,7 @@ export const createLead = async (req, res) => {
     return res.status(500).json({
       success: false,
       message: "Unable to create lead.",
-      error:
-        process.env.NODE_ENV === "development"
-          ? error.message
-          : undefined,
+      error: process.env.NODE_ENV === "development" ? error.message : undefined,
     });
   }
 };
