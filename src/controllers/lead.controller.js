@@ -36,14 +36,14 @@ export const createLead = async (req, res) => {
 
       lastContactedDate,
       lastFollowupDate,
-      nextFollowupDate, // Fixed alignment with frontend key 'nextFollowupDate'
+      nextFollowupDate,
       nextActionItem,
 
       mondayLead,
       longBookingLead,
 
       strategyForClosing,
-      strategyPreparedBy, // Expected to be a valid User ObjectId if sent from frontend
+      strategyPreparedBy,
 
       quotationSent,
       quotationAmount,
@@ -53,7 +53,7 @@ export const createLead = async (req, res) => {
       reasonForDealLoss,
 
       remarksFeedback,
-      feedbackBy, // Expected to be a valid User ObjectId if sent from frontend
+      feedbackBy,
 
       notes,
     } = req.body;
@@ -129,7 +129,6 @@ export const createLead = async (req, res) => {
 
       priority: priority || "medium",
 
-      // Fallback fallback to request contextual user authorization
       leadOwner: req.user._id,
 
       missedCalls: Number(missedCalls) || 0,
@@ -155,10 +154,9 @@ export const createLead = async (req, res) => {
       longBookingLead: longBookingLead || false,
 
       strategyForClosing,
-      // Pass if matching reference schema configuration, clear or remove if text mismatch
-      strategyPreparedBy: strategyPreparedBy || null, 
+      strategyPreparedBy: strategyPreparedBy || "",
 
-      quotationSent,
+      quotationSent: quotationSent || false,
       quotationAmount: Number(quotationAmount) || 0,
 
       bookingId: bookingId || null,
@@ -166,14 +164,14 @@ export const createLead = async (req, res) => {
       reasonForDealLoss: reasonForDealLoss || "",
 
       remarksFeedback,
-      feedbackBy: feedbackBy || null,
+      feedbackBy: feedbackBy || "",
 
       company: companyId,
       createdBy: req.user._id,
     });
 
     // =============================
-    // First Note Array Handling
+    // Notes Array Handling
     // =============================
 
     if (notes && Array.isArray(notes) && notes.length > 0) {
@@ -203,28 +201,18 @@ export const createLead = async (req, res) => {
     await lead.save();
 
     // =============================
-    // Populate Response Document Fields
+    // Populate Response Fields
     // =============================
 
-    const populateOptions = [
+    await lead.populate([
       { path: "leadOwner", select: "name email phone" },
       { path: "createdBy", select: "name email" },
       { path: "company", select: "companyName" },
-      { path: "notes.addedBy", select: "name" }
-    ];
-
-    // Conditionally populate references only if they are valid ObjectIds
-    if (lead.strategyPreparedBy) {
-      populateOptions.push({ path: "strategyPreparedBy", select: "name email" });
-    }
-    if (lead.feedbackBy) {
-      populateOptions.push({ path: "feedbackBy", select: "name email" });
-    }
-
-    await lead.populate(populateOptions);
+      { path: "notes.addedBy", select: "name" },
+    ]);
 
     // =============================
-    // Return Structured Response
+    // Return Response
     // =============================
 
     return res.status(201).json({
