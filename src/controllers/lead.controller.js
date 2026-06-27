@@ -43,6 +43,8 @@ export const createLead = async (req, res) => {
       longBookingLead,
 
       strategyForClosing,
+      // FIX: added missing fields that the model supports
+      strategyPreparedBy,
 
       quotationSent,
       quotationAmount,
@@ -52,6 +54,8 @@ export const createLead = async (req, res) => {
       reasonForDealLoss,
 
       remarksFeedback,
+      // FIX: added missing feedbackBy field
+      feedbackBy,
 
       notes,
     } = req.body;
@@ -85,6 +89,7 @@ export const createLead = async (req, res) => {
     // Duplicate Check
     // =============================
 
+    // FIX: removed duplicate `const companyId` declaration — only one declaration here
     const companyId = req.user.company || req.user._id;
 
     const existingLead = await Lead.findOne({
@@ -107,8 +112,6 @@ export const createLead = async (req, res) => {
     // =============================
     // Create Lead
     // =============================
-
-    const companyId = req.user.company || req.user._id;
 
     const lead = new Lead({
       leadDate: leadDate || new Date(),
@@ -149,6 +152,7 @@ export const createLead = async (req, res) => {
       detailedConversation,
 
       lastContactedDate,
+      // FIX: was extracted from req.body but never passed to the model
       lastFollowupDate,
       nextFollowupDate,
 
@@ -158,6 +162,8 @@ export const createLead = async (req, res) => {
       longBookingLead,
 
       strategyForClosing,
+      // FIX: now properly saved to the model
+      strategyPreparedBy,
 
       quotationSent,
       quotationAmount,
@@ -167,11 +173,14 @@ export const createLead = async (req, res) => {
       reasonForDealLoss,
 
       remarksFeedback,
+      // FIX: now properly saved to the model
+      feedbackBy,
 
       company: companyId,
 
       createdBy: req.user._id,
     });
+
     // =============================
     // First Note
     // =============================
@@ -222,6 +231,15 @@ export const createLead = async (req, res) => {
       {
         path: "notes.addedBy",
         select: "name",
+      },
+      // FIX: added missing populate for strategyPreparedBy and feedbackBy
+      {
+        path: "strategyPreparedBy",
+        select: "name email",
+      },
+      {
+        path: "feedbackBy",
+        select: "name email",
       },
     ]);
 
