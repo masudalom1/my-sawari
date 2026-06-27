@@ -36,15 +36,14 @@ export const createLead = async (req, res) => {
 
       lastContactedDate,
       lastFollowupDate,
-      nextFollowupDate,
+      nextFollowupDate, // Fixed alignment with frontend key 'nextFollowupDate'
       nextActionItem,
 
       mondayLead,
       longBookingLead,
 
       strategyForClosing,
-      // FIX: added missing fields that the model supports
-      strategyPreparedBy,
+      strategyPreparedBy, // Expected to be a valid User ObjectId if sent from frontend
 
       quotationSent,
       quotationAmount,
@@ -54,8 +53,7 @@ export const createLead = async (req, res) => {
       reasonForDealLoss,
 
       remarksFeedback,
-      // FIX: added missing feedbackBy field
-      feedbackBy,
+      feedbackBy, // Expected to be a valid User ObjectId if sent from frontend
 
       notes,
     } = req.body;
@@ -89,7 +87,6 @@ export const createLead = async (req, res) => {
     // Duplicate Check
     // =============================
 
-    // FIX: removed duplicate `const companyId` declaration — only one declaration here
     const companyId = req.user.company || req.user._id;
 
     const existingLead = await Lead.findOne({
@@ -110,7 +107,7 @@ export const createLead = async (req, res) => {
     }
 
     // =============================
-    // Create Lead
+    // Create Lead Instance
     // =============================
 
     const lead = new Lead({
@@ -123,66 +120,60 @@ export const createLead = async (req, res) => {
       vehicleType,
       vehicleName,
 
-      fromDate,
-      toDate,
+      fromDate: fromDate || null,
+      toDate: toDate || null,
 
-      residents,
+      residents: Number(residents) || 1,
 
-      whatsappSent,
+      whatsappSent: whatsappSent || false,
 
-      priority,
+      priority: priority || "medium",
 
-      // Always assign to logged-in user
+      // Fallback fallback to request contextual user authorization
       leadOwner: req.user._id,
 
-      missedCalls,
+      missedCalls: Number(missedCalls) || 0,
 
-      cabService,
+      cabService: cabService || false,
 
-      source,
-
+      source: source || "other",
       campaignName,
       utmSource,
       utmMedium,
 
-      status,
+      status: status || "Enquiry",
 
       conversationSummary,
-
       detailedConversation,
 
-      lastContactedDate,
-      // FIX: was extracted from req.body but never passed to the model
-      lastFollowupDate,
-      nextFollowupDate,
-
+      lastContactedDate: lastContactedDate || null,
+      lastFollowupDate: lastFollowupDate || null,
+      nextFollowupDate: nextFollowupDate || null,
       nextActionItem,
 
-      mondayLead,
-      longBookingLead,
+      mondayLead: mondayLead || false,
+      longBookingLead: longBookingLead || false,
 
       strategyForClosing,
-      // FIX: now properly saved to the model
-      strategyPreparedBy,
+      // Pass if matching reference schema configuration, clear or remove if text mismatch
+      strategyPreparedBy: strategyPreparedBy || null, 
 
       quotationSent,
-      quotationAmount,
+      quotationAmount: Number(quotationAmount) || 0,
 
-      bookingId,
+      bookingId: bookingId || null,
 
-      reasonForDealLoss,
+      reasonForDealLoss: reasonForDealLoss || "",
 
       remarksFeedback,
-      // FIX: now properly saved to the model
-      feedbackBy,
+      feedbackBy: feedbackBy || null,
 
       company: companyId,
-
       createdBy: req.user._id,
     });
 
     // =============================
-    // First Note
+    // First Note Array Handling
     // =============================
 
     if (notes && Array.isArray(notes) && notes.length > 0) {
@@ -206,45 +197,34 @@ export const createLead = async (req, res) => {
     }
 
     // =============================
-    // Save
+    // Database Commit
     // =============================
 
     await lead.save();
 
     // =============================
-    // Populate Response
+    // Populate Response Document Fields
     // =============================
 
-    await lead.populate([
-      {
-        path: "leadOwner",
-        select: "name email phone",
-      },
-      {
-        path: "createdBy",
-        select: "name email",
-      },
-      {
-        path: "company",
-        select: "companyName",
-      },
-      {
-        path: "notes.addedBy",
-        select: "name",
-      },
-      // FIX: added missing populate for strategyPreparedBy and feedbackBy
-      {
-        path: "strategyPreparedBy",
-        select: "name email",
-      },
-      {
-        path: "feedbackBy",
-        select: "name email",
-      },
-    ]);
+    const populateOptions = [
+      { path: "leadOwner", select: "name email phone" },
+      { path: "createdBy", select: "name email" },
+      { path: "company", select: "companyName" },
+      { path: "notes.addedBy", select: "name" }
+    ];
+
+    // Conditionally populate references only if they are valid ObjectIds
+    if (lead.strategyPreparedBy) {
+      populateOptions.push({ path: "strategyPreparedBy", select: "name email" });
+    }
+    if (lead.feedbackBy) {
+      populateOptions.push({ path: "feedbackBy", select: "name email" });
+    }
+
+    await lead.populate(populateOptions);
 
     // =============================
-    // Response
+    // Return Structured Response
     // =============================
 
     return res.status(201).json({

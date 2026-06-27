@@ -197,7 +197,6 @@ const leadSchema = new mongoose.Schema(
     lastContactedDate: {
       type: Date,
     },
-  
 
     lastFollowupDate: {
       type: Date,
@@ -213,7 +212,8 @@ const leadSchema = new mongoose.Schema(
       trim: true,
       default: "",
     },
-        mondayLead: {
+
+    mondayLead: {
       type: Boolean,
       default: false,
     },
@@ -229,9 +229,11 @@ const leadSchema = new mongoose.Schema(
       default: "",
     },
 
+    // CHANGED: Converted to String to capture plain text inputted in React Native
     strategyPreparedBy: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "User",
+      type: String,
+      trim: true,
+      default: "",
     },
 
     quotationSent: {
@@ -278,9 +280,11 @@ const leadSchema = new mongoose.Schema(
       default: "",
     },
 
+    // CHANGED: Converted to String to capture plain text inputted in React Native
     feedbackBy: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "User",
+      type: String,
+      trim: true,
+      default: "",
     },
 
     notes: [noteSchema],
@@ -358,6 +362,7 @@ leadSchema.pre("save", function (next) {
     next(err);
   }
 });
+
 // ================================
 // INDEXES
 // ================================
@@ -370,106 +375,26 @@ leadSchema.index({
   remarksFeedback: "text",
 });
 
-leadSchema.index({
-  company: 1,
-  status: 1,
-});
-
-leadSchema.index({
-  company: 1,
-  priority: 1,
-});
-
-leadSchema.index({
-  company: 1,
-  leadOwner: 1,
-});
-
-leadSchema.index({
-  company: 1,
-  source: 1,
-});
-
-leadSchema.index({
-  company: 1,
-  createdBy: 1,
-});
-
-leadSchema.index({
-  company: 1,
-  leadDate: -1,
-});
-
-leadSchema.index({
-  company: 1,
-  createdAt: -1,
-});
-
-leadSchema.index({
-  company: 1,
-  nextFollowupDate: 1,
-});
-
-leadSchema.index({
-  company: 1,
-  lastFollowupDate: -1,
-});
-
-leadSchema.index({
-  company: 1,
-  isDeleted: 1,
-});
-
-leadSchema.index({
-  company: 1,
-  mobileNumber: 1,
-});
-
-leadSchema.index({
-  company: 1,
-  customerName: 1,
-});
-
-leadSchema.index({
-  company: 1,
-  vehicleType: 1,
-});
-
-leadSchema.index({
-  company: 1,
-  whatsappSent: 1,
-});
-
-leadSchema.index({
-  company: 1,
-  quotationSent: 1,
-});
-
-leadSchema.index({
-  company: 1,
-  mondayLead: 1,
-});
-
-leadSchema.index({
-  company: 1,
-  longBookingLead: 1,
-});
-
-leadSchema.index({
-  company: 1,
-  bookingConfirmedAt: -1,
-});
-
-leadSchema.index({
-  company: 1,
-  fromDate: 1,
-  toDate: 1,
-});
-
-leadSchema.index({
-  company: 1,
-  updatedAt: -1,
-});
+leadSchema.index({ company: 1, status: 1 });
+leadSchema.index({ company: 1, priority: 1 });
+leadSchema.index({ company: 1, leadOwner: 1 });
+leadSchema.index({ company: 1, source: 1 });
+leadSchema.index({ company: 1, createdBy: 1 });
+leadSchema.index({ company: 1, leadDate: -1 });
+leadSchema.index({ company: 1, createdAt: -1 });
+leadSchema.index({ company: 1, nextFollowupDate: 1 });
+leadSchema.index({ company: 1, lastFollowupDate: -1 });
+leadSchema.index({ company: 1, isDeleted: 1 });
+leadSchema.index({ company: 1, mobileNumber: 1 });
+leadSchema.index({ company: 1, customerName: 1 });
+leadSchema.index({ company: 1, vehicleType: 1 });
+leadSchema.index({ company: 1, whatsappSent: 1 });
+leadSchema.index({ company: 1, quotationSent: 1 });
+leadSchema.index({ company: 1, mondayLead: 1 });
+leadSchema.index({ company: 1, longBookingLead: 1 });
+leadSchema.index({ company: 1, bookingConfirmedAt: -1 });
+leadSchema.index({ company: 1, fromDate: 1, toDate: 1 });
+leadSchema.index({ company: 1, updatedAt: -1 });
 
 // ================================
 // EXPORT
