@@ -326,40 +326,30 @@ const leadSchema = new mongoose.Schema(
 // PRE SAVE MIDDLEWARE
 // ================================
 
-leadSchema.pre("save", function (next) {
-  try {
-    if (!this.leadId) {
-      const random = Math.floor(1000 + Math.random() * 9000);
-      this.leadId = `LD${Date.now()}${random}`;
-    }
+leadSchema.pre("save", async function () {
+  if (!this.leadId) {
+    const random = Math.floor(1000 + Math.random() * 9000);
+    this.leadId = `LD${Date.now()}${random}`;
+  }
 
-    if (this.fromDate && this.toDate) {
-      const diff =
-        new Date(this.toDate).getTime() -
-        new Date(this.fromDate).getTime();
+  if (this.fromDate && this.toDate) {
+    const diff =
+      new Date(this.toDate).getTime() -
+      new Date(this.fromDate).getTime();
 
-      this.totalDays =
-        Math.max(1, Math.ceil(diff / (1000 * 60 * 60 * 24)) + 1);
-    }
+    this.totalDays = Math.max(1, Math.ceil(diff / (1000 * 60 * 60 * 24)) + 1);
+  }
 
-    if (this.whatsappSent && !this.whatsappSentAt) {
-      this.whatsappSentAt = new Date();
-    }
+  if (this.whatsappSent && !this.whatsappSentAt) {
+    this.whatsappSentAt = new Date();
+  }
 
-    if (this.quotationSent && !this.quotationSentAt) {
-      this.quotationSentAt = new Date();
-    }
+  if (this.quotationSent && !this.quotationSentAt) {
+    this.quotationSentAt = new Date();
+  }
 
-    if (
-      this.status === "Booking confirmed" &&
-      !this.bookingConfirmedAt
-    ) {
-      this.bookingConfirmedAt = new Date();
-    }
-
-    next();
-  } catch (err) {
-    next(err);
+  if (this.status === "Booking confirmed" && !this.bookingConfirmedAt) {
+    this.bookingConfirmedAt = new Date();
   }
 });
 
