@@ -231,6 +231,80 @@ export const createLead = async (req, res) => {
   }
 };
 
+export const getLeadDashboardStats = async (req, res) => {
+  try {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    const tomorrow = new Date(today);
+    tomorrow.setDate(today.getDate() + 1);
+
+    const dayAfterTomorrow = new Date(today);
+    dayAfterTomorrow.setDate(today.getDate() + 2);
+
+    const baseQuery = { isDeleted: false };
+
+    const [
+      totalLeads,
+      newLeads,
+      todayFollowups,
+      tomorrowFollowups,
+      missedFollowups,
+      quotationSent,
+      bookingConfirmed,
+      dealLost,
+      highPriority,
+      whatsappSent,
+    ] = await Promise.all([
+      Lead.countDocuments(baseQuery),
+      Lead.countDocuments({ ...baseQuery, status: "Enquiry" }),
+      Lead.countDocuments({
+        ...baseQuery,
+        nextFollowupDate: { $gte: today, $lt: tomorrow },
+      }),
+      Lead.countDocuments({
+        ...baseQuery,
+        nextFollowupDate: { $gte: tomorrow, $lt: dayAfterTomorrow },
+      }),
+      Lead.countDocuments({
+        ...baseQuery,
+        nextFollowupDate: { $lt: today },
+        status: { $nin: ["Booking confirmed", "Deal lost"] },
+      }),
+      Lead.countDocuments({ ...baseQuery, quotationSent: true }),
+      Lead.countDocuments({ ...baseQuery, status: "Booking confirmed" }),
+      Lead.countDocuments({ ...baseQuery, status: "Deal lost" }),
+      Lead.countDocuments({ ...baseQuery, priority: "high" }),
+      Lead.countDocuments({ ...baseQuery, whatsappSent: true }),
+    ]);
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        totalLeads,
+        newLeads,
+        todayFollowups,
+        tomorrowFollowups,
+        missedFollowups,
+        quotationSent,
+        bookingConfirmed,
+        dealLost,
+        highPriority,
+        whatsappSent,
+      },
+    });
+  } catch (error) {
+    console.error("Dashboard Stats Error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Unable to fetch dashboard statistics.",
+      error:
+        process.env.NODE_ENV === "development" ? error.message : undefined,
+    });
+  }
+};
+
 export const getLeads = async (req, res) => {
   try {
     let {
@@ -431,254 +505,5 @@ export const getLeads = async (req, res) => {
   }
 };
 
-export const getLeadById = async (req, res) => {
-  try {
-    const companyId = req.user.company || req.user._id;
-    const { id } = req.params;
 
-    const lead = await Lead.findOne({
-      _id: id,
-      company: companyId,
-      isDeleted: false,
-    })
-      .populate("leadOwner", "name email phone")
-      .populate("createdBy", "name email phone")
-      .populate("company", "companyName email phone")
-      .populate("bookingId") // ✅ safe now — Booking model is registered via import above
-      .populate("notes.addedBy", "name email");
 
-    if (!lead) {
-      return res.status(404).json({
-        success: false,
-        message: "Lead not found.",
-      });
-    }
-
-    return res.status(200).json({
-      success: true,
-      data: lead,
-    });
-  } catch (error) {
-    console.error("Get Lead By ID Error:", error);
-
-    return res.status(500).json({
-      success: false,
-      message: "Unable to fetch lead.",
-      error:
-        process.env.NODE_ENV === "development" ? error.message : undefined,
-    });
-  }
-};
-
-export const updateLead = async (req, res) => {
-  try {
-    const companyId = req.user.company || req.user._id;
-    const { id } = req.params;
-
-    const lead = await Lead.findOne({
-      _id: id,
-      company: companyId,
-      isDeleted: false,
-    });
-
-    if (!lead) {
-      return res.status(404).json({
-        success: false,
-        message: "Lead not found.",
-      });
-    }
-
-    const allowedFields = [
-      "leadDate",
-      "leadTime",
-      "customerName",
-      "mobileNumber",
-      "vehicleType",
-      "vehicleName",
-      "fromDate",
-      "toDate",
-      "residents",
-      "whatsappSent",
-      "priority",
-      "leadOwner",
-      "missedCalls",
-      "cabService",
-      "source",
-      "campaignName",
-      "utmSource",
-      "utmMedium",
-      "status",
-      "conversationSummary",
-      "detailedConversation",
-      "lastContactedDate",
-      "lastFollowupDate",
-      "nextFollowupDate",
-      "nextActionItem",
-      "mondayLead",
-      "longBookingLead",
-      "strategyForClosing",
-      "strategyPreparedBy",
-      "quotationSent",
-      "quotationAmount",
-      "bookingId",
-      "reasonForDealLoss",
-      "remarksFeedback",
-      "feedbackBy",
-    ];
-
-    allowedFields.forEach((field) => {
-      if (req.body[field] !== undefined) {
-        // Guard checking against un-nested Object structures coming from Frontend payloads
-        if (field === "leadOwner" && req.body[field] && typeof req.body[field] === "object") {
-          lead[field] = req.body[field]._id; 
-        } else {
-          lead[field] = req.body[field];
-        }
-      }
-    });
-
-    // Explicit Coercions safely handling parsed inputs
-    if (req.body.customerName !== undefined) lead.customerName = req.body.customerName.trim();
-    if (req.body.mobileNumber !== undefined) lead.mobileNumber = req.body.mobileNumber.trim();
-    if (req.body.residents !== undefined) lead.residents = Number(req.body.residents) || 0;
-    if (req.body.missedCalls !== undefined) lead.missedCalls = Number(req.body.missedCalls) || 0;
-    if (req.body.quotationAmount !== undefined) lead.quotationAmount = Number(req.body.quotationAmount) || 0;
-
-    await lead.save();
-
-    await lead.populate([
-      { path: "leadOwner", select: "name email phone" },
-      { path: "createdBy", select: "name email" },
-      { path: "company", select: "companyName" },
-      { path: "bookingId" },
-      { path: "notes.addedBy", select: "name" },
-    ]);
-
-    return res.status(200).json({
-      success: true,
-      message: "Lead updated successfully.",
-      data: lead,
-    });
-  } catch (error) {
-    console.error("Update Lead Error:", error);
-    return res.status(500).json({
-      success: false,
-      message: "Unable to update lead.",
-      error: process.env.NODE_ENV === "development" ? error.message : undefined,
-    });
-  }
-};
-
-export const deleteLead = async (req, res) => {
-  try {
-    const companyId = req.user.company || req.user._id;
-    const { id } = req.params;
-
-    const lead = await Lead.findOne({
-      _id: id,
-      company: companyId,
-      isDeleted: false,
-    });
-
-    if (!lead) {
-      return res.status(404).json({
-        success: false,
-        message: "Lead not found.",
-      });
-    }
-
-    lead.isDeleted = true;
-    lead.deletedAt = new Date();
-    lead.deletedBy = req.user._id;
-
-    await lead.save();
-
-    return res.status(200).json({
-      success: true,
-      message: "Lead deleted successfully.",
-    });
-  } catch (error) {
-    console.error("Delete Lead Error:", error);
-
-    return res.status(500).json({
-      success: false,
-      message: "Unable to delete lead.",
-      error:
-        process.env.NODE_ENV === "development" ? error.message : undefined,
-    });
-  }
-};
-
-export const getLeadDashboardStats = async (req, res) => {
-  try {
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-
-    const tomorrow = new Date(today);
-    tomorrow.setDate(today.getDate() + 1);
-
-    const dayAfterTomorrow = new Date(today);
-    dayAfterTomorrow.setDate(today.getDate() + 2);
-
-    const baseQuery = { isDeleted: false };
-
-    const [
-      totalLeads,
-      newLeads,
-      todayFollowups,
-      tomorrowFollowups,
-      missedFollowups,
-      quotationSent,
-      bookingConfirmed,
-      dealLost,
-      highPriority,
-      whatsappSent,
-    ] = await Promise.all([
-      Lead.countDocuments(baseQuery),
-      Lead.countDocuments({ ...baseQuery, status: "Enquiry" }),
-      Lead.countDocuments({
-        ...baseQuery,
-        nextFollowupDate: { $gte: today, $lt: tomorrow },
-      }),
-      Lead.countDocuments({
-        ...baseQuery,
-        nextFollowupDate: { $gte: tomorrow, $lt: dayAfterTomorrow },
-      }),
-      Lead.countDocuments({
-        ...baseQuery,
-        nextFollowupDate: { $lt: today },
-        status: { $nin: ["Booking confirmed", "Deal lost"] },
-      }),
-      Lead.countDocuments({ ...baseQuery, quotationSent: true }),
-      Lead.countDocuments({ ...baseQuery, status: "Booking confirmed" }),
-      Lead.countDocuments({ ...baseQuery, status: "Deal lost" }),
-      Lead.countDocuments({ ...baseQuery, priority: "high" }),
-      Lead.countDocuments({ ...baseQuery, whatsappSent: true }),
-    ]);
-
-    return res.status(200).json({
-      success: true,
-      data: {
-        totalLeads,
-        newLeads,
-        todayFollowups,
-        tomorrowFollowups,
-        missedFollowups,
-        quotationSent,
-        bookingConfirmed,
-        dealLost,
-        highPriority,
-        whatsappSent,
-      },
-    });
-  } catch (error) {
-    console.error("Dashboard Stats Error:", error);
-
-    return res.status(500).json({
-      success: false,
-      message: "Unable to fetch dashboard statistics.",
-      error:
-        process.env.NODE_ENV === "development" ? error.message : undefined,
-    });
-  }
-};
