@@ -15,9 +15,9 @@ router.put("/:id", protect, updateLead);
 
 // Delete Lead (Soft Delete)
 router.delete("/:id", protect, deleteLead);
-router.get("/dashboard", protect, getLeadDashboardStats);
+router.get("/dashboard", getLeadDashboardStats);
 
 // Lead List
-router.get("/", protect, getLeads);
+router.get("/",getLeads);
 
 export default router;
