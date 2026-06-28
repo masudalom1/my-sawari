@@ -1,5 +1,4 @@
 import Lead from "../models/lead.model.js";
-import "../models/booking.model.js"; // ✅ FIX: registers "Booking" schema with Mongoose before any .populate("bookingId") call
 
 export const createLead = async (req, res) => {
   try {
@@ -529,21 +528,21 @@ export const updateLead = async (req, res) => {
 
     allowedFields.forEach((field) => {
       if (req.body[field] !== undefined) {
-        lead[field] = req.body[field];
+        // Guard checking against un-nested Object structures coming from Frontend payloads
+        if (field === "leadOwner" && req.body[field] && typeof req.body[field] === "object") {
+          lead[field] = req.body[field]._id; 
+        } else {
+          lead[field] = req.body[field];
+        }
       }
     });
 
-    // Explicit coercions (override the generic assignment above)
-    if (req.body.customerName !== undefined)
-      lead.customerName = req.body.customerName.trim();
-    if (req.body.mobileNumber !== undefined)
-      lead.mobileNumber = req.body.mobileNumber.trim();
-    if (req.body.residents !== undefined)
-      lead.residents = Number(req.body.residents);
-    if (req.body.missedCalls !== undefined)
-      lead.missedCalls = Number(req.body.missedCalls);
-    if (req.body.quotationAmount !== undefined)
-      lead.quotationAmount = Number(req.body.quotationAmount);
+    // Explicit Coercions safely handling parsed inputs
+    if (req.body.customerName !== undefined) lead.customerName = req.body.customerName.trim();
+    if (req.body.mobileNumber !== undefined) lead.mobileNumber = req.body.mobileNumber.trim();
+    if (req.body.residents !== undefined) lead.residents = Number(req.body.residents) || 0;
+    if (req.body.missedCalls !== undefined) lead.missedCalls = Number(req.body.missedCalls) || 0;
+    if (req.body.quotationAmount !== undefined) lead.quotationAmount = Number(req.body.quotationAmount) || 0;
 
     await lead.save();
 
@@ -562,12 +561,10 @@ export const updateLead = async (req, res) => {
     });
   } catch (error) {
     console.error("Update Lead Error:", error);
-
     return res.status(500).json({
       success: false,
       message: "Unable to update lead.",
-      error:
-        process.env.NODE_ENV === "development" ? error.message : undefined,
+      error: process.env.NODE_ENV === "development" ? error.message : undefined,
     });
   }
 };
