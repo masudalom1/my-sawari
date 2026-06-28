@@ -1,4 +1,5 @@
 import Lead from "../models/lead.model.js";
+import "../models/booking.model.js"; // ✅ FIX: registers "Booking" schema with Mongoose before any .populate("bookingId") call
 
 export const createLead = async (req, res) => {
   try {
@@ -268,24 +269,9 @@ export const getLeads = async (req, res) => {
 
     if (search && search.trim() !== "") {
       query.$or = [
-        {
-          customerName: {
-            $regex: search.trim(),
-            $options: "i",
-          },
-        },
-        {
-          mobileNumber: {
-            $regex: search.trim(),
-            $options: "i",
-          },
-        },
-        {
-          vehicleName: {
-            $regex: search.trim(),
-            $options: "i",
-          },
-        },
+        { customerName: { $regex: search.trim(), $options: "i" } },
+        { mobileNumber: { $regex: search.trim(), $options: "i" } },
+        { vehicleName: { $regex: search.trim(), $options: "i" } },
       ];
     }
 
@@ -332,26 +318,16 @@ export const getLeads = async (req, res) => {
         break;
 
       case "today_followup":
-        query.nextFollowupDate = {
-          $gte: today,
-          $lt: tomorrow,
-        };
+        query.nextFollowupDate = { $gte: today, $lt: tomorrow };
         break;
 
       case "tomorrow_followup":
-        query.nextFollowupDate = {
-          $gte: tomorrow,
-          $lt: dayAfterTomorrow,
-        };
+        query.nextFollowupDate = { $gte: tomorrow, $lt: dayAfterTomorrow };
         break;
 
       case "missed_followup":
-        query.nextFollowupDate = {
-          $lt: today,
-        };
-        query.status = {
-          $nin: ["Booking confirmed", "Deal lost"],
-        };
+        query.nextFollowupDate = { $lt: today };
+        query.status = { $nin: ["Booking confirmed", "Deal lost"] };
         break;
 
       default:
@@ -365,58 +341,34 @@ export const getLeads = async (req, res) => {
     let field = "createdAt";
 
     switch (dateField) {
-      case "created":
-        field = "createdAt";
-        break;
-
-      case "followup":
-        field = "nextFollowupDate";
-        break;
-
-      case "pickup":
-        field = "fromDate";
-        break;
-
-      case "dropoff":
-        field = "toDate";
-        break;
-
-      case "booking":
-        field = "bookingConfirmedAt";
-        break;
-
-      default:
-        field = "createdAt";
+      case "created":   field = "createdAt";           break;
+      case "followup":  field = "nextFollowupDate";    break;
+      case "pickup":    field = "fromDate";            break;
+      case "dropoff":   field = "toDate";              break;
+      case "booking":   field = "bookingConfirmedAt";  break;
+      default:          field = "createdAt";
     }
 
     if (dateMode === "single" && singleDate) {
       const start = new Date(singleDate);
       start.setHours(0, 0, 0, 0);
-
       const end = new Date(singleDate);
       end.setHours(23, 59, 59, 999);
-
-      query[field] = {
-        $gte: start,
-        $lte: end,
-      };
+      query[field] = { $gte: start, $lte: end };
     }
 
     if (dateMode === "range") {
       query[field] = {};
-
       if (fromDate) {
         const start = new Date(fromDate);
         start.setHours(0, 0, 0, 0);
         query[field].$gte = start;
       }
-
       if (toDate) {
         const end = new Date(toDate);
         end.setHours(23, 59, 59, 999);
         query[field].$lte = end;
       }
-
       if (Object.keys(query[field]).length === 0) {
         delete query[field];
       }
@@ -475,9 +427,7 @@ export const getLeads = async (req, res) => {
       success: false,
       message: "Unable to fetch leads.",
       error:
-        process.env.NODE_ENV === "development"
-          ? error.message
-          : undefined,
+        process.env.NODE_ENV === "development" ? error.message : undefined,
     });
   }
 };
@@ -495,7 +445,7 @@ export const getLeadById = async (req, res) => {
       .populate("leadOwner", "name email phone")
       .populate("createdBy", "name email phone")
       .populate("company", "companyName email phone")
-      .populate("bookingId")
+      .populate("bookingId") // ✅ safe now — Booking model is registered via import above
       .populate("notes.addedBy", "name email");
 
     if (!lead) {
@@ -516,12 +466,11 @@ export const getLeadById = async (req, res) => {
       success: false,
       message: "Unable to fetch lead.",
       error:
-        process.env.NODE_ENV === "development"
-          ? error.message
-          : undefined,
+        process.env.NODE_ENV === "development" ? error.message : undefined,
     });
   }
 };
+
 export const updateLead = async (req, res) => {
   try {
     const companyId = req.user.company || req.user._id;
@@ -584,48 +533,26 @@ export const updateLead = async (req, res) => {
       }
     });
 
-    if (req.body.customerName !== undefined) {
+    // Explicit coercions (override the generic assignment above)
+    if (req.body.customerName !== undefined)
       lead.customerName = req.body.customerName.trim();
-    }
-
-    if (req.body.mobileNumber !== undefined) {
+    if (req.body.mobileNumber !== undefined)
       lead.mobileNumber = req.body.mobileNumber.trim();
-    }
-
-    if (req.body.residents !== undefined) {
+    if (req.body.residents !== undefined)
       lead.residents = Number(req.body.residents);
-    }
-
-    if (req.body.missedCalls !== undefined) {
+    if (req.body.missedCalls !== undefined)
       lead.missedCalls = Number(req.body.missedCalls);
-    }
-
-    if (req.body.quotationAmount !== undefined) {
+    if (req.body.quotationAmount !== undefined)
       lead.quotationAmount = Number(req.body.quotationAmount);
-    }
 
     await lead.save();
 
     await lead.populate([
-      {
-        path: "leadOwner",
-        select: "name email phone",
-      },
-      {
-        path: "createdBy",
-        select: "name email",
-      },
-      {
-        path: "company",
-        select: "companyName",
-      },
-      {
-        path: "bookingId",
-      },
-      {
-        path: "notes.addedBy",
-        select: "name",
-      },
+      { path: "leadOwner", select: "name email phone" },
+      { path: "createdBy", select: "name email" },
+      { path: "company", select: "companyName" },
+      { path: "bookingId" },
+      { path: "notes.addedBy", select: "name" },
     ]);
 
     return res.status(200).json({
@@ -640,12 +567,11 @@ export const updateLead = async (req, res) => {
       success: false,
       message: "Unable to update lead.",
       error:
-        process.env.NODE_ENV === "development"
-          ? error.message
-          : undefined,
+        process.env.NODE_ENV === "development" ? error.message : undefined,
     });
   }
 };
+
 export const deleteLead = async (req, res) => {
   try {
     const companyId = req.user.company || req.user._id;
@@ -681,9 +607,7 @@ export const deleteLead = async (req, res) => {
       success: false,
       message: "Unable to delete lead.",
       error:
-        process.env.NODE_ENV === "development"
-          ? error.message
-          : undefined,
+        process.env.NODE_ENV === "development" ? error.message : undefined,
     });
   }
 };
@@ -699,9 +623,7 @@ export const getLeadDashboardStats = async (req, res) => {
     const dayAfterTomorrow = new Date(today);
     dayAfterTomorrow.setDate(today.getDate() + 2);
 
-    const baseQuery = {
-      isDeleted: false,
-    };
+    const baseQuery = { isDeleted: false };
 
     const [
       totalLeads,
@@ -716,62 +638,25 @@ export const getLeadDashboardStats = async (req, res) => {
       whatsappSent,
     ] = await Promise.all([
       Lead.countDocuments(baseQuery),
-
+      Lead.countDocuments({ ...baseQuery, status: "Enquiry" }),
       Lead.countDocuments({
         ...baseQuery,
-        status: "Enquiry",
+        nextFollowupDate: { $gte: today, $lt: tomorrow },
       }),
-
       Lead.countDocuments({
         ...baseQuery,
-        nextFollowupDate: {
-          $gte: today,
-          $lt: tomorrow,
-        },
+        nextFollowupDate: { $gte: tomorrow, $lt: dayAfterTomorrow },
       }),
-
       Lead.countDocuments({
         ...baseQuery,
-        nextFollowupDate: {
-          $gte: tomorrow,
-          $lt: dayAfterTomorrow,
-        },
+        nextFollowupDate: { $lt: today },
+        status: { $nin: ["Booking confirmed", "Deal lost"] },
       }),
-
-      Lead.countDocuments({
-        ...baseQuery,
-        nextFollowupDate: {
-          $lt: today,
-        },
-        status: {
-          $nin: ["Booking confirmed", "Deal lost"],
-        },
-      }),
-
-      Lead.countDocuments({
-        ...baseQuery,
-        quotationSent: true,
-      }),
-
-      Lead.countDocuments({
-        ...baseQuery,
-        status: "Booking confirmed",
-      }),
-
-      Lead.countDocuments({
-        ...baseQuery,
-        status: "Deal lost",
-      }),
-
-      Lead.countDocuments({
-        ...baseQuery,
-        priority: "high",
-      }),
-
-      Lead.countDocuments({
-        ...baseQuery,
-        whatsappSent: true,
-      }),
+      Lead.countDocuments({ ...baseQuery, quotationSent: true }),
+      Lead.countDocuments({ ...baseQuery, status: "Booking confirmed" }),
+      Lead.countDocuments({ ...baseQuery, status: "Deal lost" }),
+      Lead.countDocuments({ ...baseQuery, priority: "high" }),
+      Lead.countDocuments({ ...baseQuery, whatsappSent: true }),
     ]);
 
     return res.status(200).json({
@@ -796,9 +681,7 @@ export const getLeadDashboardStats = async (req, res) => {
       success: false,
       message: "Unable to fetch dashboard statistics.",
       error:
-        process.env.NODE_ENV === "development"
-          ? error.message
-          : undefined,
+        process.env.NODE_ENV === "development" ? error.message : undefined,
     });
   }
 };
