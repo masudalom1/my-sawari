@@ -10,9 +10,7 @@ import {
 const router = express.Router();
 
 router.get("/dashboard", protect, getLeadDashboardStats);
-
 router.get("/", protect, getLeads);
-
 router.post("/", protect, createLead);
 
 export default router;
