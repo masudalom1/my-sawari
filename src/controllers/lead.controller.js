@@ -233,8 +233,6 @@ export const createLead = async (req, res) => {
 
 export const getLeads = async (req, res) => {
   try {
-    const companyId = req.user.company || req.user._id;
-
     let {
       page = 1,
       limit = 20,
@@ -261,7 +259,6 @@ export const getLeads = async (req, res) => {
     limit = parseInt(limit);
 
     const query = {
-      company: companyId,
       isDeleted: false,
     };
 
@@ -352,11 +349,9 @@ export const getLeads = async (req, res) => {
         query.nextFollowupDate = {
           $lt: today,
         };
-
         query.status = {
           $nin: ["Booking confirmed", "Deal lost"],
         };
-
         break;
 
       default:
@@ -413,14 +408,12 @@ export const getLeads = async (req, res) => {
       if (fromDate) {
         const start = new Date(fromDate);
         start.setHours(0, 0, 0, 0);
-
         query[field].$gte = start;
       }
 
       if (toDate) {
         const end = new Date(toDate);
         end.setHours(23, 59, 59, 999);
-
         query[field].$lte = end;
       }
 
@@ -433,8 +426,19 @@ export const getLeads = async (req, res) => {
     // Sorting
     // ==========================================
 
+    const allowedSortFields = [
+      "createdAt",
+      "updatedAt",
+      "leadDate",
+      "nextFollowupDate",
+      "fromDate",
+      "toDate",
+      "priority",
+    ];
+
     const sort = {
-      [sortBy]: sortOrder === "asc" ? 1 : -1,
+      [allowedSortFields.includes(sortBy) ? sortBy : "createdAt"]:
+        sortOrder === "asc" ? 1 : -1,
     };
 
     // ==========================================
@@ -445,8 +449,7 @@ export const getLeads = async (req, res) => {
 
     const leads = await Lead.find(query)
       .populate("leadOwner", "name email phone")
-      .populate("createdBy", "name")
-      .populate("company", "companyName")
+      .populate("createdBy", "name email phone")
       .sort(sort)
       .skip((page - 1) * limit)
       .limit(limit)
@@ -687,8 +690,6 @@ export const deleteLead = async (req, res) => {
 
 export const getLeadDashboardStats = async (req, res) => {
   try {
-    const companyId = req.user.company || req.user._id;
-
     const today = new Date();
     today.setHours(0, 0, 0, 0);
 
@@ -697,6 +698,10 @@ export const getLeadDashboardStats = async (req, res) => {
 
     const dayAfterTomorrow = new Date(today);
     dayAfterTomorrow.setDate(today.getDate() + 2);
+
+    const baseQuery = {
+      isDeleted: false,
+    };
 
     const [
       totalLeads,
@@ -710,20 +715,15 @@ export const getLeadDashboardStats = async (req, res) => {
       highPriority,
       whatsappSent,
     ] = await Promise.all([
-      Lead.countDocuments({
-        company: companyId,
-        isDeleted: false,
-      }),
+      Lead.countDocuments(baseQuery),
 
       Lead.countDocuments({
-        company: companyId,
-        isDeleted: false,
+        ...baseQuery,
         status: "Enquiry",
       }),
 
       Lead.countDocuments({
-        company: companyId,
-        isDeleted: false,
+        ...baseQuery,
         nextFollowupDate: {
           $gte: today,
           $lt: tomorrow,
@@ -731,8 +731,7 @@ export const getLeadDashboardStats = async (req, res) => {
       }),
 
       Lead.countDocuments({
-        company: companyId,
-        isDeleted: false,
+        ...baseQuery,
         nextFollowupDate: {
           $gte: tomorrow,
           $lt: dayAfterTomorrow,
@@ -740,8 +739,7 @@ export const getLeadDashboardStats = async (req, res) => {
       }),
 
       Lead.countDocuments({
-        company: companyId,
-        isDeleted: false,
+        ...baseQuery,
         nextFollowupDate: {
           $lt: today,
         },
@@ -751,32 +749,27 @@ export const getLeadDashboardStats = async (req, res) => {
       }),
 
       Lead.countDocuments({
-        company: companyId,
-        isDeleted: false,
+        ...baseQuery,
         quotationSent: true,
       }),
 
       Lead.countDocuments({
-        company: companyId,
-        isDeleted: false,
+        ...baseQuery,
         status: "Booking confirmed",
       }),
 
       Lead.countDocuments({
-        company: companyId,
-        isDeleted: false,
+        ...baseQuery,
         status: "Deal lost",
       }),
 
       Lead.countDocuments({
-        company: companyId,
-        isDeleted: false,
+        ...baseQuery,
         priority: "high",
       }),
 
       Lead.countDocuments({
-        company: companyId,
-        isDeleted: false,
+        ...baseQuery,
         whatsappSent: true,
       }),
     ]);
