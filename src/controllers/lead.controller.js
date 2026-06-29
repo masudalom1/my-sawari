@@ -1,5 +1,6 @@
 import mongoose from "mongoose";
 import Lead from "../models/lead.model.js";
+import LeadHistory from "../models/leadHistory.model.js";
 
 export const createLead = async (req, res) => {
   try {
@@ -300,8 +301,7 @@ export const getLeadDashboardStats = async (req, res) => {
     return res.status(500).json({
       success: false,
       message: "Unable to fetch dashboard statistics.",
-      error:
-        process.env.NODE_ENV === "development" ? error.message : undefined,
+      error: process.env.NODE_ENV === "development" ? error.message : undefined,
     });
   }
 };
@@ -415,12 +415,23 @@ export const getLeads = async (req, res) => {
     let field = "createdAt";
 
     switch (dateField) {
-      case "created":   field = "createdAt";           break;
-      case "followup":  field = "nextFollowupDate";    break;
-      case "pickup":    field = "fromDate";            break;
-      case "dropoff":   field = "toDate";              break;
-      case "booking":   field = "bookingConfirmedAt";  break;
-      default:          field = "createdAt";
+      case "created":
+        field = "createdAt";
+        break;
+      case "followup":
+        field = "nextFollowupDate";
+        break;
+      case "pickup":
+        field = "fromDate";
+        break;
+      case "dropoff":
+        field = "toDate";
+        break;
+      case "booking":
+        field = "bookingConfirmedAt";
+        break;
+      default:
+        field = "createdAt";
     }
 
     if (dateMode === "single" && singleDate) {
@@ -500,8 +511,7 @@ export const getLeads = async (req, res) => {
     return res.status(500).json({
       success: false,
       message: "Unable to fetch leads.",
-      error:
-        process.env.NODE_ENV === "development" ? error.message : undefined,
+      error: process.env.NODE_ENV === "development" ? error.message : undefined,
     });
   }
 };
@@ -516,8 +526,6 @@ export const getLeadById = async (req, res) => {
         message: "Invalid lead id.",
       });
     }
-
-   
 
     const lead = await Lead.findOne({
       _id: id,
@@ -544,10 +552,7 @@ export const getLeadById = async (req, res) => {
     return res.status(500).json({
       success: false,
       message: "Unable to fetch lead.",
-      error:
-        process.env.NODE_ENV === "development"
-          ? error.message
-          : undefined,
+      error: process.env.NODE_ENV === "development" ? error.message : undefined,
     });
   }
 };
@@ -611,17 +616,49 @@ export const updateLead = async (req, res) => {
       "utmMedium",
     ];
 
-    allowedFields.forEach((field) => {
-      if (req.body[field] !== undefined) {
-        lead[field] = req.body[field];
-      }
-    });
+    const historyLogs = [];
 
-    if (req.body.leadOwner) {
-      lead.leadOwner = req.body.leadOwner;
+    const normalize = (value) => {
+      if (value instanceof Date) return value.toISOString();
+      if (value instanceof mongoose.Types.ObjectId) return value.toString();
+      return String(value ?? "");
+    };
+
+    for (const field of allowedFields) {
+      if (req.body[field] === undefined) continue;
+
+      const oldValue = lead[field];
+      let newValue = req.body[field];
+
+      if (field === "leadOwner" && typeof newValue === "object") {
+        newValue = newValue._id;
+      }
+
+      if (normalize(oldValue) !== normalize(newValue)) {
+        historyLogs.push({
+          lead: lead._id,
+          company: companyId,
+          field,
+          oldValue,
+          newValue,
+          changedBy: req.user._id,
+          action:
+            field === "status"
+              ? "status_changed"
+              : field === "priority"
+                ? "priority_changed"
+                : "updated",
+        });
+
+        lead[field] = newValue;
+      }
     }
 
     await lead.save();
+
+    if (historyLogs.length) {
+      await LeadHistory.insertMany(historyLogs);
+    }
 
     const updatedLead = await Lead.findById(lead._id)
       .populate("leadOwner", "name email")
@@ -639,12 +676,41 @@ export const updateLead = async (req, res) => {
     return res.status(500).json({
       success: false,
       message: "Unable to update lead",
-      error:
-        process.env.NODE_ENV === "development"
-          ? error.message
-          : undefined,
+      error: process.env.NODE_ENV === "development" ? error.message : undefined,
     });
   }
 };
 
+export const getLeadHistory = async (req, res) => {
+  try {
+    const { id } = req.params;
 
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid lead id",
+      });
+    }
+
+    const companyId = req.user.company || req.user._id;
+
+    const history = await LeadHistory.find({
+      lead: id,
+      company: companyId,
+    })
+      .populate("changedBy", "name email")
+      .sort({ createdAt: -1 });
+
+    return res.json({
+      success: true,
+      data: history,
+    });
+  } catch (err) {
+    console.error(err);
+
+    return res.status(500).json({
+      success: false,
+      message: "Unable to fetch history",
+    });
+  }
+};
