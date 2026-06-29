@@ -155,7 +155,7 @@ export const getLeadActivities = async (req, res) => {
       data: activities,
     });
   } catch (error) {
-    console.log(error);
+    console.error(error);
 
     return res.status(500).json({
       success: false,

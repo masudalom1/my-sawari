@@ -701,16 +701,20 @@ export const getLeadHistory = async (req, res) => {
       .populate("changedBy", "name email")
       .sort({ createdAt: -1 });
 
-    return res.json({
+    return res.status(200).json({
       success: true,
       data: history,
     });
-  } catch (err) {
-    console.error(err);
+  } catch (error) {
+    console.error(error);
 
     return res.status(500).json({
       success: false,
-      message: "Unable to fetch history",
+      message: "Unable to fetch history.",
+      error:
+        process.env.NODE_ENV === "development"
+          ? error.message
+          : undefined,
     });
   }
 };
