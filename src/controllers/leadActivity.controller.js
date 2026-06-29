@@ -141,11 +141,10 @@ export const getLeadActivities = async (req, res) => {
       });
     }
 
-    const companyId = req.user.company || req.user._id;
+  
 
     const activities = await LeadActivity.find({
       lead: id,
-      company: companyId,
     })
       .populate("createdBy", "name email")
       .sort({ createdAt: -1 });

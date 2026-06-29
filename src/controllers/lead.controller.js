@@ -692,11 +692,9 @@ export const getLeadHistory = async (req, res) => {
       });
     }
 
-    const companyId = req.user.company || req.user._id;
 
     const history = await LeadHistory.find({
       lead: id,
-      company: companyId,
     })
       .populate("changedBy", "name email")
       .sort({ createdAt: -1 });
