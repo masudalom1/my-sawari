@@ -6,6 +6,7 @@ import {
   getLeadById,
   getLeadDashboardStats,
   getLeads,
+  updateLead,
 } from "../controllers/lead.controller.js";
 
 const router = express.Router();
@@ -14,5 +15,5 @@ router.get("/dashboard", protect, getLeadDashboardStats);
 router.get("/", protect, getLeads);
 router.post("/", protect, createLead);
 router.get("/:id", protect, getLeadById);
-
+router.put("/:id", protect, updateLead);
 export default router;

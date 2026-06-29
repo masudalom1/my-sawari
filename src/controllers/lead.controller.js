@@ -552,4 +552,99 @@ export const getLeadById = async (req, res) => {
   }
 };
 
+export const updateLead = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid lead id",
+      });
+    }
+
+    const companyId = req.user.company || req.user._id;
+
+    const lead = await Lead.findOne({
+      _id: id,
+      company: companyId,
+      isDeleted: false,
+    });
+
+    if (!lead) {
+      return res.status(404).json({
+        success: false,
+        message: "Lead not found",
+      });
+    }
+
+    const allowedFields = [
+      "customerName",
+      "mobileNumber",
+      "vehicleType",
+      "vehicleName",
+      "fromDate",
+      "toDate",
+      "residents",
+      "cabService",
+      "priority",
+      "status",
+      "conversationSummary",
+      "detailedConversation",
+      "nextFollowupDate",
+      "nextActionItem",
+      "strategyForClosing",
+      "strategyPreparedBy",
+      "quotationAmount",
+      "reasonForDealLoss",
+      "remarksFeedback",
+      "feedbackBy",
+      "mondayLead",
+      "longBookingLead",
+      "whatsappSent",
+      "quotationSent",
+      "missedCalls",
+      "leadTime",
+      "source",
+      "campaignName",
+      "utmSource",
+      "utmMedium",
+    ];
+
+    allowedFields.forEach((field) => {
+      if (req.body[field] !== undefined) {
+        lead[field] = req.body[field];
+      }
+    });
+
+    if (req.body.leadOwner) {
+      lead.leadOwner = req.body.leadOwner;
+    }
+
+    await lead.save();
+
+    const updatedLead = await Lead.findById(lead._id)
+      .populate("leadOwner", "name email")
+      .populate("createdBy", "name email")
+      .populate("notes.addedBy", "name");
+
+    return res.status(200).json({
+      success: true,
+      message: "Lead updated successfully",
+      data: updatedLead,
+    });
+  } catch (error) {
+    console.error("Update Lead Error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Unable to update lead",
+      error:
+        process.env.NODE_ENV === "development"
+          ? error.message
+          : undefined,
+    });
+  }
+};
+
 
