@@ -505,5 +505,50 @@ export const getLeads = async (req, res) => {
   }
 };
 
+export const getLeadById = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid lead id.",
+      });
+    }
+
+   
+
+    const lead = await Lead.findOne({
+      _id: id,
+      isDeleted: false,
+    })
+      .populate("leadOwner", "name email phone")
+      .populate("createdBy", "name email phone")
+      .populate("notes.addedBy", "name");
+
+    if (!lead) {
+      return res.status(404).json({
+        success: false,
+        message: "Lead not found.",
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      data: lead,
+    });
+  } catch (error) {
+    console.error("Get Lead Error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Unable to fetch lead.",
+      error:
+        process.env.NODE_ENV === "development"
+          ? error.message
+          : undefined,
+    });
+  }
+};
 
 
