@@ -9,6 +9,7 @@ import {
   getLeads,
   updateLead,
 } from "../controllers/lead.controller.js";
+import { createLeadActivity, getLeadActivities } from "../controllers/leadActivity.controller.js";
 
 const router = express.Router();
 
@@ -19,4 +20,7 @@ router.get("/:id", protect, getLeadById);
 router.put("/:id", protect, updateLead);
 
 router.get("/:id/history", protect, getLeadHistory);
+
+router.post("/:id/activity", protect, createLeadActivity);
+router.get("/:id/activity", protect, getLeadActivities);
 export default router;
