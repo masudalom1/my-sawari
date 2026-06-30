@@ -578,17 +578,16 @@ export const updateLead = async (req, res) => {
     }
 
     // Authorization
+    // Authorization
     const userId = req.user._id.toString();
-    const userCompany = req.user.company?.toString();
+    const userCompanyId = (req.user.company || req.user._id).toString();
 
     const isOwner =
       lead.createdBy?.toString() === userId ||
       lead.leadOwner?.toString() === userId;
 
     const isSameCompany =
-      userCompany &&
-      lead.company &&
-      lead.company.toString() === userCompany;
+      lead.company && lead.company.toString() === userCompanyId;
 
     if (!isOwner && !isSameCompany) {
       return res.status(403).json({
@@ -656,8 +655,8 @@ export const updateLead = async (req, res) => {
             field === "status"
               ? "status_changed"
               : field === "priority"
-              ? "priority_changed"
-              : "updated",
+                ? "priority_changed"
+                : "updated",
         });
 
         lead[field] = newValue;
