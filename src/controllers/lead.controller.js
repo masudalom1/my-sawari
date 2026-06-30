@@ -570,16 +570,24 @@ export const updateLead = async (req, res) => {
 
     const companyId = req.user.company || req.user._id;
 
-    const lead = await Lead.findOne({
-      _id: id,
-      company: companyId,
-      isDeleted: false,
-    });
+    // Find lead first
+    const lead = await Lead.findById(id);
 
-    if (!lead) {
+    if (!lead || lead.isDeleted) {
       return res.status(404).json({
         success: false,
         message: "Lead not found",
+      });
+    }
+
+    // Company validation (only if company exists)
+    if (
+      lead.company &&
+      lead.company.toString() !== companyId.toString()
+    ) {
+      return res.status(403).json({
+        success: false,
+        message: "You are not authorized to update this lead",
       });
     }
 
@@ -620,15 +628,16 @@ export const updateLead = async (req, res) => {
 
     const normalize = (value) => {
       if (value instanceof Date) return value.toISOString();
-      if (value instanceof mongoose.Types.ObjectId) return value.toString();
+      if (value instanceof mongoose.Types.ObjectId)
+        return value.toString();
       return String(value ?? "");
     };
 
     for (const field of allowedFields) {
       if (req.body[field] === undefined) continue;
 
-      const oldValue = lead[field];
       let newValue = req.body[field];
+      const oldValue = lead[field];
 
       if (field === "leadOwner" && typeof newValue === "object") {
         newValue = newValue._id;
@@ -646,8 +655,8 @@ export const updateLead = async (req, res) => {
             field === "status"
               ? "status_changed"
               : field === "priority"
-                ? "priority_changed"
-                : "updated",
+              ? "priority_changed"
+              : "updated",
         });
 
         lead[field] = newValue;
@@ -656,13 +665,13 @@ export const updateLead = async (req, res) => {
 
     await lead.save();
 
-    if (historyLogs.length) {
+    if (historyLogs.length > 0) {
       await LeadHistory.insertMany(historyLogs);
     }
 
     const updatedLead = await Lead.findById(lead._id)
-      .populate("leadOwner", "name email")
-      .populate("createdBy", "name email")
+      .populate("leadOwner", "name email phone")
+      .populate("createdBy", "name email phone")
       .populate("notes.addedBy", "name");
 
     return res.status(200).json({
@@ -676,7 +685,10 @@ export const updateLead = async (req, res) => {
     return res.status(500).json({
       success: false,
       message: "Unable to update lead",
-      error: process.env.NODE_ENV === "development" ? error.message : undefined,
+      error:
+        process.env.NODE_ENV === "development"
+          ? error.message
+          : undefined,
     });
   }
 };
