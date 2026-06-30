@@ -679,18 +679,18 @@ export const updateLead = async (req, res) => {
       message: "Lead updated successfully",
       data: updatedLead,
     });
-  } catch (error) {
-    console.error("Update Lead Error:", error);
+  }catch (error) {
+  console.error("========== UPDATE LEAD ERROR ==========");
+  console.error(error);
+  console.error(error.message);
+  console.error(error.stack);
 
-    return res.status(500).json({
-      success: false,
-      message: "Unable to update lead",
-      error:
-        process.env.NODE_ENV === "development"
-          ? error.message
-          : undefined,
-    });
-  }
+  return res.status(500).json({
+    success: false,
+    message: "Unable to update lead",
+    error: error.message,
+  });
+}
 };
 
 export const getLeadHistory = async (req, res) => {
