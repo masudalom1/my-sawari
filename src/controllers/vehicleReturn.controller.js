@@ -30,7 +30,7 @@ export const receiveVehicle = async (req, res) => {
 
     const files = req.files || {};
 
-    const companyId = req.user.company || req.user._id;
+    //const companyId = req.user.company || req.user._id;
 
     /* ==========================
        BASIC VALIDATION
@@ -61,7 +61,7 @@ export const receiveVehicle = async (req, res) => {
 
     const handover = await Handover.findOne({
       _id: handoverId,
-      company: companyId,
+ //     company: companyId,
       isDeleted: false,
     });
 
@@ -260,7 +260,7 @@ export const receiveVehicle = async (req, res) => {
     ========================== */
 
     const vehicleReturn = await VehicleReturn.create({
-      company: companyId,
+     // company: companyId,
 
       createdBy: req.user._id,
 
