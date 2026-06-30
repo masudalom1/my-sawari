@@ -16,15 +16,10 @@ export const createLeadActivity = async (req, res) => {
       });
     }
 
-    const companyId = req.user.company || req.user._id;
+    // Find lead (no company restriction)
+    const lead = await Lead.findById(id);
 
-    const lead = await Lead.findOne({
-      _id: id,
-      company: companyId,
-      isDeleted: false,
-    });
-
-    if (!lead) {
+    if (!lead || lead.isDeleted) {
       return res.status(404).json({
         success: false,
         message: "Lead not found",
@@ -44,7 +39,7 @@ export const createLeadActivity = async (req, res) => {
 
     const activity = await LeadActivity.create({
       lead: lead._id,
-      company: companyId,
+      company: lead.company,
       contactType,
       direction,
       duration,
@@ -63,7 +58,7 @@ export const createLeadActivity = async (req, res) => {
 
       history.push({
         lead: lead._id,
-        company: companyId,
+        company: lead.company,
         field,
         oldValue,
         newValue,
@@ -95,7 +90,9 @@ export const createLeadActivity = async (req, res) => {
 
     if (followUpRequired) {
       lead.lastFollowupDate = new Date();
-      lead.nextFollowupDate = nextFollowUpDate;
+      lead.nextFollowupDate = nextFollowUpDate
+        ? new Date(nextFollowUpDate)
+        : null;
     }
 
     if (leadStatusAfterContact) {
@@ -104,7 +101,7 @@ export const createLeadActivity = async (req, res) => {
 
     await lead.save();
 
-    if (history.length) {
+    if (history.length > 0) {
       await LeadHistory.insertMany(history);
     }
 
@@ -117,7 +114,7 @@ export const createLeadActivity = async (req, res) => {
       data,
     });
   } catch (error) {
-    console.log(error);
+    console.error("Create Activity Error:", error);
 
     return res.status(500).json({
       success: false,
