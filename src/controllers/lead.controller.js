@@ -577,25 +577,6 @@ export const updateLead = async (req, res) => {
       });
     }
 
-    // Authorization
-    // Authorization
-    const userId = req.user._id.toString();
-    const userCompanyId = (req.user.company || req.user._id).toString();
-
-    const isOwner =
-      lead.createdBy?.toString() === userId ||
-      lead.leadOwner?.toString() === userId;
-
-    const isSameCompany =
-      lead.company && lead.company.toString() === userCompanyId;
-
-    if (!isOwner && !isSameCompany) {
-      return res.status(403).json({
-        success: false,
-        message: "You are not authorized to update this lead",
-      });
-    }
-
     const allowedFields = [
       "customerName",
       "mobileNumber",
@@ -633,12 +614,13 @@ export const updateLead = async (req, res) => {
 
     const normalize = (value) => {
       if (value instanceof Date) return value.toISOString();
-      if (value instanceof mongoose.Types.ObjectId) return value.toString();
+      if (value instanceof mongoose.Types.ObjectId)
+        return value.toString();
       return String(value ?? "");
     };
 
     for (const field of allowedFields) {
-      if (!(field in req.body)) continue;
+      if (req.body[field] === undefined) continue;
 
       const oldValue = lead[field];
       const newValue = req.body[field];
@@ -655,8 +637,8 @@ export const updateLead = async (req, res) => {
             field === "status"
               ? "status_changed"
               : field === "priority"
-                ? "priority_changed"
-                : "updated",
+              ? "priority_changed"
+              : "updated",
         });
 
         lead[field] = newValue;
@@ -665,7 +647,7 @@ export const updateLead = async (req, res) => {
 
     await lead.save();
 
-    if (historyLogs.length) {
+    if (historyLogs.length > 0) {
       await LeadHistory.insertMany(historyLogs);
     }
 
