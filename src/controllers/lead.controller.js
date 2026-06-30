@@ -568,9 +568,6 @@ export const updateLead = async (req, res) => {
       });
     }
 
-    const companyId = req.user.company || req.user._id;
-
-    // Find lead first
     const lead = await Lead.findById(id);
 
     if (!lead || lead.isDeleted) {
@@ -580,11 +577,20 @@ export const updateLead = async (req, res) => {
       });
     }
 
-    // Company validation (only if company exists)
-    if (
+    // Authorization
+    const userId = req.user._id.toString();
+    const userCompany = req.user.company?.toString();
+
+    const isOwner =
+      lead.createdBy?.toString() === userId ||
+      lead.leadOwner?.toString() === userId;
+
+    const isSameCompany =
+      userCompany &&
       lead.company &&
-      lead.company.toString() !== companyId.toString()
-    ) {
+      lead.company.toString() === userCompany;
+
+    if (!isOwner && !isSameCompany) {
       return res.status(403).json({
         success: false,
         message: "You are not authorized to update this lead",
@@ -628,25 +634,20 @@ export const updateLead = async (req, res) => {
 
     const normalize = (value) => {
       if (value instanceof Date) return value.toISOString();
-      if (value instanceof mongoose.Types.ObjectId)
-        return value.toString();
+      if (value instanceof mongoose.Types.ObjectId) return value.toString();
       return String(value ?? "");
     };
 
     for (const field of allowedFields) {
-      if (req.body[field] === undefined) continue;
+      if (!(field in req.body)) continue;
 
-      let newValue = req.body[field];
       const oldValue = lead[field];
-
-      if (field === "leadOwner" && typeof newValue === "object") {
-        newValue = newValue._id;
-      }
+      const newValue = req.body[field];
 
       if (normalize(oldValue) !== normalize(newValue)) {
         historyLogs.push({
           lead: lead._id,
-          company: companyId,
+          company: lead.company,
           field,
           oldValue,
           newValue,
@@ -665,7 +666,7 @@ export const updateLead = async (req, res) => {
 
     await lead.save();
 
-    if (historyLogs.length > 0) {
+    if (historyLogs.length) {
       await LeadHistory.insertMany(historyLogs);
     }
 
@@ -679,18 +680,15 @@ export const updateLead = async (req, res) => {
       message: "Lead updated successfully",
       data: updatedLead,
     });
-  }catch (error) {
-  console.error("========== UPDATE LEAD ERROR ==========");
-  console.error(error);
-  console.error(error.message);
-  console.error(error.stack);
+  } catch (error) {
+    console.error("Update Lead Error:", error);
 
-  return res.status(500).json({
-    success: false,
-    message: "Unable to update lead",
-    error: error.message,
-  });
-}
+    return res.status(500).json({
+      success: false,
+      message: "Unable to update lead",
+      error: error.message,
+    });
+  }
 };
 
 export const getLeadHistory = async (req, res) => {
@@ -703,7 +701,6 @@ export const getLeadHistory = async (req, res) => {
         message: "Invalid lead id",
       });
     }
-
 
     const history = await LeadHistory.find({
       lead: id,
@@ -721,10 +718,7 @@ export const getLeadHistory = async (req, res) => {
     return res.status(500).json({
       success: false,
       message: "Unable to fetch history.",
-      error:
-        process.env.NODE_ENV === "development"
-          ? error.message
-          : undefined,
+      error: process.env.NODE_ENV === "development" ? error.message : undefined,
     });
   }
 };
