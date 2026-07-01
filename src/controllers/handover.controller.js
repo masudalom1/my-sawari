@@ -669,62 +669,69 @@ export const updateRental = async (req, res) => {
       reasonForChange,
     } = req.body;
 
-    const handover = await Handover.findOne({
-      _id: id,
-      company: req.user.company || req.user._id,
-      handoverStatus: "active",
-      isDeleted: false,
-    });
+    const handover = await Handover.findById(id);
 
-    if (!handover) {
+    if (
+      !handover ||
+      handover.isDeleted ||
+      handover.handoverStatus !== "active"
+    ) {
       return res.status(404).json({
         success: false,
         message: "Active rental not found",
       });
     }
 
-    // Update trip
+    /* ==========================
+       UPDATE TRIP
+    ========================== */
+
     if (dropDateTime) {
       handover.trip.dropDateTime = new Date(dropDateTime);
 
-      const pickup = handover.trip.pickupDateTime;
-
+      const pickup = new Date(handover.trip.pickupDateTime);
       const drop = new Date(dropDateTime);
 
-      const days = Math.ceil((drop - pickup) / (1000 * 60 * 60 * 24));
+      const days = Math.ceil(
+        (drop - pickup) / (1000 * 60 * 60 * 24)
+      );
 
       handover.trip.numberOfDays = Math.max(1, days);
     }
 
-    // Update payments
+    /* ==========================
+       UPDATE PAYMENTS
+    ========================== */
+
     handover.payment.totalFare = Number(totalFare) || 0;
 
-    handover.payment.fastTagPayableAmount = Number(fastagCharges) || 0;
+    handover.payment.fastTagPayableAmount =
+      Number(fastagCharges) || 0;
 
-    handover.payment.securityDeposit = Number(securityDeposit) || 0;
+    handover.payment.securityDeposit =
+      Number(securityDeposit) || 0;
 
-    handover.payment.extraCharges = Number(extraCharges) || 0;
+    handover.payment.extraCharges =
+      Number(extraCharges) || 0;
 
-    // Calculate total amount
     handover.payment.totalAmount =
       handover.payment.totalFare +
       handover.payment.fastTagPayableAmount +
       handover.payment.securityDeposit +
       handover.payment.extraCharges;
 
-    // Add newly collected payment
-    handover.payment.amountReceivedNow += Number(amountReceivedNow) || 0;
+    handover.payment.amountReceivedNow +=
+      Number(amountReceivedNow) || 0;
 
-    // Recalculate balance
     const totalPaid =
-      handover.payment.bookingAmountPaid + handover.payment.amountReceivedNow;
+      (handover.payment.bookingAmountPaid || 0) +
+      (handover.payment.amountReceivedNow || 0);
 
     handover.payment.balanceAmount = Math.max(
       0,
-      handover.payment.totalAmount - totalPaid,
+      handover.payment.totalAmount - totalPaid
     );
 
-    // Payment status
     if (handover.payment.balanceAmount === 0) {
       handover.payment.paymentStatus = "paid";
     } else if (totalPaid > 0) {
@@ -733,8 +740,11 @@ export const updateRental = async (req, res) => {
       handover.payment.paymentStatus = "pending";
     }
 
-    // Save edit note
-    if (reasonForChange) {
+    /* ==========================
+       SAVE CHANGE NOTE
+    ========================== */
+
+    if (reasonForChange?.trim()) {
       handover.notes = `${handover.notes || ""}
 
 [Rental Updated - ${new Date().toLocaleString()}]
@@ -749,11 +759,11 @@ ${reasonForChange}`.trim();
       data: handover,
     });
   } catch (error) {
-    console.log("UPDATE RENTAL ERROR:", error);
+    console.error("UPDATE RENTAL ERROR:", error);
 
     return res.status(500).json({
       success: false,
-      message: error.message,
+      message: error.message || "Failed to update rental",
     });
   }
 };
