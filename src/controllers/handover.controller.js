@@ -601,13 +601,9 @@ export const getRentalDetails = async (req, res) => {
   try {
     const { id } = req.params;
 
-    const handover = await Handover.findOne({
-      _id: id,
-      company: req.user.company || req.user._id,
-      isDeleted: false,
-    });
+    const handover = await Handover.findById(id);
 
-    if (!handover) {
+    if (!handover || handover.isDeleted) {
       return res.status(404).json({
         success: false,
         message: "Rental not found",
@@ -619,42 +615,43 @@ export const getRentalDetails = async (req, res) => {
       data: {
         _id: handover._id,
 
-        customerName: handover.customer.fullName,
-        customerPhone: handover.customer.mobileNumber,
+        customerName: handover.customer?.fullName || "",
+        customerPhone: handover.customer?.mobileNumber || "",
 
-        vehicleModel: handover.vehicle.vehicleName,
-        plateNumber: handover.vehicle.vehicleNumber,
+        vehicleModel: handover.vehicle?.vehicleName || "",
+        plateNumber: handover.vehicle?.vehicleNumber || "",
 
-        pickupDateTime: handover.trip.pickupDateTime,
-        dropDateTime: handover.trip.dropDateTime,
+        pickupDateTime: handover.trip?.pickupDateTime,
+        dropDateTime: handover.trip?.dropDateTime,
 
-        totalFare: handover.payment.totalFare,
+        totalFare: handover.payment?.totalFare || 0,
 
-        fastagCharges: handover.payment.fastTagPayableAmount,
+        fastagCharges: handover.payment?.fastTagPayableAmount || 0,
 
-        securityDeposit: handover.payment.securityDeposit,
+        securityDeposit: handover.payment?.securityDeposit || 0,
 
-        extraCharges: handover.payment.extraCharges,
+        extraCharges: handover.payment?.extraCharges || 0,
 
-        bookingAmountPaid: handover.payment.bookingAmountPaid,
+        bookingAmountPaid: handover.payment?.bookingAmountPaid || 0,
 
-        amountReceivedPreviously: handover.payment.amountReceivedNow,
+        amountReceivedPreviously:
+          handover.payment?.amountReceivedNow || 0,
 
-        totalAmount: handover.payment.totalAmount,
+        totalAmount: handover.payment?.totalAmount || 0,
 
-        balanceAmount: handover.payment.balanceAmount,
+        balanceAmount: handover.payment?.balanceAmount || 0,
 
-        paymentMethod: handover.payment.paymentMethod,
+        paymentMethod: handover.payment?.paymentMethod || "",
 
-        paymentStatus: handover.payment.paymentStatus,
+        paymentStatus: handover.payment?.paymentStatus || "pending",
       },
     });
   } catch (error) {
-    console.log("GET RENTAL DETAILS ERROR:", error);
+    console.error("GET RENTAL DETAILS ERROR:", error);
 
     return res.status(500).json({
       success: false,
-      message: error.message,
+      message: error.message || "Failed to fetch rental details",
     });
   }
 };
