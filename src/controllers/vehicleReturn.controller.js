@@ -59,14 +59,13 @@ export const receiveVehicle = async (req, res) => {
        FIND HANDOVER
     ========================== */
 
-const handover = await Handover.findById(handoverId);
+console.log("Searching handover:", handoverId);
 
-    if (!handover) {
-      return res.status(404).json({
-        success: false,
-        message: "Handover not found",
-      });
-    }
+const handover = await Handover.findOne({
+  _id: handoverId,
+});
+
+console.log("Found:", handover ? "YES" : "NO");
 
     if (handover.handoverStatus === "returned") {
       return res.status(400).json({
