@@ -58,6 +58,7 @@ export const receiveVehicle = async (req, res) => {
     /* ==========================
        FIND HANDOVER
     ========================== */
+    const handover = await Handover.findById(handoverId);
     if (!handover) {
       return res
         .status(404)
