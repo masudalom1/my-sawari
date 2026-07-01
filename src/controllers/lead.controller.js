@@ -317,6 +317,250 @@ export const getLeads = async (req, res) => {
       vehicleType,
       priority,
 
+      // New Query Parameters
+      status,
+      dealLossReason,
+      longBooking,
+      mondayLead,
+
+      tab = "all",
+
+      dateField = "created",
+      dateMode = "all",
+
+      singleDate,
+      fromDate,
+      toDate,
+
+      sortBy = "createdAt",
+      sortOrder = "desc",
+    } = req.query;
+
+    page = parseInt(page);
+    limit = parseInt(limit);
+
+    const query = {
+      isDeleted: false,
+    };
+
+    // ==========================================
+    // Search
+    // ==========================================
+
+    if (search && search.trim() !== "") {
+      query.$or = [
+        { customerName: { $regex: search.trim(), $options: "i" } },
+        { mobileNumber: { $regex: search.trim(), $options: "i" } },
+        { vehicleName: { $regex: search.trim(), $options: "i" } },
+      ];
+    }
+
+    // ==========================================
+    // Vehicle Type
+    // ==========================================
+
+    if (
+      vehicleType &&
+      vehicleType !== "all" &&
+      ["car", "bike"].includes(vehicleType)
+    ) {
+      query.vehicleType = vehicleType;
+    }
+
+    // ==========================================
+    // Priority
+    // ==========================================
+
+    if (
+      priority &&
+      priority !== "all" &&
+      ["low", "medium", "high"].includes(priority)
+    ) {
+      query.priority = priority;
+    }
+
+    // ==========================================
+    // Tabs (With Status Conflict Resolution)
+    // ==========================================
+
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    const tomorrow = new Date(today);
+    tomorrow.setDate(today.getDate() + 1);
+
+    const dayAfterTomorrow = new Date(today);
+    dayAfterTomorrow.setDate(today.getDate() + 2);
+
+    switch (tab) {
+      case "new":
+        query.status = "Enquiry";
+        break;
+
+      case "today_followup":
+        query.nextFollowupDate = { $gte: today, $lt: tomorrow };
+        break;
+
+      case "tomorrow_followup":
+        query.nextFollowupDate = { $gte: tomorrow, $lt: dayAfterTomorrow };
+        break;
+
+      case "missed_followup":
+        query.nextFollowupDate = { $lt: today };
+        query.status = { $nin: ["Booking confirmed", "Deal lost"] };
+        break;
+
+      default:
+        break;
+    }
+
+    // Fix Conflict: Custom Status Filter Overwrites Tab-assigned Status
+    if (status && status !== "all") {
+      // If they are on missed_followup, we keep the date filter but narrow or overwrite the status condition
+      query.status = status;
+    }
+
+    // ==========================================
+    // New Extended Filters
+    // ==========================================
+
+    // Deal Loss Reason
+    if (dealLossReason && dealLossReason !== "all") {
+      query.reasonForDealLoss = dealLossReason;
+    }
+
+    // Long Booking
+    if (longBooking === "yes") {
+      query.longBookingLead = true;
+    } else if (longBooking === "no") {
+      query.longBookingLead = false;
+    }
+
+    // Monday Lead
+    if (mondayLead === "yes") {
+      query.mondayLead = true;
+    } else if (mondayLead === "no") {
+      query.mondayLead = false;
+    }
+
+    // ==========================================
+    // Date Filter
+    // ==========================================
+
+    let field = "createdAt";
+
+    switch (dateField) {
+      case "created":
+        field = "createdAt";
+        break;
+      case "followup":
+        field = "nextFollowupDate";
+        break;
+      case "pickup":
+        field = "fromDate";
+        break;
+      case "dropoff":
+        field = "toDate";
+        break;
+      case "booking":
+        field = "bookingConfirmedAt";
+        break;
+      default:
+        field = "createdAt";
+    }
+
+    if (dateMode === "single" && singleDate) {
+      const start = new Date(singleDate);
+      start.setHours(0, 0, 0, 0);
+      const end = new Date(singleDate);
+      end.setHours(23, 59, 59, 999);
+      query[field] = { $gte: start, $lte: end };
+    }
+
+    if (dateMode === "range") {
+      query[field] = {};
+      if (fromDate) {
+        const start = new Date(fromDate);
+        start.setHours(0, 0, 0, 0);
+        query[field].$gte = start;
+      }
+      if (toDate) {
+        const end = new Date(toDate);
+        end.setHours(23, 59, 59, 999);
+        query[field].$lte = end;
+      }
+      if (Object.keys(query[field]).length === 0) {
+        delete query[field];
+      }
+    }
+
+    // ==========================================
+    // Sorting
+    // ==========================================
+
+    const allowedSortFields = [
+      "createdAt",
+      "updatedAt",
+      "leadDate",
+      "nextFollowupDate",
+      "fromDate",
+      "toDate",
+      "priority",
+    ];
+
+    const sort = {
+      [allowedSortFields.includes(sortBy) ? sortBy : "createdAt"]:
+        sortOrder === "asc" ? 1 : -1,
+    };
+
+    // ==========================================
+    // Database
+    // ==========================================
+
+    const total = await Lead.countDocuments(query);
+
+    const leads = await Lead.find(query)
+      .populate("leadOwner", "name email phone")
+      .populate("createdBy", "name email phone")
+      .sort(sort)
+      .skip((page - 1) * limit)
+      .limit(limit)
+      .lean();
+
+    // ==========================================
+    // Response
+    // ==========================================
+
+    return res.status(200).json({
+      success: true,
+      page,
+      limit,
+      total,
+      totalPages: Math.ceil(total / limit),
+      count: leads.length,
+      data: leads,
+    });
+  } catch (error) {
+    console.error("Get Leads Error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Unable to fetch leads.",
+      error: process.env.NODE_ENV === "development" ? error.message : undefined,
+    });
+  }
+};
+export const getLead = async (req, res) => {
+  try {
+    let {
+      page = 1,
+      limit = 20,
+
+      search = "",
+
+      vehicleType,
+      priority,
+
       tab = "all",
 
       dateField = "created",
