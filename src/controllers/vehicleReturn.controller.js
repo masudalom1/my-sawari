@@ -30,7 +30,7 @@ export const receiveVehicle = async (req, res) => {
 
     const files = req.files || {};
 
-   // const companyId = req.user.company || req.user._id;
+    // const companyId = req.user.company || req.user._id;
 
     /* ==========================
        BASIC VALIDATION
@@ -58,14 +58,11 @@ export const receiveVehicle = async (req, res) => {
     /* ==========================
        FIND HANDOVER
     ========================== */
-
-console.log("Searching handover:", handoverId);
-
-const handover = await Handover.findOne({
-  _id: handoverId,
-});
-
-console.log("Found:", handover ? "YES" : "NO");
+    if (!handover) {
+      return res
+        .status(404)
+        .json({ success: false, message: "Handover not found" });
+    }
 
     if (handover.handoverStatus === "returned") {
       return res.status(400).json({
@@ -255,7 +252,7 @@ console.log("Found:", handover ? "YES" : "NO");
     ========================== */
 
     const vehicleReturn = await VehicleReturn.create({
-     // company: companyId,
+      // company: companyId,
 
       createdBy: req.user._id,
 
@@ -480,15 +477,13 @@ export const getServiceVehicles = async (req, res) => {
     const data = vehicles.map((vehicle) => {
       const today = new Date();
 
-      const completionDate =
-        vehicle.maintenance?.estimatedCompletionDate;
+      const completionDate = vehicle.maintenance?.estimatedCompletionDate;
 
       let remainingDays = 0;
 
       if (completionDate) {
         remainingDays = Math.ceil(
-          (new Date(completionDate) - today) /
-            (1000 * 60 * 60 * 24)
+          (new Date(completionDate) - today) / (1000 * 60 * 60 * 24),
         );
       }
 
@@ -516,11 +511,9 @@ export const getServiceVehicles = async (req, res) => {
 
           reason: vehicle.maintenance?.reason || "",
 
-          estimatedDays:
-            vehicle.maintenance?.estimatedDays || 0,
+          estimatedDays: vehicle.maintenance?.estimatedDays || 0,
 
-          estimatedCompletionDate:
-            vehicle.maintenance?.estimatedCompletionDate,
+          estimatedCompletionDate: vehicle.maintenance?.estimatedCompletionDate,
 
           remainingDays,
 
@@ -529,8 +522,7 @@ export const getServiceVehicles = async (req, res) => {
           markedBy: vehicle.maintenance?.markedBy
             ? {
                 _id: vehicle.maintenance.markedBy._id,
-                fullName:
-                  vehicle.maintenance.markedBy.fullName,
+                fullName: vehicle.maintenance.markedBy.fullName,
                 role: vehicle.maintenance.markedBy.role,
               }
             : null,
@@ -544,16 +536,11 @@ export const getServiceVehicles = async (req, res) => {
       data,
     });
   } catch (error) {
-    console.error(
-      "GET SERVICE VEHICLES ERROR:",
-      error
-    );
+    console.error("GET SERVICE VEHICLES ERROR:", error);
 
     return res.status(500).json({
       success: false,
-      message:
-        error.message ||
-        "Failed to fetch service vehicles",
+      message: error.message || "Failed to fetch service vehicles",
     });
   }
 };

@@ -325,11 +325,8 @@ export const getSingleHandover = async (req, res) => {
   try {
     const { id } = req.params;
 
-    const companyId = req.user.company || req.user._id;
-
     const handover = await Handover.findOne({
       _id: id,
-      company: companyId,
       isDeleted: false,
     })
       .populate("createdBy", "fullName email mobileNumber role")
@@ -460,7 +457,7 @@ export const getSingleHandover = async (req, res) => {
         (img, index) => ({
           label: `Damage ${index + 1}`,
           image: img,
-        }),
+        })
       );
     } else {
       data.vehicleReturn = null;
