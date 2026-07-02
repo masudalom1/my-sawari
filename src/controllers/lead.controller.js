@@ -550,6 +550,56 @@ export const getLeads = async (req, res) => {
     });
   }
 };
+
+// dearch lead 
+export const checkLeadByMobile = async (req, res) => {
+  try {
+    const { mobile } = req.params;
+
+    if (!mobile) {
+      return res.status(400).json({
+        success: false,
+        message: "Mobile number is required.",
+      });
+    }
+
+    const companyId = req.user.company || req.user._id;
+
+    const lead = await Lead.findOne({
+      company: companyId,
+      mobileNumber: mobile.trim(),
+      isDeleted: false,
+    })
+      .select(
+        "_id leadId customerName mobileNumber status priority vehicleType fromDate toDate createdAt"
+      )
+      .lean();
+
+    if (!lead) {
+      return res.status(200).json({
+        success: true,
+        exists: false,
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      exists: true,
+      lead,
+    });
+  } catch (error) {
+    console.error("Check Lead Error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Unable to search lead.",
+      error:
+        process.env.NODE_ENV === "development"
+          ? error.message
+          : undefined,
+    });
+  }
+};
 // not in use
 export const getLead = async (req, res) => {
   try {

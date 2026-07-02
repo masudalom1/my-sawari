@@ -2,6 +2,7 @@ import express from "express";
 import protect from "../middlewares/auth.middleware.js";
 
 import {
+  checkLeadByMobile,
   createLead,
   getLeadById,
   getLeadDashboardStats,
@@ -23,4 +24,6 @@ router.get("/:id/history", protect, getLeadHistory);
 
 router.post("/:id/activity", protect, createLeadActivity);
 router.get("/:id/activity", protect, getLeadActivities);
+
+router.get("/check/:mobile",protect,checkLeadByMobile);
 export default router;
