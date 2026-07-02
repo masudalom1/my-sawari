@@ -520,8 +520,8 @@ export const getLeads = async (req, res) => {
     const total = await Lead.countDocuments(query);
 
     const leads = await Lead.find(query)
-      .populate("leadOwner", "name email phone")
-      .populate("createdBy", "name email phone")
+      .populate("leadOwner", "fullName email mobileNumber")
+      .populate("createdBy", "fullName email mobileNumber")
       .sort(sort)
       .skip((page - 1) * limit)
       .limit(limit)
@@ -551,7 +551,7 @@ export const getLeads = async (req, res) => {
   }
 };
 
-// dearch lead 
+// dearch lead
 export const checkLeadByMobile = async (req, res) => {
   try {
     const { mobile } = req.params;
@@ -571,7 +571,7 @@ export const checkLeadByMobile = async (req, res) => {
       isDeleted: false,
     })
       .select(
-        "_id leadId customerName mobileNumber status priority vehicleType fromDate toDate createdAt"
+        "_id leadId customerName mobileNumber status priority vehicleType fromDate toDate createdAt",
       )
       .lean();
 
@@ -593,10 +593,7 @@ export const checkLeadByMobile = async (req, res) => {
     return res.status(500).json({
       success: false,
       message: "Unable to search lead.",
-      error:
-        process.env.NODE_ENV === "development"
-          ? error.message
-          : undefined,
+      error: process.env.NODE_ENV === "development" ? error.message : undefined,
     });
   }
 };
@@ -884,7 +881,6 @@ export const updateLead = async (req, res) => {
       "priority",
       "status",
       "conversationSummary",
-      "detailedConversation",
       "nextFollowupDate",
       "nextActionItem",
       "strategyForClosing",
@@ -909,11 +905,15 @@ export const updateLead = async (req, res) => {
 
     const normalize = (value) => {
       if (value instanceof Date) return value.toISOString();
-      if (value instanceof mongoose.Types.ObjectId)
+
+      if (value instanceof mongoose.Types.ObjectId) {
         return value.toString();
+      }
+
       return String(value ?? "");
     };
 
+    // Normal field updates
     for (const field of allowedFields) {
       if (req.body[field] === undefined) continue;
 
@@ -932,24 +932,48 @@ export const updateLead = async (req, res) => {
             field === "status"
               ? "status_changed"
               : field === "priority"
-              ? "priority_changed"
-              : "updated",
+                ? "priority_changed"
+                : "updated",
         });
 
         lead[field] = newValue;
       }
     }
 
+    // Add Discussion (doesn't overwrite old ones)
+    if (
+      req.body.detailedConversation &&
+      typeof req.body.detailedConversation === "string" &&
+      req.body.detailedConversation.trim()
+    ) {
+      lead.detailedConversation.push({
+        message: req.body.detailedConversation.trim(),
+        addedBy: req.user._id,
+        createdAt: new Date(),
+      });
+
+      historyLogs.push({
+        lead: lead._id,
+        company: lead.company,
+        field: "detailedConversation",
+        oldValue: "",
+        newValue: req.body.detailedConversation.trim(),
+        changedBy: req.user._id,
+        action: "discussion_added",
+      });
+    }
+
     await lead.save();
 
-    if (historyLogs.length > 0) {
+    if (historyLogs.length) {
       await LeadHistory.insertMany(historyLogs);
     }
 
     const updatedLead = await Lead.findById(lead._id)
-      .populate("leadOwner", "name email phone")
-      .populate("createdBy", "name email phone")
-      .populate("notes.addedBy", "name");
+      .populate("leadOwner", "fullName email mobileNumber")
+      .populate("createdBy", "fullName email mobileNumber")
+      .populate("notes.addedBy", "fullName")
+      .populate("detailedConversation.addedBy", "fullName profileImage email");
 
     return res.status(200).json({
       success: true,
@@ -962,7 +986,7 @@ export const updateLead = async (req, res) => {
     return res.status(500).json({
       success: false,
       message: "Unable to update lead",
-      error: error.message,
+      error: process.env.NODE_ENV === "development" ? error.message : undefined,
     });
   }
 };

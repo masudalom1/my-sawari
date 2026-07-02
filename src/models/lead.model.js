@@ -188,11 +188,26 @@ const leadSchema = new mongoose.Schema(
       default: "",
     },
 
-    detailedConversation: {
+ detailedConversation: [
+  {
+    message: {
       type: String,
       trim: true,
-      default: "",
+      required: true,
     },
+
+    addedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      required: true,
+    },
+
+    createdAt: {
+      type: Date,
+      default: Date.now,
+    },
+  },
+],
 
     lastContactedDate: {
       type: Date,
