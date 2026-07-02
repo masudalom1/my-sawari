@@ -849,9 +849,13 @@ export const getLeadById = async (req, res) => {
       _id: id,
       isDeleted: false,
     })
-      .populate("leadOwner", "name email phone")
-      .populate("createdBy", "name email phone")
-      .populate("notes.addedBy", "name");
+      .populate("leadOwner", "fullName email mobileNumber profileImage")
+      .populate("createdBy", "fullName email mobileNumber profileImage")
+      .populate("notes.addedBy", "fullName profileImage")
+      .populate(
+        "detailedConversation.addedBy",
+        "fullName email mobileNumber profileImage"
+      );
 
     if (!lead) {
       return res.status(404).json({
@@ -870,7 +874,10 @@ export const getLeadById = async (req, res) => {
     return res.status(500).json({
       success: false,
       message: "Unable to fetch lead.",
-      error: process.env.NODE_ENV === "development" ? error.message : undefined,
+      error:
+        process.env.NODE_ENV === "development"
+          ? error.message
+          : undefined,
     });
   }
 };
