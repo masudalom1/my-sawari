@@ -145,7 +145,7 @@ export const createLead = async (req, res) => {
       status: status || "Enquiry",
 
       conversationSummary,
-      detailedConversation,
+      detailedConversation: [],
 
       lastContactedDate: lastContactedDate || null,
       lastFollowupDate: lastFollowupDate || null,
@@ -171,7 +171,21 @@ export const createLead = async (req, res) => {
       company: companyId,
       createdBy: req.user._id,
     });
+    // =============================
+    // Detailed Discussion Handling
+    // =============================
 
+    if (
+      detailedConversation &&
+      typeof detailedConversation === "string" &&
+      detailedConversation.trim()
+    ) {
+      lead.detailedConversation.push({
+        message: detailedConversation.trim(),
+        addedBy: req.user._id,
+        createdAt: new Date(),
+      });
+    }
     // =============================
     // Notes Array Handling
     // =============================
@@ -207,10 +221,22 @@ export const createLead = async (req, res) => {
     // =============================
 
     await lead.populate([
-      { path: "leadOwner", select: "name email phone" },
-      { path: "createdBy", select: "name email" },
-      { path: "company", select: "companyName" },
-      { path: "notes.addedBy", select: "name" },
+      {
+        path: "leadOwner",
+        select: "fullName email mobileNumber",
+      },
+      {
+        path: "createdBy",
+        select: "fullName email mobileNumber",
+      },
+      {
+        path: "notes.addedBy",
+        select: "fullName",
+      },
+      {
+        path: "detailedConversation.addedBy",
+        select: "fullName profileImage",
+      },
     ]);
 
     // =============================
