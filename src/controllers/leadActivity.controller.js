@@ -70,20 +70,12 @@ export const createLeadActivity = async (req, res) => {
     createHistory(
       "conversationSummary",
       lead.conversationSummary,
-      conversation
+      conversation,
     );
 
-    createHistory(
-      "nextFollowupDate",
-      lead.nextFollowupDate,
-      nextFollowUpDate
-    );
+    createHistory("nextFollowupDate", lead.nextFollowupDate, nextFollowUpDate);
 
-    createHistory(
-      "status",
-      lead.status,
-      leadStatusAfterContact
-    );
+    createHistory("status", lead.status, leadStatusAfterContact);
 
     lead.conversationSummary = conversation;
     lead.lastContactedDate = new Date();
@@ -105,8 +97,10 @@ export const createLeadActivity = async (req, res) => {
       await LeadHistory.insertMany(history);
     }
 
-    const data = await LeadActivity.findById(activity._id)
-      .populate("createdBy", "name email");
+    const data = await LeadActivity.findById(activity._id).populate(
+      "createdBy",
+      "name email",
+    );
 
     return res.status(201).json({
       success: true,
@@ -119,10 +113,7 @@ export const createLeadActivity = async (req, res) => {
     return res.status(500).json({
       success: false,
       message: "Unable to save activity.",
-      error:
-        process.env.NODE_ENV === "development"
-          ? error.message
-          : undefined,
+      error: process.env.NODE_ENV === "development" ? error.message : undefined,
     });
   }
 };
@@ -138,13 +129,11 @@ export const getLeadActivities = async (req, res) => {
       });
     }
 
-  
-
-  const activities = await LeadActivity.find({
-  lead: id,
-})
-  .populate("createdBy", "fullName email profileImage")
-  .sort({ createdAt: -1 });
+    const activities = await LeadActivity.find({
+      lead: id,
+    })
+      .populate("createdBy", "fullName email profileImage")
+      .sort({ createdAt: -1 });
 
     return res.status(200).json({
       success: true,
@@ -156,10 +145,7 @@ export const getLeadActivities = async (req, res) => {
     return res.status(500).json({
       success: false,
       message: "Unable to fetch activities.",
-      error:
-        process.env.NODE_ENV === "development"
-          ? error.message
-          : undefined,
+      error: process.env.NODE_ENV === "development" ? error.message : undefined,
     });
   }
 };
