@@ -997,7 +997,7 @@ export const updateLead = async (req, res) => {
         oldValue: "",
         newValue: req.body.detailedConversation.trim(),
         changedBy: req.user._id,
-        action: "discussion_added",
+        action: "updated",
       });
     }
 
