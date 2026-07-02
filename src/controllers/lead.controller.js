@@ -946,6 +946,11 @@ export const updateLead = async (req, res) => {
       typeof req.body.detailedConversation === "string" &&
       req.body.detailedConversation.trim()
     ) {
+      // Fix old leads that still have a string stored
+      if (!Array.isArray(lead.detailedConversation)) {
+        lead.detailedConversation = [];
+      }
+
       lead.detailedConversation.push({
         message: req.body.detailedConversation.trim(),
         addedBy: req.user._id,
