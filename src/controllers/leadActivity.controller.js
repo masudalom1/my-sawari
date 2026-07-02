@@ -140,11 +140,11 @@ export const getLeadActivities = async (req, res) => {
 
   
 
-    const activities = await LeadActivity.find({
-      lead: id,
-    })
-      .populate("createdBy", "name email")
-      .sort({ createdAt: -1 });
+  const activities = await LeadActivity.find({
+  lead: id,
+})
+  .populate("createdBy", "fullName email profileImage")
+  .sort({ createdAt: -1 });
 
     return res.status(200).json({
       success: true,

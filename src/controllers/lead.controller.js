@@ -550,6 +550,7 @@ export const getLeads = async (req, res) => {
     });
   }
 };
+// not in use
 export const getLead = async (req, res) => {
   try {
     let {
