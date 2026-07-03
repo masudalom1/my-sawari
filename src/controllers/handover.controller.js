@@ -526,52 +526,50 @@ export const getReceiveCarList = async (req, res) => {
        MERGE DATA
     ========================== */
 
-    const finalData = handovers.map((handover) => {
-      const obj = handover.toObject();
+   const finalData = handovers.map((handover) => {
+  const obj = handover.toObject();
 
-      const returnData = completedMap.get(handover._id.toString());
-
-      if (returnData) {
-        obj.returnStatus = "completed";
-        obj.createdByUser = handover.createdBy
-  ? {
-      _id: handover.createdBy._id,
-      fullName: handover.createdBy.fullName,
-      role: handover.createdBy.role,
-      email: handover.createdBy.email,
-      mobileNumber: handover.createdBy.mobileNumber,
-      profileImage: handover.createdBy.profileImage,
-    }
-  : null;
-
-        obj.returnDetails = {
-          receivedBy: returnData.receivedBy
-            ? {
-                _id: returnData.receivedBy._id,
-                fullName: returnData.receivedBy.fullName,
-                role: returnData.receivedBy.role,
-                email: returnData.receivedBy.email,
-                mobileNumber: returnData.receivedBy.mobileNumber,
-              }
-            : null,
-
-          receivingTime: returnData.receivingTime || null,
-
-          scheduledReturnTime: returnData.scheduledReturnTime || null,
-
-          timeStatus: returnData.timeStatus || "On Time",
-
-          delayText: returnData.delayText || "0 minutes",
-
-          settlementDetails: returnData.settlementDetails || {},
-        };
-      } else {
-        obj.returnStatus = null;
-        obj.returnDetails = null;
+  // Always include created by user
+  obj.createdByUser = handover.createdBy
+    ? {
+        _id: handover.createdBy._id,
+        fullName: handover.createdBy.fullName,
+        role: handover.createdBy.role,
+        email: handover.createdBy.email,
+        mobileNumber: handover.createdBy.mobileNumber,
+        profileImage: handover.createdBy.profileImage,
       }
+    : null;
 
-      return obj;
-    });
+  const returnData = completedMap.get(handover._id.toString());
+
+  if (returnData) {
+    obj.returnStatus = "completed";
+
+    obj.returnDetails = {
+      receivedBy: returnData.receivedBy
+        ? {
+            _id: returnData.receivedBy._id,
+            fullName: returnData.receivedBy.fullName,
+            role: returnData.receivedBy.role,
+            email: returnData.receivedBy.email,
+            mobileNumber: returnData.receivedBy.mobileNumber,
+          }
+        : null,
+
+      receivingTime: returnData.receivingTime || null,
+      scheduledReturnTime: returnData.scheduledReturnTime || null,
+      timeStatus: returnData.timeStatus || "On Time",
+      delayText: returnData.delayText || "0 minutes",
+      settlementDetails: returnData.settlementDetails || {},
+    };
+  } else {
+    obj.returnStatus = null;
+    obj.returnDetails = null;
+  }
+
+  return obj;
+});
 
     /* ==========================
        COUNTS
