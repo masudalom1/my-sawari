@@ -397,13 +397,11 @@ export const getLeads = async (req, res) => {
     // Priority
     // ==========================================
 
-    if (
-      priority &&
-      priority !== "all" &&
-      ["low", "medium", "high"].includes(priority)
-    ) {
-      query.priority = priority;
-    }
+ if (priority && priority !== "all") {
+  query.priority = {
+    $regex: new RegExp(`^${priority}$`, "i"),
+  };
+}
 
     // ==========================================
     // Tabs (With Status Conflict Resolution)
