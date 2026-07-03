@@ -457,7 +457,7 @@ export const getSingleHandover = async (req, res) => {
         (img, index) => ({
           label: `Damage ${index + 1}`,
           image: img,
-        })
+        }),
       );
     } else {
       data.vehicleReturn = null;
@@ -486,16 +486,16 @@ export const getReceiveCarList = async (req, res) => {
     ========================== */
 
     const handovers = await Handover.find({
-  isDeleted: false,
-  "vehicle.vehicleId": { $exists: true },
-  handoverStatus: { $ne: "cancelled" },
-})
-  .populate("vehicle.vehicleId")
-  .populate("createdBy", "fullName role email mobileNumber profileImage")
-  .sort({
-    "trip.dropDateTime": 1,
-    createdAt: -1,
-  });
+      isDeleted: false,
+      "vehicle.vehicleId": { $exists: true },
+      handoverStatus: { $ne: "cancelled" },
+    })
+      .populate("vehicle.vehicleId")
+      .populate("createdBy", "fullName role email mobileNumber profileImage")
+      .sort({
+        "trip.dropDateTime": 1,
+        createdAt: -1,
+      });
 
     /* ==========================
        GET COMPLETED RETURNS
@@ -526,50 +526,50 @@ export const getReceiveCarList = async (req, res) => {
        MERGE DATA
     ========================== */
 
-   const finalData = handovers.map((handover) => {
-  const obj = handover.toObject();
+    const finalData = handovers.map((handover) => {
+      const obj = handover.toObject();
 
-  // Always include created by user
-  obj.createdByUser = handover.createdBy
-    ? {
-        _id: handover.createdBy._id,
-        fullName: handover.createdBy.fullName,
-        role: handover.createdBy.role,
-        email: handover.createdBy.email,
-        mobileNumber: handover.createdBy.mobileNumber,
-        profileImage: handover.createdBy.profileImage,
-      }
-    : null;
-
-  const returnData = completedMap.get(handover._id.toString());
-
-  if (returnData) {
-    obj.returnStatus = "completed";
-
-    obj.returnDetails = {
-      receivedBy: returnData.receivedBy
+      // Always include created by user
+      obj.createdByUser = handover.createdBy
         ? {
-            _id: returnData.receivedBy._id,
-            fullName: returnData.receivedBy.fullName,
-            role: returnData.receivedBy.role,
-            email: returnData.receivedBy.email,
-            mobileNumber: returnData.receivedBy.mobileNumber,
+            _id: handover.createdBy._id,
+            fullName: handover.createdBy.fullName,
+            role: handover.createdBy.role,
+            email: handover.createdBy.email,
+            mobileNumber: handover.createdBy.mobileNumber,
+            profileImage: handover.createdBy.profileImage,
           }
-        : null,
+        : null;
 
-      receivingTime: returnData.receivingTime || null,
-      scheduledReturnTime: returnData.scheduledReturnTime || null,
-      timeStatus: returnData.timeStatus || "On Time",
-      delayText: returnData.delayText || "0 minutes",
-      settlementDetails: returnData.settlementDetails || {},
-    };
-  } else {
-    obj.returnStatus = null;
-    obj.returnDetails = null;
-  }
+      const returnData = completedMap.get(handover._id.toString());
 
-  return obj;
-});
+      if (returnData) {
+        obj.returnStatus = "completed";
+
+        obj.returnDetails = {
+          receivedBy: returnData.receivedBy
+            ? {
+                _id: returnData.receivedBy._id,
+                fullName: returnData.receivedBy.fullName,
+                role: returnData.receivedBy.role,
+                email: returnData.receivedBy.email,
+                mobileNumber: returnData.receivedBy.mobileNumber,
+              }
+            : null,
+
+          receivingTime: returnData.receivingTime || null,
+          scheduledReturnTime: returnData.scheduledReturnTime || null,
+          timeStatus: returnData.timeStatus || "On Time",
+          delayText: returnData.delayText || "0 minutes",
+          settlementDetails: returnData.settlementDetails || {},
+        };
+      } else {
+        obj.returnStatus = null;
+        obj.returnDetails = null;
+      }
+
+      return obj;
+    });
 
     /* ==========================
        COUNTS
@@ -642,8 +642,7 @@ export const getRentalDetails = async (req, res) => {
 
         bookingAmountPaid: handover.payment?.bookingAmountPaid || 0,
 
-        amountReceivedPreviously:
-          handover.payment?.amountReceivedNow || 0,
+        amountReceivedPreviously: handover.payment?.amountReceivedNow || 0,
 
         totalAmount: handover.payment?.totalAmount || 0,
 
@@ -700,9 +699,7 @@ export const updateRental = async (req, res) => {
       const pickup = new Date(handover.trip.pickupDateTime);
       const drop = new Date(dropDateTime);
 
-      const days = Math.ceil(
-        (drop - pickup) / (1000 * 60 * 60 * 24)
-      );
+      const days = Math.ceil((drop - pickup) / (1000 * 60 * 60 * 24));
 
       handover.trip.numberOfDays = Math.max(1, days);
     }
@@ -713,14 +710,11 @@ export const updateRental = async (req, res) => {
 
     handover.payment.totalFare = Number(totalFare) || 0;
 
-    handover.payment.fastTagPayableAmount =
-      Number(fastagCharges) || 0;
+    handover.payment.fastTagPayableAmount = Number(fastagCharges) || 0;
 
-    handover.payment.securityDeposit =
-      Number(securityDeposit) || 0;
+    handover.payment.securityDeposit = Number(securityDeposit) || 0;
 
-    handover.payment.extraCharges =
-      Number(extraCharges) || 0;
+    handover.payment.extraCharges = Number(extraCharges) || 0;
 
     handover.payment.totalAmount =
       handover.payment.totalFare +
@@ -728,8 +722,7 @@ export const updateRental = async (req, res) => {
       handover.payment.securityDeposit +
       handover.payment.extraCharges;
 
-    handover.payment.amountReceivedNow +=
-      Number(amountReceivedNow) || 0;
+    handover.payment.amountReceivedNow += Number(amountReceivedNow) || 0;
 
     const totalPaid =
       (handover.payment.bookingAmountPaid || 0) +
@@ -737,7 +730,7 @@ export const updateRental = async (req, res) => {
 
     handover.payment.balanceAmount = Math.max(
       0,
-      handover.payment.totalAmount - totalPaid
+      handover.payment.totalAmount - totalPaid,
     );
 
     if (handover.payment.balanceAmount === 0) {
