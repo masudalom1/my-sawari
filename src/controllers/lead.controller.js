@@ -397,11 +397,11 @@ export const getLeads = async (req, res) => {
     // Priority
     // ==========================================
 
- if (priority && priority !== "all") {
-  query.priority = {
-    $regex: new RegExp(`^${priority}$`, "i"),
-  };
-}
+    if (priority && priority !== "all") {
+      query.priority = {
+        $regex: new RegExp(`^${priority}$`, "i"),
+      };
+    }
 
     // ==========================================
     // Tabs (With Status Conflict Resolution)
@@ -587,15 +587,12 @@ export const checkLeadByMobile = async (req, res) => {
       });
     }
 
-    const companyId = req.user.company || req.user._id;
-
     const lead = await Lead.findOne({
-      company: companyId,
       mobileNumber: mobile.trim(),
       isDeleted: false,
     })
       .select(
-        "_id leadId customerName mobileNumber status priority vehicleType fromDate toDate createdAt",
+        "_id leadId customerName mobileNumber status priority vehicleType fromDate toDate createdAt"
       )
       .lean();
 
@@ -852,7 +849,7 @@ export const getLeadById = async (req, res) => {
       .populate("notes.addedBy", "fullName profileImage")
       .populate(
         "detailedConversation.addedBy",
-        "fullName email mobileNumber profileImage"
+        "fullName email mobileNumber profileImage",
       );
 
     if (!lead) {
@@ -872,10 +869,7 @@ export const getLeadById = async (req, res) => {
     return res.status(500).json({
       success: false,
       message: "Unable to fetch lead.",
-      error:
-        process.env.NODE_ENV === "development"
-          ? error.message
-          : undefined,
+      error: process.env.NODE_ENV === "development" ? error.message : undefined,
     });
   }
 };
