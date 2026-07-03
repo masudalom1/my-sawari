@@ -486,16 +486,16 @@ export const getReceiveCarList = async (req, res) => {
     ========================== */
 
     const handovers = await Handover.find({
-      isDeleted: false,
-      "vehicle.vehicleId": { $exists: true },
-      handoverStatus: { $ne: "cancelled" },
-    })
-      .populate("vehicle.vehicleId")
-      .populate("customer")
-      .sort({
-        "trip.dropDateTime": 1,
-        createdAt: -1,
-      });
+  isDeleted: false,
+  "vehicle.vehicleId": { $exists: true },
+  handoverStatus: { $ne: "cancelled" },
+})
+  .populate("vehicle.vehicleId")
+  .populate("createdBy", "fullName role email mobileNumber profileImage")
+  .sort({
+    "trip.dropDateTime": 1,
+    createdAt: -1,
+  });
 
     /* ==========================
        GET COMPLETED RETURNS
@@ -533,6 +533,16 @@ export const getReceiveCarList = async (req, res) => {
 
       if (returnData) {
         obj.returnStatus = "completed";
+        obj.createdByUser = handover.createdBy
+  ? {
+      _id: handover.createdBy._id,
+      fullName: handover.createdBy.fullName,
+      role: handover.createdBy.role,
+      email: handover.createdBy.email,
+      mobileNumber: handover.createdBy.mobileNumber,
+      profileImage: handover.createdBy.profileImage,
+    }
+  : null;
 
         obj.returnDetails = {
           receivedBy: returnData.receivedBy
