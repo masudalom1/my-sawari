@@ -180,22 +180,11 @@ export const getSingleVehicle = async (
   }
 };
 
-export const updateVehicle = async (
-  req,
-  res,
-  next
-) => {
+export const updateVehicle = async (req, res, next) => {
   try {
-    const vehicle =
-      await Vehicle.findOne({
-        _id: req.params.id,
-        company:
-          req.user.company ||
-          req.user._id,
-        isDeleted: false,
-      });
+    const vehicle = await Vehicle.findById(req.params.id);
 
-    if (!vehicle) {
+    if (!vehicle || vehicle.isDeleted) {
       return res.status(404).json({
         success: false,
         message: "Vehicle not found",
@@ -203,10 +192,9 @@ export const updateVehicle = async (
     }
 
     if (req.files?.length > 0) {
-      const newImages =
-        req.files.map((file) => ({
-          url: `/uploads/vehicles/${file.filename}`,
-        }));
+      const newImages = req.files.map((file) => ({
+        url: `/uploads/vehicles/${file.filename}`,
+      }));
 
       vehicle.images.push(...newImages);
     }
@@ -215,9 +203,9 @@ export const updateVehicle = async (
 
     await vehicle.save();
 
-    res.status(200).json({
+    return res.status(200).json({
       success: true,
-      message: "Vehicle updated",
+      message: "Vehicle updated successfully",
       data: vehicle,
     });
   } catch (error) {
