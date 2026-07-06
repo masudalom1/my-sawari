@@ -22,9 +22,11 @@ const router = express.Router();
 router.use(protect);
 
 router.post("/create", handoverUpload, createHandover);
+
 router.put("/upload-images/:handoverId",protect,handoverUpload,uploadHandoverImages,);
 router.post("/image",protect,singleImageUpload,uploadSingleImage);
 router.put("/save-images/:handoverId",protect,saveHandoverImages);
+
 router.get("/active-handovers",protect,getActiveHandovers);
 router.get("/single/:id",protect,getSingleHandover);
 router.get("/receive-list", getReceiveCarList);
