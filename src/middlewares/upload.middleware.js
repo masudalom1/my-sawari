@@ -155,3 +155,5 @@ export const multerErrorHandler = (
 
   next();
 };
+
+export const singleImageUpload = upload.single("image")

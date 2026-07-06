@@ -295,6 +295,124 @@ export const uploadHandoverImages = async (req, res, next) => {
     });
   }
 };
+//new 
+export const uploadSingleImage = async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({
+        success: false,
+        message: "Image is required",
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: "Image uploaded successfully",
+      data: {
+        url: req.file.path,
+      },
+    });
+  } catch (error) {
+    console.error(error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Image upload failed",
+    });
+  }
+};
+export const saveHandoverImages = async (req, res) => {
+  try {
+    const { handoverId } = req.params;
+
+    if (!handoverId) {
+      return res.status(400).json({
+        success: false,
+        message: "Handover ID is required",
+      });
+    }
+
+    const {
+      customerPhoto,
+      customerProfileImage,
+      customerWithVehicle,
+      idCardFront,
+      idCardBack,
+      vehicleFront,
+      vehicleRear,
+      vehicleLeft,
+      vehicleRight,
+    } = req.body;
+
+    const update = {};
+
+    if (customerPhoto)
+      update["images.customerPhoto"] = customerPhoto;
+
+    if (customerProfileImage)
+      update["images.customerProfileImage"] =
+        customerProfileImage;
+
+    if (customerWithVehicle)
+      update["images.customerWithVehicle"] =
+        customerWithVehicle;
+
+    if (idCardFront)
+      update["images.idCardFront"] =
+        idCardFront;
+
+    if (idCardBack)
+      update["images.idCardBack"] =
+        idCardBack;
+
+    if (vehicleFront)
+      update["images.vehicleFront"] =
+        vehicleFront;
+
+    if (vehicleRear)
+      update["images.vehicleRear"] =
+        vehicleRear;
+
+    if (vehicleLeft)
+      update["images.vehicleLeft"] =
+        vehicleLeft;
+
+    if (vehicleRight)
+      update["images.vehicleRight"] =
+        vehicleRight;
+
+    const handover = await Handover.findByIdAndUpdate(
+      handoverId,
+      {
+        $set: update,
+      },
+      {
+        new: true,
+        runValidators: true,
+      }
+    ).select("_id images");
+
+    if (!handover) {
+      return res.status(404).json({
+        success: false,
+        message: "Handover not found",
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: "Images saved successfully",
+      data: handover,
+    });
+  } catch (error) {
+    console.error(error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Failed to save images",
+    });
+  }
+};
 
 // active rental screen
 export const getActiveHandovers = async (req, res) => {
