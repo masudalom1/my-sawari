@@ -7,6 +7,7 @@ import {
   deleteHandover,
   getActiveHandovers,
   getAllHandovers,
+  getHandovers,
   getReceiveCarList,
   getRentalDetails,
   getSingleHandover,
@@ -35,6 +36,9 @@ router.get("/receive-list", getReceiveCarList);
 router.get("/rentals/:id",protect,getRentalDetails);
 
 router.put("/rentals/edit/:id",protect,updateRental);
+
+//handover api 
+router.get("/list", protect, getHandovers);
 // no use
 router.get("/all", getAllHandovers);
 router.get("single/:id", getSingleHandover);

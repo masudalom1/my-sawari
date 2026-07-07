@@ -886,6 +886,77 @@ ${reasonForChange}`.trim();
     });
   }
 };
+
+// hanver get api 
+export const getHandovers = async (req, res) => {
+  try {
+    const { tab = "all" } = req.query;
+
+    const companyId = req.user.company || req.user._id;
+
+    const query = {
+      company: companyId,
+      isDeleted: false,
+    };
+
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    const tomorrow = new Date(today);
+    tomorrow.setDate(today.getDate() + 1);
+
+    const dayAfterTomorrow = new Date(today);
+    dayAfterTomorrow.setDate(today.getDate() + 2);
+
+    switch (tab) {
+      case "today":
+        query["trip.pickupDateTime"] = {
+          $gte: today,
+          $lt: tomorrow,
+        };
+        break;
+
+      case "tomorrow":
+        query["trip.pickupDateTime"] = {
+          $gte: tomorrow,
+          $lt: dayAfterTomorrow,
+        };
+        break;
+
+      case "draft":
+        query.bookingStatus = "draft";
+        break;
+
+      default:
+        break;
+    }
+
+    const handovers = await Handover.find(query)
+      .populate("vehicle.vehicleId", "vehicleName vehicleNumber color")
+      .populate("createdBy", "fullName")
+      .sort({
+        "trip.pickupDateTime": 1,
+        createdAt: -1,
+      });
+
+    return res.status(200).json({
+      success: true,
+      count: handovers.length,
+      data: handovers,
+    });
+  } catch (error) {
+    console.error("Get Handovers Error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Unable to fetch handovers.",
+      error:
+        process.env.NODE_ENV === "development"
+          ? error.message
+          : undefined,
+    });
+  }
+};
 // NOT USED
 export const getAllHandovers = async (req, res, next) => {
   try {

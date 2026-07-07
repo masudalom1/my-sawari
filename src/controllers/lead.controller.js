@@ -336,7 +336,7 @@ export const getLeads = async (req, res) => {
   try {
     let {
       page = 1,
-      limit = 20,
+      limit = 200,
 
       search = "",
 
