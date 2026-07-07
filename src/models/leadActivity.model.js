@@ -35,7 +35,8 @@ const leadActivitySchema = new mongoose.Schema(
       default: "",
     },
 
-    conversation: {
+    // Call/WhatsApp/Email Summary
+    activitySummary: {
       type: String,
       required: true,
       trim: true,
@@ -52,7 +53,9 @@ const leadActivitySchema = new mongoose.Schema(
       default: false,
     },
 
-    nextFollowUpDate: Date,
+    nextFollowUpDate: {
+      type: Date,
+    },
 
     leadStatusAfterContact: {
       type: String,

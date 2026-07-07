@@ -16,7 +16,7 @@ export const createLeadActivity = async (req, res) => {
       });
     }
 
-    // Find lead (no company restriction)
+    // Find lead
     const lead = await Lead.findById(id);
 
     if (!lead || lead.isDeleted) {
@@ -30,20 +30,21 @@ export const createLeadActivity = async (req, res) => {
       contactType,
       direction,
       duration,
-      conversation,
+      activitySummary,
       outcome,
       followUpRequired,
       nextFollowUpDate,
       leadStatusAfterContact,
     } = req.body;
 
+    // Save activity only
     const activity = await LeadActivity.create({
       lead: lead._id,
       company: lead.company,
       contactType,
       direction,
       duration,
-      conversation,
+      activitySummary,
       outcome,
       followUpRequired,
       nextFollowUpDate,
@@ -67,17 +68,21 @@ export const createLeadActivity = async (req, res) => {
       });
     };
 
+    // Follow-up history
     createHistory(
-      "conversationSummary",
-      lead.conversationSummary,
-      conversation,
+      "nextFollowupDate",
+      lead.nextFollowupDate,
+      nextFollowUpDate
     );
 
-    createHistory("nextFollowupDate", lead.nextFollowupDate, nextFollowUpDate);
+    // Status history
+    createHistory(
+      "status",
+      lead.status,
+      leadStatusAfterContact
+    );
 
-    createHistory("status", lead.status, leadStatusAfterContact);
-
-    lead.conversationSummary = conversation;
+    // DO NOT update lead.conversationSummary
     lead.lastContactedDate = new Date();
 
     if (followUpRequired) {
@@ -99,7 +104,7 @@ export const createLeadActivity = async (req, res) => {
 
     const data = await LeadActivity.findById(activity._id).populate(
       "createdBy",
-      "name email",
+      "name email"
     );
 
     return res.status(201).json({
@@ -113,7 +118,10 @@ export const createLeadActivity = async (req, res) => {
     return res.status(500).json({
       success: false,
       message: "Unable to save activity.",
-      error: process.env.NODE_ENV === "development" ? error.message : undefined,
+      error:
+        process.env.NODE_ENV === "development"
+          ? error.message
+          : undefined,
     });
   }
 };
