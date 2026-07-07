@@ -137,6 +137,15 @@ export const getLeadActivities = async (req, res) => {
       });
     }
 
+    const lead = await Lead.findById(id).select("status");
+
+    if (!lead || lead.isDeleted) {
+      return res.status(404).json({
+        success: false,
+        message: "Lead not found",
+      });
+    }
+
     const activities = await LeadActivity.find({
       lead: id,
     })
@@ -145,6 +154,7 @@ export const getLeadActivities = async (req, res) => {
 
     return res.status(200).json({
       success: true,
+      leadStatus: lead.status, // <-- current lead status
       data: activities,
     });
   } catch (error) {
@@ -153,7 +163,10 @@ export const getLeadActivities = async (req, res) => {
     return res.status(500).json({
       success: false,
       message: "Unable to fetch activities.",
-      error: process.env.NODE_ENV === "development" ? error.message : undefined,
+      error:
+        process.env.NODE_ENV === "development"
+          ? error.message
+          : undefined,
     });
   }
 };
