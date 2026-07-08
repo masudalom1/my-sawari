@@ -815,6 +815,8 @@ export const uploadHandoverImages = async (req, res, next) => {
 };
 //new 
 export const uploadSingleImage = async (req, res) => {
+   console.log(req.file);
+  console.log(req.body);
   try {
     if (!req.file) {
       return res.status(400).json({
