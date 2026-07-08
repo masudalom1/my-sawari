@@ -120,6 +120,10 @@ app.use("/api/v1/vehicle-return", vehicleReturnRoutes);
 app.use("/api/v1/customers", customerRoutes);
 app.use("/api/v1/leads", leadRoutes);
 
+app.use((req, res, next) => {
+  console.log("REQUEST:", req.method, req.originalUrl);
+  next();
+});
 // 404
 app.use(notFound);
 
