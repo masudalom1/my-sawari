@@ -1,6 +1,7 @@
 import multer from "multer";
 import { CloudinaryStorage } from "multer-storage-cloudinary";
 import cloudinary from "../config/cloudinary.js";
+import { randomUUID } from "crypto";
 
 /* ==================================
    IMAGE FILE FILTER
@@ -30,19 +31,16 @@ const imageFileFilter = (req, file, cb) => {
    CLOUDINARY STORAGE
 ================================== */
 
+
+
 const imageStorage = new CloudinaryStorage({
   cloudinary,
   params: async (req, file) => ({
     folder: "my-sawari/handover",
-    allowed_formats: [
-      "jpg",
-      "jpeg",
-      "png",
-      "webp",
-    ],
-    public_id: `${Date.now()}-${Math.round(
-      Math.random() * 1000000
-    )}`,
+    allowed_formats: ["jpg", "jpeg", "png", "webp"],
+    public_id: `${randomUUID()}`,
+    overwrite: false,
+    resource_type: "image",
   }),
 });
 
