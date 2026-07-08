@@ -892,10 +892,8 @@ export const getHandovers = async (req, res) => {
   try {
     const { tab = "all" } = req.query;
 
-    const companyId = req.user._id;
-
+    // No company filter
     const query = {
-      company: companyId,
       isDeleted: false,
     };
 
@@ -932,24 +930,28 @@ export const getHandovers = async (req, res) => {
     }
 
     const handovers = await Handover.find(query)
-      .populate("createdBy", "fullName")
+      .populate("createdBy", "fullName email")
+      .populate(
+        "company",
+        "fullName companyName businessName"
+      )
       .populate(
         "vehicle.vehicleId",
         "vehicleName vehicleNumber color status"
       )
-      .select(
-        `
+      .select(`
+        company
         customer
         vehicle
         trip
         payment
         bookingStatus
         handoverStatus
+        notes
         createdAt
         updatedAt
         createdBy
-        `
-      )
+      `)
       .sort({
         "trip.pickupDateTime": 1,
         createdAt: -1,
@@ -959,26 +961,34 @@ export const getHandovers = async (req, res) => {
     const data = handovers.map((item) => ({
       _id: item._id,
 
-      customerName: item.customer?.fullName,
-      mobileNumber: item.customer?.mobileNumber,
-      destination: item.customer?.destination,
+      companyName:
+        item.company?.businessName ||
+        item.company?.companyName ||
+        item.company?.fullName ||
+        "",
 
-      vehicleName: item.vehicle?.vehicleName,
-      vehicleNumber: item.vehicle?.vehicleNumber,
-      vehicleColor: item.vehicle?.vehicleColor,
+      customerName: item.customer?.fullName || "",
+      mobileNumber: item.customer?.mobileNumber || "",
+      destination: item.customer?.destination || "",
+
+      vehicleName: item.vehicle?.vehicleName || "",
+      vehicleNumber: item.vehicle?.vehicleNumber || "",
+      vehicleColor: item.vehicle?.vehicleColor || "",
 
       pickupDateTime: item.trip?.pickupDateTime,
       dropDateTime: item.trip?.dropDateTime,
       tripType: item.trip?.tripType,
       numberOfDays: item.trip?.numberOfDays,
 
-      totalFare: item.payment?.totalFare,
-      totalAmount: item.payment?.totalAmount,
-      balanceAmount: item.payment?.balanceAmount,
-      paymentStatus: item.payment?.paymentStatus,
+      totalFare: item.payment?.totalFare || 0,
+      totalAmount: item.payment?.totalAmount || 0,
+      balanceAmount: item.payment?.balanceAmount || 0,
+      paymentStatus: item.payment?.paymentStatus || "pending",
 
       bookingStatus: item.bookingStatus,
       handoverStatus: item.handoverStatus,
+
+      notes: item.notes || "",
 
       createdBy: item.createdBy?.fullName || "",
 
