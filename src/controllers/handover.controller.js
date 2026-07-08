@@ -892,7 +892,7 @@ export const getHandovers = async (req, res) => {
   try {
     const { tab = "all" } = req.query;
 
-    const companyId = req.user.company || req.user._id;
+    const companyId = req.user._id;
 
     const query = {
       company: companyId,
