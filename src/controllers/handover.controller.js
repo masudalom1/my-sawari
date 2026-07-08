@@ -4,6 +4,524 @@ import { sendBookingConfirmation } from "../services/wati.service.js";
 import VehicleReturn from "../models/vehicleReturn.model.js";
 
 // ==========================================
+// Draft contoller
+// ==========================================
+export const createDraftHandover = async (req, res) => {
+  try {
+    const draft = await Handover.create({
+      company: req.user.company || req.user._id,
+      createdBy: req.user._id,
+
+      bookingStatus: "draft",
+
+      draftProgress: {
+        enabled: true,
+        currentScreen: "customer",
+        customerCompleted: false,
+        vehicleCompleted: false,
+        tripCompleted: false,
+        paymentCompleted: false,
+        imagesCompleted: false,
+        uploadedImages: 0,
+        totalImages: 9,
+        lastSavedAt: new Date(),
+      },
+
+      customer: {
+        fullName: "",
+        mobileNumber: "",
+        alternateMobileNumber: "",
+        occupation: "",
+        destination: "",
+      },
+
+      identity: {
+        aadhaarNumber: "",
+        drivingLicenseNumber: "",
+      },
+
+      vehicle: {
+        vehicleId: null,
+        vehicleName: "",
+        vehicleNumber: "",
+        vehicleColor: "",
+        handoverKm: 0,
+      },
+
+      trip: {
+        tripType: "local",
+        numberOfDays: 1,
+        pickupDateTime: null,
+        dropDateTime: null,
+      },
+
+      payment: {
+        fuelLevel: 7,
+        fastTagBalance: 0,
+        fastTagPayableAmount: 0,
+        totalFare: 0,
+        securityDeposit: 0,
+        extraCharges: 0,
+        discountAmount: 0,
+        totalAmount: 0,
+        bookingAmountPaid: 0,
+        amountReceivedNow: 0,
+        balanceAmount: 0,
+        paymentMethod: "cash",
+        paymentBreakdown: {
+          cash: 0,
+          phonePe: 0,
+          razorpay: 0,
+        },
+        paymentStatus: "pending",
+      },
+
+      notes: "",
+
+      images: {
+        customerPhoto: "",
+        customerProfileImage: "",
+        customerWithVehicle: "",
+        idCardFront: "",
+        idCardBack: "",
+        vehicleFront: "",
+        vehicleRear: "",
+        vehicleLeft: "",
+        vehicleRight: "",
+      },
+    });
+
+    return res.status(201).json({
+      success: true,
+      message: "Draft handover created successfully.",
+      data: {
+        handoverId: draft._id,
+        bookingStatus: draft.bookingStatus,
+        draftProgress: draft.draftProgress,
+      },
+    });
+  } catch (error) {
+    console.error("Create Draft Error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Unable to create draft.",
+      error:
+        process.env.NODE_ENV === "development"
+          ? error.message
+          : undefined,
+    });
+  }
+};
+
+export const updateDraftHandover = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid handover id",
+      });
+    }
+
+    const handover = await Handover.findById(id);
+
+    if (!handover || handover.isDeleted) {
+      return res.status(404).json({
+        success: false,
+        message: "Draft not found",
+      });
+    }
+
+    const {
+      customer,
+      identity,
+      vehicle,
+      trip,
+      payment,
+      notes,
+      currentScreen,
+    } = req.body;
+
+    if (customer) {
+      handover.customer = {
+        ...handover.customer.toObject(),
+        ...customer,
+      };
+    }
+
+    if (identity) {
+      handover.identity = {
+        ...handover.identity.toObject(),
+        ...identity,
+      };
+    }
+
+    if (vehicle) {
+      handover.vehicle = {
+        ...handover.vehicle.toObject(),
+        ...vehicle,
+      };
+    }
+
+    if (trip) {
+      handover.trip = {
+        ...handover.trip.toObject(),
+        ...trip,
+      };
+    }
+
+    if (payment) {
+      handover.payment = {
+        ...handover.payment.toObject(),
+        ...payment,
+      };
+    }
+
+    if (notes !== undefined) {
+      handover.notes = notes;
+    }
+
+    if (currentScreen) {
+      handover.draftProgress.currentScreen = currentScreen;
+    }
+
+    handover.draftProgress.enabled = true;
+    handover.draftProgress.lastSavedAt = new Date();
+
+    await handover.save();
+
+    return res.status(200).json({
+      success: true,
+      message: "Draft auto-saved.",
+      data: handover,
+    });
+  } catch (error) {
+    console.error("Update Draft Error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Unable to save draft.",
+      error:
+        process.env.NODE_ENV === "development"
+          ? error.message
+          : undefined,
+    });
+  }
+};
+export const updateDraftImages = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid handover id",
+      });
+    }
+
+    const handover = await Handover.findById(id);
+
+    if (!handover || handover.isDeleted) {
+      return res.status(404).json({
+        success: false,
+        message: "Draft not found",
+      });
+    }
+
+    if (!handover.images) {
+      handover.images = {};
+    }
+
+    const files = req.files || {};
+
+    if (files.customerPhoto?.[0]) {
+      handover.images.customerPhoto = files.customerPhoto[0].path;
+    }
+
+    if (files.customerProfileImage?.[0]) {
+      handover.images.customerProfileImage =
+        files.customerProfileImage[0].path;
+    }
+
+    if (files.customerWithVehicle?.[0]) {
+      handover.images.customerWithVehicle =
+        files.customerWithVehicle[0].path;
+    }
+
+    if (files.idCardFront?.[0]) {
+      handover.images.idCardFront =
+        files.idCardFront[0].path;
+    }
+
+    if (files.idCardBack?.[0]) {
+      handover.images.idCardBack =
+        files.idCardBack[0].path;
+    }
+
+    if (files.vehicleFront?.[0]) {
+      handover.images.vehicleFront =
+        files.vehicleFront[0].path;
+    }
+
+    if (files.vehicleRear?.[0]) {
+      handover.images.vehicleRear =
+        files.vehicleRear[0].path;
+    }
+
+    if (files.vehicleLeft?.[0]) {
+      handover.images.vehicleLeft =
+        files.vehicleLeft[0].path;
+    }
+
+    if (files.vehicleRight?.[0]) {
+      handover.images.vehicleRight =
+        files.vehicleRight[0].path;
+    }
+
+    handover.draftProgress.enabled = true;
+    handover.draftProgress.currentScreen = "images";
+    handover.draftProgress.lastSavedAt = new Date();
+
+    await handover.save();
+
+    return res.status(200).json({
+      success: true,
+      message: "Images saved successfully.",
+      data: {
+        uploadedImages:
+          handover.draftProgress.uploadedImages,
+        totalImages:
+          handover.draftProgress.totalImages,
+        imagesCompleted:
+          handover.draftProgress.imagesCompleted,
+      },
+    });
+  } catch (error) {
+    console.error("Upload Draft Images Error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Unable to upload images.",
+      error:
+        process.env.NODE_ENV === "development"
+          ? error.message
+          : undefined,
+    });
+  }
+};
+export const getLatestDraftHandover = async (req, res) => {
+  try {
+    const draft = await Handover.findOne({
+      bookingStatus: "draft",
+      isDeleted: false,
+    })
+      .populate("vehicle.vehicleId", "vehicleName vehicleNumber")
+      .sort({ updatedAt: -1 })
+      .lean();
+
+    if (!draft) {
+      return res.status(200).json({
+        success: true,
+        data: null,
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        _id: draft._id,
+
+        customer: draft.customer,
+
+        vehicle: draft.vehicle,
+
+        trip: draft.trip,
+
+        payment: draft.payment,
+
+        images: draft.images,
+
+        draftProgress: draft.draftProgress,
+
+        bookingStatus: draft.bookingStatus,
+
+        updatedAt: draft.updatedAt,
+      },
+    });
+  } catch (error) {
+    console.error(error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Unable to fetch latest draft.",
+      error:
+        process.env.NODE_ENV === "development"
+          ? error.message
+          : undefined,
+    });
+  }
+};
+export const getHandoverById = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid handover id",
+      });
+    }
+
+    const handover = await Handover.findById(id)
+      .populate("createdBy", "fullName email")
+      .populate("vehicle.vehicleId")
+      .lean();
+
+    if (!handover || handover.isDeleted) {
+      return res.status(404).json({
+        success: false,
+        message: "Handover not found",
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      data: handover,
+    });
+  } catch (error) {
+    console.error(error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Unable to fetch handover.",
+      error:
+        process.env.NODE_ENV === "development"
+          ? error.message
+          : undefined,
+    });
+  }
+};
+export const completeDraftHandover = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid handover id",
+      });
+    }
+
+    const handover = await Handover.findById(id);
+
+    if (!handover || handover.isDeleted) {
+      return res.status(404).json({
+        success: false,
+        message: "Draft not found",
+      });
+    }
+
+    if (!handover.draftProgress.customerCompleted) {
+      return res.status(400).json({
+        success: false,
+        message: "Customer details are incomplete.",
+      });
+    }
+
+    if (!handover.draftProgress.vehicleCompleted) {
+      return res.status(400).json({
+        success: false,
+        message: "Vehicle details are incomplete.",
+      });
+    }
+
+    if (!handover.draftProgress.tripCompleted) {
+      return res.status(400).json({
+        success: false,
+        message: "Trip details are incomplete.",
+      });
+    }
+
+    if (!handover.draftProgress.paymentCompleted) {
+      return res.status(400).json({
+        success: false,
+        message: "Payment details are incomplete.",
+      });
+    }
+
+    if (!handover.draftProgress.imagesCompleted) {
+      return res.status(400).json({
+        success: false,
+        message: `Please upload all images (${handover.draftProgress.uploadedImages}/${handover.draftProgress.totalImages}).`,
+      });
+    }
+
+    const vehicle = await Vehicle.findById(
+      handover.vehicle.vehicleId
+    );
+
+    if (!vehicle) {
+      return res.status(404).json({
+        success: false,
+        message: "Vehicle not found.",
+      });
+    }
+
+    if (vehicle.status !== "available") {
+      return res.status(400).json({
+        success: false,
+        message: "Vehicle is not available.",
+      });
+    }
+
+    vehicle.status = "rent";
+
+    if (handover.vehicle.handoverKm) {
+      vehicle.currentKm = handover.vehicle.handoverKm;
+    }
+
+    await vehicle.save();
+
+    handover.bookingStatus = "confirmed";
+
+    handover.draftProgress.enabled = false;
+
+    handover.draftProgress.currentScreen = "completed";
+
+    await handover.save();
+
+    try {
+      await sendBookingConfirmation({
+        customer: handover.customer,
+        vehicle: handover.vehicle,
+        trip: handover.trip,
+        payment: handover.payment,
+      });
+    } catch (err) {
+      console.log("WhatsApp Error:", err.message);
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: "Handover completed successfully.",
+      data: handover,
+    });
+  } catch (error) {
+    console.error(error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Unable to complete handover.",
+      error:
+        process.env.NODE_ENV === "development"
+          ? error.message
+          : undefined,
+    });
+  }
+};
+// ==========================================
 // CREATE HANDOVER
 // ==========================================
 export const createHandover = async (req, res, next) => {

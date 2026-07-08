@@ -1,17 +1,22 @@
 import express from "express";
-
 import protect from "../middlewares/auth.middleware.js";
 import { handoverUpload, singleImageUpload } from "../middlewares/upload.middleware.js";
 import {
+  completeDraftHandover,
+  createDraftHandover,
   createHandover,
   deleteHandover,
   getActiveHandovers,
   getAllHandovers,
+  getHandoverById,
   getHandovers,
+  getLatestDraftHandover,
   getReceiveCarList,
   getRentalDetails,
   getSingleHandover,
   saveHandoverImages,
+  updateDraftHandover,
+  updateDraftImages,
   updateHandover,
   updateRental,
   uploadHandoverImages,
@@ -44,5 +49,15 @@ router.get("/all", getAllHandovers);
 router.get("single/:id", getSingleHandover);
 router.put("/update/:id", updateHandover);
 router.delete("/delete/:id", deleteHandover);
+
+
+
+// Draft route 
+router.post("/draft", protect, createDraftHandover);
+router.put("/draft/:id", protect, updateDraftHandover);
+router.put("/images/:id",protect,handoverUpload,updateDraftImages);
+router.get("/draft/latest",protect,getLatestDraftHandover);
+router.get("/:id",protect,getHandoverById);
+router.put("/complete/:id",protect,completeDraftHandover);
 
 export default router;
