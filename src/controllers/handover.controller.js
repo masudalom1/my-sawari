@@ -932,17 +932,64 @@ export const getHandovers = async (req, res) => {
     }
 
     const handovers = await Handover.find(query)
-      .populate("vehicle.vehicleId", "vehicleName vehicleNumber color")
       .populate("createdBy", "fullName")
+      .populate(
+        "vehicle.vehicleId",
+        "vehicleName vehicleNumber color status"
+      )
+      .select(
+        `
+        customer
+        vehicle
+        trip
+        payment
+        bookingStatus
+        handoverStatus
+        createdAt
+        updatedAt
+        createdBy
+        `
+      )
       .sort({
         "trip.pickupDateTime": 1,
         createdAt: -1,
-      });
+      })
+      .lean();
+
+    const data = handovers.map((item) => ({
+      _id: item._id,
+
+      customerName: item.customer?.fullName,
+      mobileNumber: item.customer?.mobileNumber,
+      destination: item.customer?.destination,
+
+      vehicleName: item.vehicle?.vehicleName,
+      vehicleNumber: item.vehicle?.vehicleNumber,
+      vehicleColor: item.vehicle?.vehicleColor,
+
+      pickupDateTime: item.trip?.pickupDateTime,
+      dropDateTime: item.trip?.dropDateTime,
+      tripType: item.trip?.tripType,
+      numberOfDays: item.trip?.numberOfDays,
+
+      totalFare: item.payment?.totalFare,
+      totalAmount: item.payment?.totalAmount,
+      balanceAmount: item.payment?.balanceAmount,
+      paymentStatus: item.payment?.paymentStatus,
+
+      bookingStatus: item.bookingStatus,
+      handoverStatus: item.handoverStatus,
+
+      createdBy: item.createdBy?.fullName || "",
+
+      createdAt: item.createdAt,
+      updatedAt: item.updatedAt,
+    }));
 
     return res.status(200).json({
       success: true,
-      count: handovers.length,
-      data: handovers,
+      count: data.length,
+      data,
     });
   } catch (error) {
     console.error("Get Handovers Error:", error);
