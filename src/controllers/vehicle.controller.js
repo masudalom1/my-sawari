@@ -213,19 +213,12 @@ export const updateVehicle = async (req, res, next) => {
   }
 };
 
-export const deleteVehicle = async (
-  req,
-  res,
-  next
-) => {
+export const deleteVehicle = async (req, res, next) => {
   try {
-    const vehicle =
-      await Vehicle.findOne({
-        _id: req.params.id,
-        company:
-          req.user.company ||
-          req.user._id,
-      });
+    const vehicle = await Vehicle.findOne({
+      _id: req.params.id,
+      isDeleted: false,
+    });
 
     if (!vehicle) {
       return res.status(404).json({
@@ -235,12 +228,11 @@ export const deleteVehicle = async (
     }
 
     vehicle.isDeleted = true;
-
     await vehicle.save();
 
-    res.status(200).json({
+    return res.status(200).json({
       success: true,
-      message: "Vehicle deleted",
+      message: "Vehicle deleted successfully",
     });
   } catch (error) {
     next(error);
