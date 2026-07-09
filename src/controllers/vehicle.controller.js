@@ -137,13 +137,14 @@ export const getAvailableVehicles = async (req, res, next) => {
   try {
     const vehicles = await Vehicle.find({
       status: "available",
+      isDeleted: false,
     })
       .select(
         "_id vehicleName vehicleNumber color manufacturer model vehicleType status"
       )
       .sort({ createdAt: -1 });
 
-    res.status(200).json({
+    return res.status(200).json({
       success: true,
       count: vehicles.length,
       data: vehicles,
