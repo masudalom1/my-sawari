@@ -112,6 +112,14 @@ app.use((req, res, next) => {
   generalLimiter(req, res, next);
 });
 
+app.use((req, res, next) => {
+  console.log("REQUEST:", req.method, req.originalUrl);
+  next();
+});
+app.use((req, res, next) => {
+  console.log("BODY:", req.body);
+  next();
+});
 // routes
 app.use("/api/v1/auth", authRoutes);
 app.use("/api/v1/handover", handoverRoutes);
@@ -120,10 +128,7 @@ app.use("/api/v1/vehicle-return", vehicleReturnRoutes);
 app.use("/api/v1/customers", customerRoutes);
 app.use("/api/v1/leads", leadRoutes);
 
-app.use((req, res, next) => {
-  console.log("REQUEST:", req.method, req.originalUrl);
-  next();
-});
+
 // 404
 app.use(notFound);
 
