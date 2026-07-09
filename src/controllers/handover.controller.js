@@ -1,3 +1,4 @@
+import mongoose from "mongoose";
 import Handover from "../models/handover.model.js";
 import Vehicle from "../models/vehicle.model.js";
 import { sendBookingConfirmation } from "../services/wati.service.js";
