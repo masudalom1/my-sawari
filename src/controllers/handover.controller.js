@@ -107,10 +107,7 @@ export const createDraftHandover = async (req, res) => {
     return res.status(500).json({
       success: false,
       message: "Unable to create draft.",
-      error:
-        process.env.NODE_ENV === "development"
-          ? error.message
-          : undefined,
+      error: process.env.NODE_ENV === "development" ? error.message : undefined,
     });
   }
 };
@@ -135,15 +132,8 @@ export const updateDraftHandover = async (req, res) => {
       });
     }
 
-    const {
-      customer,
-      identity,
-      vehicle,
-      trip,
-      payment,
-      notes,
-      currentScreen,
-    } = req.body;
+    const { customer, identity, vehicle, trip, payment, notes, currentScreen } =
+      req.body;
 
     if (customer) {
       handover.customer = {
@@ -204,10 +194,7 @@ export const updateDraftHandover = async (req, res) => {
     return res.status(500).json({
       success: false,
       message: "Unable to save draft.",
-      error:
-        process.env.NODE_ENV === "development"
-          ? error.message
-          : undefined,
+      error: process.env.NODE_ENV === "development" ? error.message : undefined,
     });
   }
 };
@@ -242,43 +229,35 @@ export const updateDraftImages = async (req, res) => {
     }
 
     if (files.customerProfileImage?.[0]) {
-      handover.images.customerProfileImage =
-        files.customerProfileImage[0].path;
+      handover.images.customerProfileImage = files.customerProfileImage[0].path;
     }
 
     if (files.customerWithVehicle?.[0]) {
-      handover.images.customerWithVehicle =
-        files.customerWithVehicle[0].path;
+      handover.images.customerWithVehicle = files.customerWithVehicle[0].path;
     }
 
     if (files.idCardFront?.[0]) {
-      handover.images.idCardFront =
-        files.idCardFront[0].path;
+      handover.images.idCardFront = files.idCardFront[0].path;
     }
 
     if (files.idCardBack?.[0]) {
-      handover.images.idCardBack =
-        files.idCardBack[0].path;
+      handover.images.idCardBack = files.idCardBack[0].path;
     }
 
     if (files.vehicleFront?.[0]) {
-      handover.images.vehicleFront =
-        files.vehicleFront[0].path;
+      handover.images.vehicleFront = files.vehicleFront[0].path;
     }
 
     if (files.vehicleRear?.[0]) {
-      handover.images.vehicleRear =
-        files.vehicleRear[0].path;
+      handover.images.vehicleRear = files.vehicleRear[0].path;
     }
 
     if (files.vehicleLeft?.[0]) {
-      handover.images.vehicleLeft =
-        files.vehicleLeft[0].path;
+      handover.images.vehicleLeft = files.vehicleLeft[0].path;
     }
 
     if (files.vehicleRight?.[0]) {
-      handover.images.vehicleRight =
-        files.vehicleRight[0].path;
+      handover.images.vehicleRight = files.vehicleRight[0].path;
     }
 
     handover.draftProgress.enabled = true;
@@ -291,12 +270,9 @@ export const updateDraftImages = async (req, res) => {
       success: true,
       message: "Images saved successfully.",
       data: {
-        uploadedImages:
-          handover.draftProgress.uploadedImages,
-        totalImages:
-          handover.draftProgress.totalImages,
-        imagesCompleted:
-          handover.draftProgress.imagesCompleted,
+        uploadedImages: handover.draftProgress.uploadedImages,
+        totalImages: handover.draftProgress.totalImages,
+        imagesCompleted: handover.draftProgress.imagesCompleted,
       },
     });
   } catch (error) {
@@ -305,10 +281,7 @@ export const updateDraftImages = async (req, res) => {
     return res.status(500).json({
       success: false,
       message: "Unable to upload images.",
-      error:
-        process.env.NODE_ENV === "development"
-          ? error.message
-          : undefined,
+      error: process.env.NODE_ENV === "development" ? error.message : undefined,
     });
   }
 };
@@ -357,10 +330,7 @@ export const getLatestDraftHandover = async (req, res) => {
     return res.status(500).json({
       success: false,
       message: "Unable to fetch latest draft.",
-      error:
-        process.env.NODE_ENV === "development"
-          ? error.message
-          : undefined,
+      error: process.env.NODE_ENV === "development" ? error.message : undefined,
     });
   }
 };
@@ -397,10 +367,7 @@ export const getHandoverById = async (req, res) => {
     return res.status(500).json({
       success: false,
       message: "Unable to fetch handover.",
-      error:
-        process.env.NODE_ENV === "development"
-          ? error.message
-          : undefined,
+      error: process.env.NODE_ENV === "development" ? error.message : undefined,
     });
   }
 };
@@ -459,9 +426,7 @@ export const completeDraftHandover = async (req, res) => {
       });
     }
 
-    const vehicle = await Vehicle.findById(
-      handover.vehicle.vehicleId
-    );
+    const vehicle = await Vehicle.findById(handover.vehicle.vehicleId);
 
     if (!vehicle) {
       return res.status(404).json({
@@ -515,10 +480,7 @@ export const completeDraftHandover = async (req, res) => {
     return res.status(500).json({
       success: false,
       message: "Unable to complete handover.",
-      error:
-        process.env.NODE_ENV === "development"
-          ? error.message
-          : undefined,
+      error: process.env.NODE_ENV === "development" ? error.message : undefined,
     });
   }
 };
@@ -814,9 +776,9 @@ export const uploadHandoverImages = async (req, res, next) => {
     });
   }
 };
-//new 
+//new
 export const uploadSingleImage = async (req, res) => {
-   console.log(req.file);
+  console.log(req.file);
   console.log(req.body);
   try {
     if (!req.file) {
@@ -867,40 +829,25 @@ export const saveHandoverImages = async (req, res) => {
 
     const update = {};
 
-    if (customerPhoto)
-      update["images.customerPhoto"] = customerPhoto;
+    if (customerPhoto) update["images.customerPhoto"] = customerPhoto;
 
     if (customerProfileImage)
-      update["images.customerProfileImage"] =
-        customerProfileImage;
+      update["images.customerProfileImage"] = customerProfileImage;
 
     if (customerWithVehicle)
-      update["images.customerWithVehicle"] =
-        customerWithVehicle;
+      update["images.customerWithVehicle"] = customerWithVehicle;
 
-    if (idCardFront)
-      update["images.idCardFront"] =
-        idCardFront;
+    if (idCardFront) update["images.idCardFront"] = idCardFront;
 
-    if (idCardBack)
-      update["images.idCardBack"] =
-        idCardBack;
+    if (idCardBack) update["images.idCardBack"] = idCardBack;
 
-    if (vehicleFront)
-      update["images.vehicleFront"] =
-        vehicleFront;
+    if (vehicleFront) update["images.vehicleFront"] = vehicleFront;
 
-    if (vehicleRear)
-      update["images.vehicleRear"] =
-        vehicleRear;
+    if (vehicleRear) update["images.vehicleRear"] = vehicleRear;
 
-    if (vehicleLeft)
-      update["images.vehicleLeft"] =
-        vehicleLeft;
+    if (vehicleLeft) update["images.vehicleLeft"] = vehicleLeft;
 
-    if (vehicleRight)
-      update["images.vehicleRight"] =
-        vehicleRight;
+    if (vehicleRight) update["images.vehicleRight"] = vehicleRight;
 
     const handover = await Handover.findByIdAndUpdate(
       handoverId,
@@ -910,7 +857,7 @@ export const saveHandoverImages = async (req, res) => {
       {
         new: true,
         runValidators: true,
-      }
+      },
     ).select("_id images");
 
     if (!handover) {
@@ -1301,11 +1248,13 @@ export const getRentalDetails = async (req, res) => {
     });
   }
 };
+
 export const updateRental = async (req, res) => {
   try {
     const { id } = req.params;
 
     const {
+      vehicleId,
       dropDateTime,
       totalFare,
       fastagCharges,
@@ -1326,6 +1275,43 @@ export const updateRental = async (req, res) => {
         success: false,
         message: "Active rental not found",
       });
+    }
+
+    /* ==========================
+   CHANGE VEHICLE
+========================== */
+
+    if (
+      vehicleId &&
+      vehicleId.toString() !== handover.vehicle.vehicleId.toString()
+    ) {
+      const vehicle = await Vehicle.findOne({
+        _id: vehicleId,
+        company: req.user.company || req.user._id,
+        isDeleted: false,
+        status: "available", // adjust according to your schema
+      });
+
+      if (!vehicle) {
+        return res.status(404).json({
+          success: false,
+          message: "Selected vehicle not available",
+        });
+      }
+
+      handover.vehicle.vehicleId = vehicle._id;
+      handover.vehicle.vehicleName = vehicle.vehicleName;
+      handover.vehicle.vehicleNumber = vehicle.vehicleNumber;
+      handover.vehicle.vehicleColor = vehicle.color || "";
+
+      if (reasonForChange?.trim()) {
+        handover.notes = `${handover.notes || ""}
+
+[Vehicle Changed - ${new Date().toLocaleString()}]
+Old Vehicle: ${handover.vehicle.vehicleNumber}
+New Vehicle: ${vehicle.vehicleNumber}
+Reason: ${reasonForChange}`.trim();
+      }
     }
 
     /* ==========================
@@ -1408,7 +1394,7 @@ ${reasonForChange}`.trim();
   }
 };
 
-// hanver get api 
+// hanver get api
 export const getHandovers = async (req, res) => {
   try {
     const { tab = "all" } = req.query;
@@ -1452,15 +1438,10 @@ export const getHandovers = async (req, res) => {
 
     const handovers = await Handover.find(query)
       .populate("createdBy", "fullName email")
-      .populate(
-        "company",
-        "fullName companyName businessName"
-      )
-      .populate(
-        "vehicle.vehicleId",
-        "vehicleName vehicleNumber color status"
-      )
-      .select(`
+      .populate("company", "fullName companyName businessName")
+      .populate("vehicle.vehicleId", "vehicleName vehicleNumber color status")
+      .select(
+        `
         company
         customer
         vehicle
@@ -1472,7 +1453,8 @@ export const getHandovers = async (req, res) => {
         createdAt
         updatedAt
         createdBy
-      `)
+      `,
+      )
       .sort({
         "trip.pickupDateTime": 1,
         createdAt: -1,
@@ -1528,10 +1510,7 @@ export const getHandovers = async (req, res) => {
     return res.status(500).json({
       success: false,
       message: "Unable to fetch handovers.",
-      error:
-        process.env.NODE_ENV === "development"
-          ? error.message
-          : undefined,
+      error: process.env.NODE_ENV === "development" ? error.message : undefined,
     });
   }
 };
