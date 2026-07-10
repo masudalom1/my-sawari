@@ -1277,43 +1277,55 @@ export const updateRental = async (req, res) => {
       });
     }
 
-    /* ==========================
-   CHANGE VEHICLE
-========================== */
+ if (
+  vehicleId &&
+  vehicleId.toString() !== handover.vehicle.vehicleId.toString()
+) {
+  const oldVehicleId = handover.vehicle.vehicleId;
 
-    if (
-      vehicleId &&
-      vehicleId.toString() !== handover.vehicle.vehicleId.toString()
-    ) {
-      const vehicle = await Vehicle.findOne({
-        _id: vehicleId,
-        company: req.user.company || req.user._id,
-        isDeleted: false,
-        status: "available", // adjust according to your schema
-      });
+  const vehicle = await Vehicle.findOne({
+    _id: vehicleId,
+    company: req.user.company || req.user._id,
+    isDeleted: false,
+    status: "available",
+  });
 
-      if (!vehicle) {
-        return res.status(404).json({
-          success: false,
-          message: "Selected vehicle not available",
-        });
-      }
+  if (!vehicle) {
+    return res.status(404).json({
+      success: false,
+      message: "Selected vehicle not available",
+    });
+  }
 
-      handover.vehicle.vehicleId = vehicle._id;
-      handover.vehicle.vehicleName = vehicle.vehicleName;
-      handover.vehicle.vehicleNumber = vehicle.vehicleNumber;
-      handover.vehicle.vehicleColor = vehicle.color || "";
+  // Save old vehicle details before overwriting
+  const oldVehicleNumber = handover.vehicle.vehicleNumber;
+  const oldVehicleName = handover.vehicle.vehicleName;
 
-      if (reasonForChange?.trim()) {
-        handover.notes = `${handover.notes || ""}
+  // Make previous vehicle available
+  await Vehicle.findByIdAndUpdate(oldVehicleId, {
+    status: "available",
+  });
+
+  // Make new vehicle on rent
+  await Vehicle.findByIdAndUpdate(vehicle._id, {
+    status: "on_rent",
+  });
+
+  // Update handover vehicle details
+  handover.vehicle.vehicleId = vehicle._id;
+  handover.vehicle.vehicleName = vehicle.vehicleName;
+  handover.vehicle.vehicleNumber = vehicle.vehicleNumber;
+  handover.vehicle.vehicleColor = vehicle.color || "";
+
+  if (reasonForChange?.trim()) {
+    handover.notes = `${handover.notes || ""}
 
 [Vehicle Changed - ${new Date().toLocaleString()}]
-Old Vehicle: ${handover.vehicle.vehicleNumber}
-New Vehicle: ${vehicle.vehicleNumber}
+Old Vehicle: ${oldVehicleName} (${oldVehicleNumber})
+New Vehicle: ${vehicle.vehicleName} (${vehicle.vehicleNumber})
 Reason: ${reasonForChange}`.trim();
-      }
-    }
-
+  }
+}
     /* ==========================
        UPDATE TRIP
     ========================== */
