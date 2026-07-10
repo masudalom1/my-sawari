@@ -1277,55 +1277,59 @@ export const updateRental = async (req, res) => {
       });
     }
 
- if (
-  vehicleId &&
-  vehicleId.toString() !== handover.vehicle.vehicleId.toString()
-) {
-  const oldVehicleId = handover.vehicle.vehicleId;
+    if (
+      vehicleId &&
+      vehicleId.toString() !== handover.vehicle.vehicleId.toString()
+    ) {
+      const oldVehicleId = handover.vehicle.vehicleId;
 
-  const vehicle = await Vehicle.findOne({
-    _id: vehicleId,
-    company: req.user.company || req.user._id,
-    isDeleted: false,
-    status: "available",
-  });
+      const vehicle = await Vehicle.findOne({
+        _id: vehicleId,
+        company: req.user.company || req.user._id,
+        isDeleted: false,
+        status: "available",
+      });
 
-  if (!vehicle) {
-    return res.status(404).json({
-      success: false,
-      message: "Selected vehicle not available",
-    });
-  }
+      if (!vehicle) {
+        return res.status(404).json({
+          success: false,
+          message: "Selected vehicle not available",
+        });
+      }
 
-  // Save old vehicle details before overwriting
-  const oldVehicleNumber = handover.vehicle.vehicleNumber;
-  const oldVehicleName = handover.vehicle.vehicleName;
+      // Save old vehicle details before overwriting
+      const oldVehicleNumber = handover.vehicle.vehicleNumber;
+      const oldVehicleName = handover.vehicle.vehicleName;
 
-  // Make previous vehicle available
-  await Vehicle.findByIdAndUpdate(oldVehicleId, {
-    status: "available",
-  });
+      // Make previous vehicle available
+      await Vehicle.findByIdAndUpdate(oldVehicleId, {
+        status: "available",
+      });
 
-  // Make new vehicle on rent
-  await Vehicle.findByIdAndUpdate(vehicle._id, {
-    status: "rent",
-  });
+      // Make new vehicle on rent
+      await Vehicle.findByIdAndUpdate(vehicle._id, {
+        status: "rent",
+      });
 
-  // Update handover vehicle details
-  handover.vehicle.vehicleId = vehicle._id;
-  handover.vehicle.vehicleName = vehicle.vehicleName;
-  handover.vehicle.vehicleNumber = vehicle.vehicleNumber;
-  handover.vehicle.vehicleColor = vehicle.color || "";
+      // Update handover vehicle details
+      handover.vehicle.vehicleId = vehicle._id;
+      handover.vehicle.vehicleName = vehicle.vehicleName;
+      handover.vehicle.vehicleNumber = vehicle.vehicleNumber;
+      handover.vehicle.vehicleColor = vehicle.color || "";
 
-  if (reasonForChange?.trim()) {
-    handover.notes = `${handover.notes || ""}
-
+      if (reasonForChange?.trim()) {
+        const vehicleNote = `
 [Vehicle Changed - ${new Date().toLocaleString()}]
-Old Vehicle: ${oldVehicleName} (${oldVehicleNumber})
-New Vehicle: ${vehicle.vehicleName} (${vehicle.vehicleNumber})
-Reason: ${reasonForChange}`.trim();
-  }
-}
+Old: ${oldVehicleNumber}
+New: ${vehicle.vehicleNumber}
+Reason: ${reasonForChange}
+`;
+
+        handover.notes = `${handover.notes || ""}\n${vehicleNote}`
+          .trim()
+          .slice(-500);
+      }
+    }
     /* ==========================
        UPDATE TRIP
     ========================== */
@@ -1383,10 +1387,14 @@ Reason: ${reasonForChange}`.trim();
     ========================== */
 
     if (reasonForChange?.trim()) {
-      handover.notes = `${handover.notes || ""}
-
+      const updateNote = `
 [Rental Updated - ${new Date().toLocaleString()}]
-${reasonForChange}`.trim();
+Reason: ${reasonForChange}
+`;
+
+      handover.notes = `${handover.notes || ""}\n${updateNote}`
+        .trim()
+        .slice(-500);
     }
 
     await handover.save();
