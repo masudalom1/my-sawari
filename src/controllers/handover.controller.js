@@ -1308,7 +1308,7 @@ export const updateRental = async (req, res) => {
 
   // Make new vehicle on rent
   await Vehicle.findByIdAndUpdate(vehicle._id, {
-    status: "on_rent",
+    status: "rent",
   });
 
   // Update handover vehicle details
