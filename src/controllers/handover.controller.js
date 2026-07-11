@@ -1274,8 +1274,8 @@ export const updateRental = async (req, res) => {
     }
 
     /* ==========================
-       CHANGE VEHICLE
-    ========================== */
+   CHANGE VEHICLE
+========================== */
 
     if (
       vehicleId &&
@@ -1294,13 +1294,6 @@ export const updateRental = async (req, res) => {
         });
       }
 
-      if (vehicle.company.toString() !== handover.company.toString()) {
-        return res.status(403).json({
-          success: false,
-          message: "Vehicle belongs to another company",
-        });
-      }
-
       if (!["available", "rent"].includes(vehicle.status)) {
         return res.status(400).json({
           success: false,
@@ -1308,12 +1301,12 @@ export const updateRental = async (req, res) => {
         });
       }
 
-      // Make old vehicle available
+      // Make previous vehicle available
       await Vehicle.findByIdAndUpdate(oldVehicleId, {
         status: "available",
       });
 
-      // Make new vehicle rent
+      // Make selected vehicle rent
       await Vehicle.findByIdAndUpdate(vehicle._id, {
         status: "rent",
       });
@@ -1337,7 +1330,6 @@ Reason: ${reasonForChange}
           .slice(-500);
       }
     }
-
     /* ==========================
        UPDATE TRIP
     ========================== */
@@ -1348,9 +1340,7 @@ Reason: ${reasonForChange}
       const pickup = new Date(handover.trip.pickupDateTime);
       const drop = new Date(dropDateTime);
 
-      const days = Math.ceil(
-        (drop - pickup) / (1000 * 60 * 60 * 24)
-      );
+      const days = Math.ceil((drop - pickup) / (1000 * 60 * 60 * 24));
 
       handover.trip.numberOfDays = Math.max(1, days);
     }
@@ -1360,12 +1350,9 @@ Reason: ${reasonForChange}
     ========================== */
 
     handover.payment.totalFare = Number(totalFare) || 0;
-    handover.payment.fastTagPayableAmount =
-      Number(fastagCharges) || 0;
-    handover.payment.securityDeposit =
-      Number(securityDeposit) || 0;
-    handover.payment.extraCharges =
-      Number(extraCharges) || 0;
+    handover.payment.fastTagPayableAmount = Number(fastagCharges) || 0;
+    handover.payment.securityDeposit = Number(securityDeposit) || 0;
+    handover.payment.extraCharges = Number(extraCharges) || 0;
 
     handover.payment.totalAmount =
       handover.payment.totalFare +
@@ -1373,8 +1360,7 @@ Reason: ${reasonForChange}
       handover.payment.securityDeposit +
       handover.payment.extraCharges;
 
-    handover.payment.amountReceivedNow +=
-      Number(amountReceivedNow) || 0;
+    handover.payment.amountReceivedNow += Number(amountReceivedNow) || 0;
 
     const totalPaid =
       (handover.payment.bookingAmountPaid || 0) +
@@ -1382,7 +1368,7 @@ Reason: ${reasonForChange}
 
     handover.payment.balanceAmount = Math.max(
       0,
-      handover.payment.totalAmount - totalPaid
+      handover.payment.totalAmount - totalPaid,
     );
 
     if (handover.payment.balanceAmount === 0) {
