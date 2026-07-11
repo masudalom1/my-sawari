@@ -1205,33 +1205,33 @@ export const getRentalDetails = async (req, res) => {
     }
 
     return res.status(200).json({
-  success: true,
-  data: {
-    _id: handover._id,
+      success: true,
+      data: {
+        _id: handover._id,
 
-    customerName: handover.customer?.fullName || "",
-    customerPhone: handover.customer?.mobileNumber || "",
+        customerName: handover.customer?.fullName || "",
+        customerPhone: handover.customer?.mobileNumber || "",
 
-    vehicleId: handover.vehicle?.vehicleId, // <-- ADD THIS
-    vehicleModel: handover.vehicle?.vehicleName || "",
-    plateNumber: handover.vehicle?.vehicleNumber || "",
-    vehicleColor: handover.vehicle?.vehicleColor || "",
+        vehicleId: handover.vehicle?.vehicleId, // <-- ADD THIS
+        vehicleModel: handover.vehicle?.vehicleName || "",
+        plateNumber: handover.vehicle?.vehicleNumber || "",
+        vehicleColor: handover.vehicle?.vehicleColor || "",
 
-    pickupDateTime: handover.trip?.pickupDateTime,
-    dropDateTime: handover.trip?.dropDateTime,
+        pickupDateTime: handover.trip?.pickupDateTime,
+        dropDateTime: handover.trip?.dropDateTime,
 
-    totalFare: handover.payment?.totalFare || 0,
-    fastagCharges: handover.payment?.fastTagPayableAmount || 0,
-    securityDeposit: handover.payment?.securityDeposit || 0,
-    extraCharges: handover.payment?.extraCharges || 0,
-    bookingAmountPaid: handover.payment?.bookingAmountPaid || 0,
-    amountReceivedPreviously: handover.payment?.amountReceivedNow || 0,
-    totalAmount: handover.payment?.totalAmount || 0,
-    balanceAmount: handover.payment?.balanceAmount || 0,
-    paymentMethod: handover.payment?.paymentMethod || "",
-    paymentStatus: handover.payment?.paymentStatus || "pending",
-  },
-});
+        totalFare: handover.payment?.totalFare || 0,
+        fastagCharges: handover.payment?.fastTagPayableAmount || 0,
+        securityDeposit: handover.payment?.securityDeposit || 0,
+        extraCharges: handover.payment?.extraCharges || 0,
+        bookingAmountPaid: handover.payment?.bookingAmountPaid || 0,
+        amountReceivedPreviously: handover.payment?.amountReceivedNow || 0,
+        totalAmount: handover.payment?.totalAmount || 0,
+        balanceAmount: handover.payment?.balanceAmount || 0,
+        paymentMethod: handover.payment?.paymentMethod || "",
+        paymentStatus: handover.payment?.paymentStatus || "pending",
+      },
+    });
   } catch (error) {
     console.error("GET RENTAL DETAILS ERROR:", error);
 
@@ -1277,37 +1277,48 @@ export const updateRental = async (req, res) => {
        CHANGE VEHICLE
     ========================== */
 
- if (
-  vehicleId &&
-  handover.vehicle?.vehicleId &&
-  vehicleId.toString() !== handover.vehicle.vehicleId.toString()
-) {
+    if (
+      vehicleId &&
+      handover.vehicle?.vehicleId &&
+      vehicleId.toString() !== handover.vehicle.vehicleId.toString()
+    ) {
       const oldVehicleId = handover.vehicle.vehicleId;
+      const oldVehicleNumber = handover.vehicle.vehicleNumber;
 
-      const vehicle = await Vehicle.findOne({
-  _id: vehicleId,
-  company: handover.company,
-  isDeleted: false,
-  status: { $in: ["available", "rent"] },
-});
+      const vehicle = await Vehicle.findById(vehicleId);
 
-      if (!vehicle) {
+      if (!vehicle || vehicle.isDeleted) {
         return res.status(404).json({
           success: false,
-          message: "Selected vehicle not available",
+          message: "Vehicle not found",
         });
       }
 
-      const oldVehicleNumber = handover.vehicle.vehicleNumber;
+      if (vehicle.company.toString() !== handover.company.toString()) {
+        return res.status(403).json({
+          success: false,
+          message: "Vehicle belongs to another company",
+        });
+      }
 
+      if (!["available", "rent"].includes(vehicle.status)) {
+        return res.status(400).json({
+          success: false,
+          message: "Vehicle is not available",
+        });
+      }
+
+      // Make old vehicle available
       await Vehicle.findByIdAndUpdate(oldVehicleId, {
         status: "available",
       });
 
+      // Make new vehicle rent
       await Vehicle.findByIdAndUpdate(vehicle._id, {
         status: "rent",
       });
 
+      // Update handover vehicle
       handover.vehicle.vehicleId = vehicle._id;
       handover.vehicle.vehicleName = vehicle.vehicleName;
       handover.vehicle.vehicleNumber = vehicle.vehicleNumber;
