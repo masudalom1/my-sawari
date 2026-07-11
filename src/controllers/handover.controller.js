@@ -1205,40 +1205,33 @@ export const getRentalDetails = async (req, res) => {
     }
 
     return res.status(200).json({
-      success: true,
-      data: {
-        _id: handover._id,
+  success: true,
+  data: {
+    _id: handover._id,
 
-        customerName: handover.customer?.fullName || "",
-        customerPhone: handover.customer?.mobileNumber || "",
+    customerName: handover.customer?.fullName || "",
+    customerPhone: handover.customer?.mobileNumber || "",
 
-        vehicleModel: handover.vehicle?.vehicleName || "",
-        plateNumber: handover.vehicle?.vehicleNumber || "",
+    vehicleId: handover.vehicle?.vehicleId, // <-- ADD THIS
+    vehicleModel: handover.vehicle?.vehicleName || "",
+    plateNumber: handover.vehicle?.vehicleNumber || "",
+    vehicleColor: handover.vehicle?.vehicleColor || "",
 
-        pickupDateTime: handover.trip?.pickupDateTime,
-        dropDateTime: handover.trip?.dropDateTime,
+    pickupDateTime: handover.trip?.pickupDateTime,
+    dropDateTime: handover.trip?.dropDateTime,
 
-        totalFare: handover.payment?.totalFare || 0,
-
-        fastagCharges: handover.payment?.fastTagPayableAmount || 0,
-
-        securityDeposit: handover.payment?.securityDeposit || 0,
-
-        extraCharges: handover.payment?.extraCharges || 0,
-
-        bookingAmountPaid: handover.payment?.bookingAmountPaid || 0,
-
-        amountReceivedPreviously: handover.payment?.amountReceivedNow || 0,
-
-        totalAmount: handover.payment?.totalAmount || 0,
-
-        balanceAmount: handover.payment?.balanceAmount || 0,
-
-        paymentMethod: handover.payment?.paymentMethod || "",
-
-        paymentStatus: handover.payment?.paymentStatus || "pending",
-      },
-    });
+    totalFare: handover.payment?.totalFare || 0,
+    fastagCharges: handover.payment?.fastTagPayableAmount || 0,
+    securityDeposit: handover.payment?.securityDeposit || 0,
+    extraCharges: handover.payment?.extraCharges || 0,
+    bookingAmountPaid: handover.payment?.bookingAmountPaid || 0,
+    amountReceivedPreviously: handover.payment?.amountReceivedNow || 0,
+    totalAmount: handover.payment?.totalAmount || 0,
+    balanceAmount: handover.payment?.balanceAmount || 0,
+    paymentMethod: handover.payment?.paymentMethod || "",
+    paymentStatus: handover.payment?.paymentStatus || "pending",
+  },
+});
   } catch (error) {
     console.error("GET RENTAL DETAILS ERROR:", error);
 
@@ -1284,18 +1277,19 @@ export const updateRental = async (req, res) => {
        CHANGE VEHICLE
     ========================== */
 
-    if (
-      vehicleId &&
-      vehicleId.toString() !== handover.vehicle.vehicleId.toString()
-    ) {
+ if (
+  vehicleId &&
+  handover.vehicle?.vehicleId &&
+  vehicleId.toString() !== handover.vehicle.vehicleId.toString()
+) {
       const oldVehicleId = handover.vehicle.vehicleId;
 
       const vehicle = await Vehicle.findOne({
-        _id: vehicleId,
-        company: handover.company,
-        isDeleted: false,
-        status: "available",
-      });
+  _id: vehicleId,
+  company: handover.company,
+  isDeleted: false,
+  status: { $in: ["available", "rent"] },
+});
 
       if (!vehicle) {
         return res.status(404).json({
