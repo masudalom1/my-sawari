@@ -4,6 +4,7 @@ import protect from "../middlewares/auth.middleware.js";
 import {
   checkLeadByMobile,
   createLead,
+  getBookingsDashboard,
   getLeadById,
   getLeadDashboardStats,
   getLeadHistory,
@@ -26,4 +27,6 @@ router.post("/:id/activity", protect, createLeadActivity);
 router.get("/:id/activity", protect, getLeadActivities);
 
 router.get("/check/:mobile",protect,checkLeadByMobile);
+
+router.get("/booking", protect, getBookingsDashboard);
 export default router;

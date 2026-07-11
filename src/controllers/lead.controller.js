@@ -1052,3 +1052,115 @@ export const getLeadHistory = async (req, res) => {
     });
   }
 };
+
+export const getBookingsDashboard = async (req, res) => {
+  try {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    const tomorrow = new Date(today);
+    tomorrow.setDate(today.getDate() + 1);
+
+    const dayAfterTomorrow = new Date(today);
+    dayAfterTomorrow.setDate(today.getDate() + 2);
+
+    const leads = await Lead.find({
+      status: "Booking confirmed",
+      isDeleted: false,
+    })
+      .populate("leadOwner", "name")
+      .sort({ bookingConfirmedAt: -1 });
+
+    const stats = {
+      totalBookings: 0,
+      todayPickup: 0,
+      tomorrowPickup: 0,
+      activeRentals: 0,
+      pendingHandover: 0,
+      completed: 0,
+      cancelled: 0,
+    };
+
+    const bookings = leads.map((lead) => {
+      const pickup = lead.fromDate ? new Date(lead.fromDate) : null;
+      const drop = lead.toDate ? new Date(lead.toDate) : null;
+
+      let status = "Booking Confirmed";
+
+      if (pickup) {
+        const pickupDay = new Date(pickup);
+        pickupDay.setHours(0, 0, 0, 0);
+
+        if (pickupDay.getTime() === today.getTime()) {
+          status = "Today's Pickup";
+          stats.todayPickup++;
+        } else if (pickupDay.getTime() === tomorrow.getTime()) {
+          status = "Tomorrow's Pickup";
+          stats.tomorrowPickup++;
+        }
+      }
+
+      if (
+        pickup &&
+        drop &&
+        today >= pickup &&
+        today <= drop
+      ) {
+        status = "Active Rental";
+        stats.activeRentals++;
+      }
+
+      if (!lead.bookingId) {
+        stats.pendingHandover++;
+      }
+
+      stats.totalBookings++;
+
+      return {
+        _id: lead._id,
+        leadId: lead.leadId,
+        bookingId: lead.bookingId,
+
+        customerName: lead.customerName,
+        mobileNumber: lead.mobileNumber,
+
+        vehicleType: lead.vehicleType,
+        vehicleName: lead.vehicleName,
+
+        destination: lead.conversationSummary || "",
+
+        pickupDate: lead.fromDate,
+        dropDate: lead.toDate,
+
+        tripDays: lead.totalDays,
+        residents: lead.residents,
+
+        quotationAmount: lead.quotationAmount || 0,
+
+        priority: lead.priority,
+        source: lead.source,
+
+        leadOwner: lead.leadOwner?.name || "",
+
+        bookingConfirmedAt: lead.bookingConfirmedAt,
+
+        status,
+
+        handoverCompleted: !!lead.bookingId,
+      };
+    });
+
+    return res.status(200).json({
+      success: true,
+      stats,
+      bookings,
+    });
+  } catch (error) {
+    console.error(error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Unable to fetch bookings.",
+    });
+  }
+};
