@@ -1264,18 +1264,25 @@ export const updateRental = async (req, res) => {
       reasonForChange,
     } = req.body;
 
-    const handover = await Handover.findById(id);
+    const companyId = req.user.company || req.user._id;
 
-    if (
-      !handover ||
-      handover.isDeleted ||
-      handover.handoverStatus !== "active"
-    ) {
+    const handover = await Handover.findOne({
+      _id: id,
+      company: companyId,
+      isDeleted: false,
+      handoverStatus: "active",
+    });
+
+    if (!handover) {
       return res.status(404).json({
         success: false,
         message: "Active rental not found",
       });
     }
+
+    /* ==========================
+       CHANGE VEHICLE
+    ========================== */
 
     if (
       vehicleId &&
@@ -1285,7 +1292,7 @@ export const updateRental = async (req, res) => {
 
       const vehicle = await Vehicle.findOne({
         _id: vehicleId,
-        company: req.user.company || req.user._id,
+        company: handover.company,
         isDeleted: false,
         status: "available",
       });
@@ -1297,21 +1304,16 @@ export const updateRental = async (req, res) => {
         });
       }
 
-      // Save old vehicle details before overwriting
       const oldVehicleNumber = handover.vehicle.vehicleNumber;
-      const oldVehicleName = handover.vehicle.vehicleName;
 
-      // Make previous vehicle available
       await Vehicle.findByIdAndUpdate(oldVehicleId, {
         status: "available",
       });
 
-      // Make new vehicle on rent
       await Vehicle.findByIdAndUpdate(vehicle._id, {
         status: "rent",
       });
 
-      // Update handover vehicle details
       handover.vehicle.vehicleId = vehicle._id;
       handover.vehicle.vehicleName = vehicle.vehicleName;
       handover.vehicle.vehicleNumber = vehicle.vehicleNumber;
@@ -1330,6 +1332,7 @@ Reason: ${reasonForChange}
           .slice(-500);
       }
     }
+
     /* ==========================
        UPDATE TRIP
     ========================== */
@@ -1340,22 +1343,24 @@ Reason: ${reasonForChange}
       const pickup = new Date(handover.trip.pickupDateTime);
       const drop = new Date(dropDateTime);
 
-      const days = Math.ceil((drop - pickup) / (1000 * 60 * 60 * 24));
+      const days = Math.ceil(
+        (drop - pickup) / (1000 * 60 * 60 * 24)
+      );
 
       handover.trip.numberOfDays = Math.max(1, days);
     }
 
     /* ==========================
-       UPDATE PAYMENTS
+       UPDATE PAYMENT
     ========================== */
 
     handover.payment.totalFare = Number(totalFare) || 0;
-
-    handover.payment.fastTagPayableAmount = Number(fastagCharges) || 0;
-
-    handover.payment.securityDeposit = Number(securityDeposit) || 0;
-
-    handover.payment.extraCharges = Number(extraCharges) || 0;
+    handover.payment.fastTagPayableAmount =
+      Number(fastagCharges) || 0;
+    handover.payment.securityDeposit =
+      Number(securityDeposit) || 0;
+    handover.payment.extraCharges =
+      Number(extraCharges) || 0;
 
     handover.payment.totalAmount =
       handover.payment.totalFare +
@@ -1363,7 +1368,8 @@ Reason: ${reasonForChange}
       handover.payment.securityDeposit +
       handover.payment.extraCharges;
 
-    handover.payment.amountReceivedNow += Number(amountReceivedNow) || 0;
+    handover.payment.amountReceivedNow +=
+      Number(amountReceivedNow) || 0;
 
     const totalPaid =
       (handover.payment.bookingAmountPaid || 0) +
@@ -1371,7 +1377,7 @@ Reason: ${reasonForChange}
 
     handover.payment.balanceAmount = Math.max(
       0,
-      handover.payment.totalAmount - totalPaid,
+      handover.payment.totalAmount - totalPaid
     );
 
     if (handover.payment.balanceAmount === 0) {
@@ -1383,7 +1389,7 @@ Reason: ${reasonForChange}
     }
 
     /* ==========================
-       SAVE CHANGE NOTE
+       UPDATE NOTE
     ========================== */
 
     if (reasonForChange?.trim()) {
