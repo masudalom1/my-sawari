@@ -16,6 +16,7 @@ import { createLeadActivity, getLeadActivities } from "../controllers/leadActivi
 const router = express.Router();
 
 router.get("/dashboard", protect, getLeadDashboardStats);
+router.get("/booking", getBookingsDashboard);
 router.get("/", protect, getLeads);
 router.post("/", protect, createLead);
 router.get("/:id", protect, getLeadById);
@@ -28,5 +29,4 @@ router.get("/:id/activity", protect, getLeadActivities);
 
 router.get("/check/:mobile",protect,checkLeadByMobile);
 
-router.get("/booking", protect, getBookingsDashboard);
 export default router;
