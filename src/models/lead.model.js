@@ -10,14 +10,7 @@ const noteSchema = new mongoose.Schema(
 
     type: {
       type: String,
-      enum: [
-        "call",
-        "whatsapp",
-        "message",
-        "email",
-        "meeting",
-        "system",
-      ],
+      enum: ["call", "whatsapp", "message", "email", "meeting", "system"],
       default: "call",
     },
 
@@ -29,7 +22,7 @@ const noteSchema = new mongoose.Schema(
   },
   {
     timestamps: true,
-  }
+  },
 );
 
 const leadSchema = new mongoose.Schema(
@@ -188,26 +181,26 @@ const leadSchema = new mongoose.Schema(
       default: "",
     },
 
- detailedConversation: [
-  {
-    message: {
-      type: String,
-      trim: true,
-      required: true,
-    },
+    detailedConversation: [
+      {
+        message: {
+          type: String,
+          trim: true,
+          required: true,
+        },
 
-    addedBy: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "User",
-      required: true,
-    },
+        addedBy: {
+          type: mongoose.Schema.Types.ObjectId,
+          ref: "User",
+          required: true,
+        },
 
-    createdAt: {
-      type: Date,
-      default: Date.now,
-    },
-  },
-],
+        createdAt: {
+          type: Date,
+          default: Date.now,
+        },
+      },
+    ],
 
     lastContactedDate: {
       type: Date,
@@ -310,6 +303,75 @@ const leadSchema = new mongoose.Schema(
       required: true,
       index: true,
     },
+    isBookingCreated: {
+      type: Boolean,
+      default: false,
+      index: true,
+    },
+
+    booking: {
+      alternateMobileNumber: {
+        type: String,
+        trim: true,
+        default: "",
+      },
+
+      occupation: {
+        type: String,
+        trim: true,
+        default: "",
+      },
+
+      destination: {
+        type: String,
+        trim: true,
+        default: "",
+      },
+
+      aadhaarNumber: {
+        type: String,
+        trim: true,
+        default: "",
+      },
+
+      drivingLicenseNumber: {
+        type: String,
+        trim: true,
+        uppercase: true,
+        default: "",
+      },
+
+      tripType: {
+        type: String,
+        enum: ["local", "outstation"],
+        default: "local",
+      },
+
+      vehicleId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "Vehicle",
+      },
+
+      vehicleName: {
+        type: String,
+        trim: true,
+        default: "",
+      },
+
+      bookingAmount: {
+        type: Number,
+        default: 0,
+        min: 0,
+      },
+
+      discountAmount: {
+        type: Number,
+        default: 0,
+        min: 0,
+      },
+
+      createdAt: Date,
+    },
 
     createdBy: {
       type: mongoose.Schema.Types.ObjectId,
@@ -334,7 +396,7 @@ const leadSchema = new mongoose.Schema(
   },
   {
     timestamps: true,
-  }
+  },
 );
 
 // ================================
@@ -349,8 +411,7 @@ leadSchema.pre("save", async function () {
 
   if (this.fromDate && this.toDate) {
     const diff =
-      new Date(this.toDate).getTime() -
-      new Date(this.fromDate).getTime();
+      new Date(this.toDate).getTime() - new Date(this.fromDate).getTime();
 
     this.totalDays = Math.max(1, Math.ceil(diff / (1000 * 60 * 60 * 24)) + 1);
   }

@@ -1164,3 +1164,67 @@ export const getBookingsDashboard = async (req, res) => {
     });
   }
 };
+
+export const createLeadBooking = async (req, res, next) => {
+  try {
+    const lead = await Lead.findById(req.params.id);
+
+    if (!lead || lead.isDeleted) {
+      return res.status(404).json({
+        success: false,
+        message: "Lead not found",
+      });
+    }
+
+    const {
+      customerName,
+      mobileNumber,
+      alternateMobileNumber,
+      occupation,
+      destination,
+      aadhaarNumber,
+      drivingLicenseNumber,
+      tripType,
+      vehicleId,
+      vehicleName,
+      bookingAmount,
+      discountAmount,
+    } = req.body;
+
+    // Update existing customer details if changed
+    if (customerName) {
+      lead.customerName = customerName.trim();
+    }
+
+    if (mobileNumber) {
+      lead.mobileNumber = mobileNumber.trim();
+    }
+
+    // Store booking information
+    lead.booking = {
+      alternateMobileNumber,
+      occupation,
+      destination,
+      aadhaarNumber,
+      drivingLicenseNumber,
+      tripType,
+      vehicleId,
+      vehicleName,
+      bookingAmount,
+      discountAmount,
+      createdAt: new Date(),
+    };
+
+    lead.isBookingCreated = true;
+
+    await lead.save();
+
+    return res.status(200).json({
+      success: true,
+      message: "Booking information saved successfully.",
+      data: lead,
+    });
+  } catch (err) {
+    next(err);
+  }
+};
