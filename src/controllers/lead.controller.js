@@ -1228,3 +1228,26 @@ export const createLeadBooking = async (req, res, next) => {
     next(err);
   }
 };
+
+export const getLeadBookingDetails = async (req, res, next) => {
+  try {
+    const lead = await Lead.findById(req.params.id)
+      .populate("booking.vehicleId", "vehicleName vehicleNumber color")
+      .populate("leadOwner", "name email")
+      .populate("createdBy", "name");
+
+    if (!lead || lead.isDeleted) {
+      return res.status(404).json({
+        success: false,
+        message: "Lead not found",
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      data: lead,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
