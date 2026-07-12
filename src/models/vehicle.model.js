@@ -61,6 +61,11 @@ const vehicleSchema = new mongoose.Schema(
       trim: true,
       default: "",
     },
+       pricePerDay: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
 
     vehicleType: {
       type: String,
