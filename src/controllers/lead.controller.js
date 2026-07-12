@@ -1114,80 +1114,52 @@ export const getBookingsDashboard = async (req, res) => {
       stats.totalBookings++;
 
       return {
-        _id: lead._id,
-        leadId: lead.leadId,
-        bookingId: lead.bookingId,
+  _id: lead._id,
+  leadId: lead.leadId,
 
-        // Customer
-        customerName: lead.customerName,
-        mobileNumber: lead.mobileNumber,
+  bookingId: lead.bookingId,
 
-        // Booking Details
-        alternateMobileNumber:
-          lead.booking?.alternateMobileNumber || "",
+  customerName: lead.customerName,
+  mobileNumber: lead.mobileNumber,
 
-        occupation:
-          lead.booking?.occupation || "",
+  vehicleType: lead.vehicleType,
+  vehicleName: lead.vehicleName,
 
-        destination:
-          lead.booking?.destination ||
-          lead.conversationSummary ||
-          "",
+  pickupDate: lead.fromDate,
+  dropDate: lead.toDate,
+  tripDays: lead.totalDays,
 
-        aadhaarNumber:
-          lead.booking?.aadhaarNumber || "",
+  quotationAmount: lead.quotationAmount,
 
-        drivingLicenseNumber:
-          lead.booking?.drivingLicenseNumber || "",
+  // Booking Details
+  alternateMobileNumber: lead.booking?.alternateMobileNumber || "",
+  occupation: lead.booking?.occupation || "",
+  destination: lead.booking?.destination || "",
 
-        tripType:
-          lead.booking?.tripType || "outstation",
+  aadhaarNumber: lead.booking?.aadhaarNumber || "",
+  drivingLicenseNumber: lead.booking?.drivingLicenseNumber || "",
 
-        vehicleId:
-          lead.booking?.vehicleId?._id ||
-          lead.booking?.vehicleId ||
-          null,
+  tripType: lead.booking?.tripType || "local",
 
-        vehicleName:
-          lead.booking?.vehicleId?.vehicleName ||
-          lead.booking?.vehicleName ||
-          lead.vehicleName,
+  vehicleId: lead.booking?.vehicleId || null,
+  vehicleName: lead.booking?.vehicleName || lead.vehicleName,
+  vehicleNumber: lead.booking?.vehicleNumber || "",
+  vehicleColor: lead.booking?.vehicleColor || "",
 
-        vehicleNumber:
-          lead.booking?.vehicleId?.vehicleNumber || "",
+  bookingAmount: lead.booking?.bookingAmount || 0,
+  discountAmount: lead.booking?.discountAmount || 0,
 
-        vehicleColor:
-          lead.booking?.vehicleId?.color || "",
+  priority: lead.priority,
+  source: lead.source,
 
-        bookingAmount:
-          lead.booking?.bookingAmount || 0,
+  leadOwner: lead.leadOwner?.name || "",
 
-        discountAmount:
-          lead.booking?.discountAmount || 0,
+  bookingConfirmedAt: lead.bookingConfirmedAt,
 
-        // Trip
-        pickupDate: lead.fromDate,
-        dropDate: lead.toDate,
-        tripDays: lead.totalDays,
-        residents: lead.residents,
+  status,
 
-        quotationAmount: lead.quotationAmount || 0,
-
-        // Lead
-        priority: lead.priority,
-        source: lead.source,
-
-        leadOwner:
-          lead.leadOwner?.fullName ||
-          lead.leadOwner?.name ||
-          "",
-
-        bookingConfirmedAt: lead.bookingConfirmedAt,
-
-        status,
-
-        handoverCompleted: !!lead.bookingId,
-      };
+  handoverCompleted: !!lead.bookingId,
+};
     });
 
     return res.status(200).json({
