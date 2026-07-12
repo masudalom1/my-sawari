@@ -140,9 +140,23 @@ export const getAvailableVehicles = async (req, res, next) => {
       isDeleted: false,
     })
       .select(
-        "_id vehicleName vehicleNumber color manufacturer model vehicleType status"
+        `
+        _id
+        vehicleName
+        vehicleNumber
+        color
+        manufacturer
+        model
+        vehicleType
+        status
+        pricePerDay
+        seatingCapacity
+        transmission
+        fuelType
+        `
       )
-      .sort({ createdAt: -1 });
+      .sort({ vehicleName: 1 })
+      .lean();
 
     return res.status(200).json({
       success: true,
