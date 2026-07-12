@@ -1114,52 +1114,52 @@ export const getBookingsDashboard = async (req, res) => {
       stats.totalBookings++;
 
       return {
-  _id: lead._id,
-  leadId: lead.leadId,
+        _id: lead._id,
+        leadId: lead.leadId,
 
-  bookingId: lead.bookingId,
+        bookingId: lead.bookingId,
 
-  customerName: lead.customerName,
-  mobileNumber: lead.mobileNumber,
+        customerName: lead.customerName,
+        mobileNumber: lead.mobileNumber,
 
-  vehicleType: lead.vehicleType,
-  vehicleName: lead.vehicleName,
+        vehicleType: lead.vehicleType,
+        vehicleName: lead.vehicleName,
 
-  pickupDate: lead.fromDate,
-  dropDate: lead.toDate,
-  tripDays: lead.totalDays,
+        pickupDate: lead.fromDate,
+        dropDate: lead.toDate,
+        tripDays: lead.totalDays,
 
-  quotationAmount: lead.quotationAmount,
+        quotationAmount: lead.quotationAmount,
 
-  // Booking Details
-  alternateMobileNumber: lead.booking?.alternateMobileNumber || "",
-  occupation: lead.booking?.occupation || "",
-  destination: lead.booking?.destination || "",
+        // Booking Details
+        alternateMobileNumber: lead.booking?.alternateMobileNumber || "",
+        occupation: lead.booking?.occupation || "",
+        destination: lead.booking?.destination || "",
 
-  aadhaarNumber: lead.booking?.aadhaarNumber || "",
-  drivingLicenseNumber: lead.booking?.drivingLicenseNumber || "",
+        aadhaarNumber: lead.booking?.aadhaarNumber || "",
+        drivingLicenseNumber: lead.booking?.drivingLicenseNumber || "",
 
-  tripType: lead.booking?.tripType || "local",
+        tripType: lead.booking?.tripType || "local",
 
-  vehicleId: lead.booking?.vehicleId || null,
-  vehicleName: lead.booking?.vehicleName || lead.vehicleName,
-  vehicleNumber: lead.booking?.vehicleNumber || "",
-  vehicleColor: lead.booking?.vehicleColor || "",
+        vehicleId: lead.booking?.vehicleId || null,
+        vehicleName: lead.booking?.vehicleName || lead.vehicleName,
+        vehicleNumber: lead.booking?.vehicleNumber || "",
+        vehicleColor: lead.booking?.vehicleColor || "",
 
-  bookingAmount: lead.booking?.bookingAmount || 0,
-  discountAmount: lead.booking?.discountAmount || 0,
+        bookingAmount: lead.booking?.bookingAmount || 0,
+        discountAmount: lead.booking?.discountAmount || 0,
 
-  priority: lead.priority,
-  source: lead.source,
+        priority: lead.priority,
+        source: lead.source,
 
-  leadOwner: lead.leadOwner?.name || "",
+        leadOwner: lead.leadOwner?.name || "",
 
-  bookingConfirmedAt: lead.bookingConfirmedAt,
+        bookingConfirmedAt: lead.bookingConfirmedAt,
 
-  status,
+        status,
 
-  handoverCompleted: !!lead.bookingId,
-};
+        handoverCompleted: !!lead.bookingId,
+      };
     });
 
     return res.status(200).json({
@@ -1173,10 +1173,7 @@ export const getBookingsDashboard = async (req, res) => {
     return res.status(500).json({
       success: false,
       message: "Unable to fetch bookings.",
-      error:
-        process.env.NODE_ENV === "development"
-          ? error.message
-          : undefined,
+      error: process.env.NODE_ENV === "development" ? error.message : undefined,
     });
   }
 };
