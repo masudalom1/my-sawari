@@ -592,7 +592,7 @@ export const checkLeadByMobile = async (req, res) => {
       isDeleted: false,
     })
       .select(
-        "_id leadId customerName mobileNumber status priority vehicleType fromDate toDate createdAt"
+        "_id leadId customerName mobileNumber status priority vehicleType fromDate toDate createdAt",
       )
       .lean();
 
@@ -1066,6 +1066,7 @@ export const getBookingsDashboard = async (req, res) => {
 
     const leads = await Lead.find({
       status: "Booking confirmed",
+      isBookingCreated: true,
       isDeleted: false,
     })
       .populate("leadOwner", "name")
@@ -1100,12 +1101,7 @@ export const getBookingsDashboard = async (req, res) => {
         }
       }
 
-      if (
-        pickup &&
-        drop &&
-        today >= pickup &&
-        today <= drop
-      ) {
+      if (pickup && drop && today >= pickup && today <= drop) {
         status = "Active Rental";
         stats.activeRentals++;
       }
