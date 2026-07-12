@@ -1069,7 +1069,8 @@ export const getBookingsDashboard = async (req, res) => {
       isBookingCreated: true,
       isDeleted: false,
     })
-      .populate("leadOwner", "name")
+      .populate("leadOwner", "fullName name")
+      .populate("booking.vehicleId", "vehicleName vehicleNumber color")
       .sort({ bookingConfirmedAt: -1 });
 
     const stats = {
@@ -1117,26 +1118,69 @@ export const getBookingsDashboard = async (req, res) => {
         leadId: lead.leadId,
         bookingId: lead.bookingId,
 
+        // Customer
         customerName: lead.customerName,
         mobileNumber: lead.mobileNumber,
 
-        vehicleType: lead.vehicleType,
-        vehicleName: lead.vehicleName,
+        // Booking Details
+        alternateMobileNumber:
+          lead.booking?.alternateMobileNumber || "",
 
-        destination: lead.conversationSummary || "",
+        occupation:
+          lead.booking?.occupation || "",
 
+        destination:
+          lead.booking?.destination ||
+          lead.conversationSummary ||
+          "",
+
+        aadhaarNumber:
+          lead.booking?.aadhaarNumber || "",
+
+        drivingLicenseNumber:
+          lead.booking?.drivingLicenseNumber || "",
+
+        tripType:
+          lead.booking?.tripType || "outstation",
+
+        vehicleId:
+          lead.booking?.vehicleId?._id ||
+          lead.booking?.vehicleId ||
+          null,
+
+        vehicleName:
+          lead.booking?.vehicleId?.vehicleName ||
+          lead.booking?.vehicleName ||
+          lead.vehicleName,
+
+        vehicleNumber:
+          lead.booking?.vehicleId?.vehicleNumber || "",
+
+        vehicleColor:
+          lead.booking?.vehicleId?.color || "",
+
+        bookingAmount:
+          lead.booking?.bookingAmount || 0,
+
+        discountAmount:
+          lead.booking?.discountAmount || 0,
+
+        // Trip
         pickupDate: lead.fromDate,
         dropDate: lead.toDate,
-
         tripDays: lead.totalDays,
         residents: lead.residents,
 
         quotationAmount: lead.quotationAmount || 0,
 
+        // Lead
         priority: lead.priority,
         source: lead.source,
 
-        leadOwner: lead.leadOwner?.name || "",
+        leadOwner:
+          lead.leadOwner?.fullName ||
+          lead.leadOwner?.name ||
+          "",
 
         bookingConfirmedAt: lead.bookingConfirmedAt,
 
@@ -1152,11 +1196,15 @@ export const getBookingsDashboard = async (req, res) => {
       bookings,
     });
   } catch (error) {
-    console.error(error);
+    console.error("Booking Dashboard Error:", error);
 
     return res.status(500).json({
       success: false,
       message: "Unable to fetch bookings.",
+      error:
+        process.env.NODE_ENV === "development"
+          ? error.message
+          : undefined,
     });
   }
 };
