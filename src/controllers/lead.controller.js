@@ -1141,22 +1141,21 @@ export const getBookingsDashboard = async (req, res) => {
 
         tripType: lead.booking?.tripType || "local",
 
-       vehicleId: lead.booking?.vehicleId?._id || lead.booking?.vehicleId || null,
+        vehicleId:
+          lead.booking?.vehicleId?._id || lead.booking?.vehicleId || null,
 
-vehicleName:
-  lead.booking?.vehicleId?.vehicleName ||
-  lead.booking?.vehicleName ||
-  lead.vehicleName,
+        vehicleName:
+          lead.booking?.vehicleId?.vehicleName ||
+          lead.booking?.vehicleName ||
+          lead.vehicleName,
 
-vehicleNumber:
-  lead.booking?.vehicleId?.vehicleNumber ||
-  lead.booking?.vehicleNumber ||
-  "",
+        vehicleNumber:
+          lead.booking?.vehicleId?.vehicleNumber ||
+          lead.booking?.vehicleNumber ||
+          "",
 
-vehicleColor:
-  lead.booking?.vehicleId?.color ||
-  lead.booking?.vehicleColor ||
-  "",
+        vehicleColor:
+          lead.booking?.vehicleId?.color || lead.booking?.vehicleColor || "",
 
         bookingAmount: lead.booking?.bookingAmount || 0,
         discountAmount: lead.booking?.discountAmount || 0,
