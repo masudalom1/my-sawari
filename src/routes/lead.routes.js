@@ -7,6 +7,7 @@ import {
   createLeadBooking,
   getBookingsDashboard,
   getLeadBookingDetails,
+  getLeadBookings,
   getLeadById,
   getLeadDashboardStats,
   getLeadHistory,
@@ -33,5 +34,6 @@ router.get("/check/:mobile",protect,checkLeadByMobile);
 
 router.put("/:id/create-booking",protect,createLeadBooking);
 router.get("/:id/create-booking",protect,getLeadBookingDetails);
+router.get("/:id/bookings",protect,getLeadBookings);
 
 export default router;

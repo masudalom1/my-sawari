@@ -1511,3 +1511,35 @@ export const getLeadBookingDetails = async (req, res, next) => {
     next(error);
   }
 };
+
+export const getLeadBookings = async (req, res, next) => {
+  try {
+    const lead = await Lead.findById(req.params.id);
+
+    if (!lead || lead.isDeleted) {
+      return res.status(404).json({
+        success: false,
+        message: "Lead not found",
+      });
+    }
+
+    const bookings = await Booking.find({
+      lead: lead._id,
+      isDeleted: false,
+    })
+      .populate(
+        "vehicleId",
+        "vehicleName vehicleNumber color manufacturer model"
+      )
+      .populate("createdBy", "name fullName")
+      .sort({ createdAt: -1 });
+
+    return res.status(200).json({
+      success: true,
+      total: bookings.length,
+      data: bookings,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
