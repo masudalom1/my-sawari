@@ -240,10 +240,9 @@ const bookingSchema = new mongoose.Schema(
 // AUTO BOOKING CODE
 // =========================
 
-bookingSchema.pre("save", function (next) {
+bookingSchema.pre("save", function () {
   if (!this.bookingCode) {
     const random = Math.floor(1000 + Math.random() * 9000);
-
     this.bookingCode = `BK${Date.now()}${random}`;
   }
 
@@ -257,8 +256,6 @@ bookingSchema.pre("save", function (next) {
       Math.ceil(diff / (1000 * 60 * 60 * 24)) + 1
     );
   }
-
-  next();
 });
 
 // =========================
