@@ -1363,7 +1363,6 @@ export const getLeadBookingDetails = async (req, res, next) => {
       });
     }
 
-    // Latest booking for this customer
     const latestBooking = await Booking.findOne({
       lead: lead._id,
       isDeleted: false,
@@ -1374,6 +1373,11 @@ export const getLeadBookingDetails = async (req, res, next) => {
       )
       .sort({ createdAt: -1 });
 
+    const totalBookings = await Booking.countDocuments({
+      lead: lead._id,
+      isDeleted: false,
+    });
+
     const response = {
       ...lead.toObject(),
 
@@ -1382,6 +1386,8 @@ export const getLeadBookingDetails = async (req, res, next) => {
             _id: latestBooking._id,
             bookingCode: latestBooking.bookingCode,
 
+            customerName: latestBooking.customerName,
+            mobileNumber: latestBooking.mobileNumber,
             alternateMobileNumber:
               latestBooking.alternateMobileNumber || "",
 
@@ -1394,20 +1400,91 @@ export const getLeadBookingDetails = async (req, res, next) => {
             drivingLicenseNumber:
               latestBooking.drivingLicenseNumber || "",
 
-            tripType: latestBooking.tripType || "local",
+            tripType: latestBooking.tripType,
 
-            bookingAmount: latestBooking.bookingAmount || 0,
+            bookingAmount: latestBooking.bookingAmount,
 
-            discountAmount: latestBooking.discountAmount || 0,
+            discountAmount: latestBooking.discountAmount,
+
+            quotationAmount: latestBooking.quotationAmount,
 
             vehicleId: latestBooking.vehicleId,
-          }
-        : null,
 
-      totalBookings: await Booking.countDocuments({
-        lead: lead._id,
-        isDeleted: false,
-      }),
+            vehicleName:
+              latestBooking.vehicleId?.vehicleName ||
+              latestBooking.vehicleName,
+
+            vehicleNumber:
+              latestBooking.vehicleId?.vehicleNumber ||
+              latestBooking.vehicleNumber,
+
+            vehicleColor:
+              latestBooking.vehicleId?.color ||
+              latestBooking.vehicleColor,
+
+            fromDate: latestBooking.fromDate,
+
+            toDate: latestBooking.toDate,
+
+            totalDays: latestBooking.totalDays,
+
+            residents: latestBooking.residents,
+
+            status: latestBooking.status,
+
+            createdAt: latestBooking.createdAt,
+          }
+        : {
+            customerName: lead.customerName,
+            mobileNumber: lead.mobileNumber,
+            alternateMobileNumber:
+              lead.booking?.alternateMobileNumber || "",
+
+            occupation: lead.booking?.occupation || "",
+
+            destination: lead.booking?.destination || "",
+
+            aadhaarNumber: lead.booking?.aadhaarNumber || "",
+
+            drivingLicenseNumber:
+              lead.booking?.drivingLicenseNumber || "",
+
+            tripType: lead.booking?.tripType || "local",
+
+            bookingAmount:
+              lead.booking?.bookingAmount || 0,
+
+            discountAmount:
+              lead.booking?.discountAmount || 0,
+
+            quotationAmount:
+              lead.quotationAmount || 0,
+
+            vehicleId: lead.booking?.vehicleId || null,
+
+            vehicleName:
+              lead.booking?.vehicleName ||
+              lead.vehicleName,
+
+            vehicleNumber: "",
+
+            vehicleColor: "",
+
+            fromDate: lead.fromDate,
+
+            toDate: lead.toDate,
+
+            totalDays: lead.totalDays,
+
+            residents: lead.residents,
+
+            status: "confirmed",
+
+            createdAt: lead.createdAt,
+          },
+
+      totalBookings,
+      hasPreviousBooking: totalBookings > 0,
     };
 
     return res.status(200).json({
@@ -1415,6 +1492,7 @@ export const getLeadBookingDetails = async (req, res, next) => {
       data: response,
     });
   } catch (error) {
+    console.error("Get Lead Booking Details Error:", error);
     next(error);
   }
 };
