@@ -1056,26 +1056,29 @@ export const getLeadHistory = async (req, res) => {
 
 export const getBookingsDashboard = async (req, res) => {
   try {
+    const companyId = req.user.company || req.user._id;
+
     const today = new Date();
     today.setHours(0, 0, 0, 0);
 
     const tomorrow = new Date(today);
     tomorrow.setDate(today.getDate() + 1);
 
-    const dayAfterTomorrow = new Date(today);
-    dayAfterTomorrow.setDate(today.getDate() + 2);
-
-    const leads = await Lead.find({
-      status: "Booking confirmed",
-      isBookingCreated: true,
+    const bookings = await Booking.find({
+      company: companyId,
       isDeleted: false,
     })
-      .populate("leadOwner", "fullName name")
-      .populate("booking.vehicleId", "vehicleName vehicleNumber color")
-      .sort({ bookingConfirmedAt: -1 });
+      .populate(
+        "lead",
+        "leadId priority source leadOwner bookingConfirmedAt vehicleType"
+      )
+      .populate("vehicleId", "vehicleName vehicleNumber color")
+      .populate("createdBy", "name")
+      .sort({ createdAt: -1 })
+      .lean();
 
     const stats = {
-      totalBookings: 0,
+      totalBookings: bookings.length,
       todayPickup: 0,
       tomorrowPickup: 0,
       activeRentals: 0,
@@ -1084,108 +1087,136 @@ export const getBookingsDashboard = async (req, res) => {
       cancelled: 0,
     };
 
-    const bookings = leads.map((lead) => {
-      const pickup = lead.fromDate ? new Date(lead.fromDate) : null;
-      const drop = lead.toDate ? new Date(lead.toDate) : null;
+    const dashboard = bookings.map((booking) => {
+      const pickup = booking.fromDate
+        ? new Date(booking.fromDate)
+        : null;
+
+      const drop = booking.toDate
+        ? new Date(booking.toDate)
+        : null;
 
       let status = "Booking Confirmed";
+
+      if (booking.status === "completed") {
+        status = "Completed";
+        stats.completed++;
+      } else if (booking.status === "cancelled") {
+        status = "Cancelled";
+        stats.cancelled++;
+      } else if (booking.status === "confirmed") {
+        stats.pendingHandover++;
+      }
 
       if (pickup) {
         const pickupDay = new Date(pickup);
         pickupDay.setHours(0, 0, 0, 0);
 
-        if (pickupDay.getTime() === today.getTime()) {
-          status = "Today's Pickup";
-          stats.todayPickup++;
-        } else if (pickupDay.getTime() === tomorrow.getTime()) {
-          status = "Tomorrow's Pickup";
-          stats.tomorrowPickup++;
+        if (
+          booking.status !== "completed" &&
+          booking.status !== "cancelled"
+        ) {
+          if (pickupDay.getTime() === today.getTime()) {
+            status = "Today's Pickup";
+            stats.todayPickup++;
+          } else if (pickupDay.getTime() === tomorrow.getTime()) {
+            status = "Tomorrow's Pickup";
+            stats.tomorrowPickup++;
+          }
         }
       }
 
-      if (pickup && drop && today >= pickup && today <= drop) {
+      if (
+        booking.status === "active" ||
+        booking.status === "vehicle_handover"
+      ) {
         status = "Active Rental";
         stats.activeRentals++;
       }
 
-      if (!lead.bookingId) {
-        stats.pendingHandover++;
-      }
-
-      stats.totalBookings++;
-
       return {
-        _id: lead._id,
-        leadId: lead.leadId,
+        _id: booking._id,
+        bookingId: booking._id,
+        bookingCode: booking.bookingCode,
 
-        bookingId: lead.bookingId,
+        leadId: booking.lead?.leadId || "",
 
-        customerName: lead.customerName,
-        mobileNumber: lead.mobileNumber,
+        customerName: booking.customerName,
+        mobileNumber: booking.mobileNumber,
+        alternateMobileNumber: booking.alternateMobileNumber,
 
-        vehicleType: lead.vehicleType,
-        vehicleName: lead.vehicleName,
+        occupation: booking.occupation,
 
-        pickupDate: lead.fromDate,
-        dropDate: lead.toDate,
-        tripDays: lead.totalDays,
+        destination: booking.destination,
 
-        quotationAmount: lead.quotationAmount,
+        aadhaarNumber: booking.aadhaarNumber,
+        drivingLicenseNumber: booking.drivingLicenseNumber,
 
-        // Booking Details
-        alternateMobileNumber: lead.booking?.alternateMobileNumber || "",
-        occupation: lead.booking?.occupation || "",
-        destination: lead.booking?.destination || "",
+        tripType: booking.tripType,
 
-        aadhaarNumber: lead.booking?.aadhaarNumber || "",
-        drivingLicenseNumber: lead.booking?.drivingLicenseNumber || "",
+        pickupDate: booking.fromDate,
+        dropDate: booking.toDate,
 
-        tripType: lead.booking?.tripType || "local",
+        tripDays: booking.totalDays,
+        residents: booking.residents,
 
-        vehicleId:
-          lead.booking?.vehicleId?._id || lead.booking?.vehicleId || null,
+        quotationAmount: booking.quotationAmount,
+        bookingAmount: booking.bookingAmount,
+        discountAmount: booking.discountAmount,
 
+        vehicleId: booking.vehicleId?._id,
         vehicleName:
-          lead.booking?.vehicleId?.vehicleName ||
-          lead.booking?.vehicleName ||
-          lead.vehicleName,
+          booking.vehicleId?.vehicleName || booking.vehicleName,
 
         vehicleNumber:
-          lead.booking?.vehicleId?.vehicleNumber ||
-          lead.booking?.vehicleNumber ||
-          "",
+          booking.vehicleId?.vehicleNumber ||
+          booking.vehicleNumber,
 
         vehicleColor:
-          lead.booking?.vehicleId?.color || lead.booking?.vehicleColor || "",
+          booking.vehicleId?.color ||
+          booking.vehicleColor,
 
-        bookingAmount: lead.booking?.bookingAmount || 0,
-        discountAmount: lead.booking?.discountAmount || 0,
+        vehicleType: booking.lead?.vehicleType || "",
 
-        priority: lead.priority,
-        source: lead.source,
+        priority: booking.lead?.priority || "medium",
 
-        leadOwner: lead.leadOwner?.name || "",
+        source: booking.lead?.source || "",
 
-        bookingConfirmedAt: lead.bookingConfirmedAt,
+        leadOwner: booking.createdBy?.name || "",
+
+        bookingConfirmedAt:
+          booking.lead?.bookingConfirmedAt || booking.createdAt,
 
         status,
 
-        handoverCompleted: !!lead.bookingId,
+        handoverCompleted:
+          booking.status !== "confirmed",
+
+        bookingStatus: booking.status,
+
+        handover: booking.handover,
+
+        vehicleReturn: booking.vehicleReturn,
+
+        createdAt: booking.createdAt,
       };
     });
 
     return res.status(200).json({
       success: true,
       stats,
-      bookings,
+      bookings: dashboard,
     });
   } catch (error) {
-    console.error("Booking Dashboard Error:", error);
+    console.error(error);
 
     return res.status(500).json({
       success: false,
       message: "Unable to fetch bookings.",
-      error: process.env.NODE_ENV === "development" ? error.message : undefined,
+      error:
+        process.env.NODE_ENV === "development"
+          ? error.message
+          : undefined,
     });
   }
 };
