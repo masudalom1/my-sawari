@@ -1056,8 +1056,6 @@ export const getLeadHistory = async (req, res) => {
 
 export const getBookingsDashboard = async (req, res) => {
   try {
-    const companyId = req.user.company || req.user._id;
-
     const today = new Date();
     today.setHours(0, 0, 0, 0);
 
@@ -1065,17 +1063,26 @@ export const getBookingsDashboard = async (req, res) => {
     tomorrow.setDate(today.getDate() + 1);
 
     const bookings = await Booking.find({
-      company: companyId,
       isDeleted: false,
     })
-      .populate(
-        "lead",
-        "leadId priority source leadOwner bookingConfirmedAt vehicleType"
-      )
-      .populate("vehicleId", "vehicleName vehicleNumber color")
-      .populate("createdBy", "name")
-      .sort({ createdAt: -1 })
-      .lean();
+      .populate({
+        path: "lead",
+        select:
+          "leadId priority source vehicleType bookingConfirmedAt leadOwner",
+        populate: {
+          path: "leadOwner",
+          select: "name fullName",
+        },
+      })
+      .populate({
+        path: "vehicleId",
+        select: "vehicleName vehicleNumber color",
+      })
+      .populate({
+        path: "createdBy",
+        select: "name fullName",
+      })
+      .sort({ createdAt: -1 });
 
     const stats = {
       totalBookings: bookings.length,
@@ -1104,7 +1111,10 @@ export const getBookingsDashboard = async (req, res) => {
       } else if (booking.status === "cancelled") {
         status = "Cancelled";
         stats.cancelled++;
-      } else if (booking.status === "confirmed") {
+      } else if (
+        booking.status === "confirmed" ||
+        booking.status === "handover_pending"
+      ) {
         stats.pendingHandover++;
       }
 
@@ -1164,7 +1174,8 @@ export const getBookingsDashboard = async (req, res) => {
         bookingAmount: booking.bookingAmount,
         discountAmount: booking.discountAmount,
 
-        vehicleId: booking.vehicleId?._id,
+        vehicleId: booking.vehicleId?._id || null,
+
         vehicleName:
           booking.vehicleId?.vehicleName || booking.vehicleName,
 
@@ -1182,17 +1193,22 @@ export const getBookingsDashboard = async (req, res) => {
 
         source: booking.lead?.source || "",
 
-        leadOwner: booking.createdBy?.name || "",
+        leadOwner:
+          booking.lead?.leadOwner?.fullName ||
+          booking.lead?.leadOwner?.name ||
+          booking.createdBy?.fullName ||
+          booking.createdBy?.name ||
+          "",
 
         bookingConfirmedAt:
           booking.lead?.bookingConfirmedAt || booking.createdAt,
 
         status,
 
+        bookingStatus: booking.status,
+
         handoverCompleted:
           booking.status !== "confirmed",
-
-        bookingStatus: booking.status,
 
         handover: booking.handover,
 
@@ -1207,17 +1223,17 @@ export const getBookingsDashboard = async (req, res) => {
       stats,
       bookings: dashboard,
     });
-} catch (error) {
-  console.error("===== BOOKING DASHBOARD ERROR =====");
-  console.error(error);
-  console.error(error.stack);
+  } catch (error) {
+    console.error("===== BOOKING DASHBOARD ERROR =====");
+    console.error(error);
+    console.error(error.stack);
 
-  return res.status(500).json({
-    success: false,
-    message: "Unable to fetch bookings.",
-    error: error.message,
-  });
-}
+    return res.status(500).json({
+      success: false,
+      message: "Unable to fetch bookings.",
+      error: error.message,
+    });
+  }
 };
 
 export const createLeadBooking = async (req, res, next) => {
