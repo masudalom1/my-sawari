@@ -1,6 +1,7 @@
 import mongoose from "mongoose";
 import Lead from "../models/lead.model.js";
 import LeadHistory from "../models/leadHistory.model.js";
+import Booking from "../models/booking.model.js";
 
 export const createLead = async (req, res) => {
   try {
@@ -1215,40 +1216,105 @@ export const createLeadBooking = async (req, res, next) => {
       discountAmount,
     } = req.body;
 
-    // Update existing customer details if changed
-    if (customerName) {
+    if (!vehicleId) {
+      return res.status(400).json({
+        success: false,
+        message: "Vehicle is required.",
+      });
+    }
+
+    // Keep latest customer info in Lead
+    if (customerName?.trim()) {
       lead.customerName = customerName.trim();
     }
 
-    if (mobileNumber) {
+    if (mobileNumber?.trim()) {
       lead.mobileNumber = mobileNumber.trim();
     }
 
-    // Store booking information
-    lead.booking = {
-      alternateMobileNumber,
-      occupation,
-      destination,
-      aadhaarNumber,
-      drivingLicenseNumber,
-      tripType,
-      vehicleId,
-      vehicleName,
-      bookingAmount,
-      discountAmount,
-      createdAt: new Date(),
-    };
-
-    lead.isBookingCreated = true;
-
     await lead.save();
 
-    return res.status(200).json({
+    const companyId = req.user.company || req.user._id;
+
+    // Prevent duplicate booking for same vehicle and same trip
+    const existingBooking = await Booking.findOne({
+      lead: lead._id,
+      vehicleId,
+      fromDate: lead.fromDate,
+      toDate: lead.toDate,
+      isDeleted: false,
+      status: {
+        $nin: ["cancelled", "completed"],
+      },
+    });
+
+    if (existingBooking) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "A booking already exists for this vehicle during the selected trip.",
+      });
+    }
+
+    const booking = await Booking.create({
+      // Relations
+      lead: lead._id,
+      company: companyId,
+      createdBy: req.user._id,
+
+      // Customer
+      customerName: customerName?.trim() || lead.customerName,
+      mobileNumber: mobileNumber?.trim() || lead.mobileNumber,
+      alternateMobileNumber: alternateMobileNumber?.trim() || "",
+      occupation: occupation?.trim() || "",
+
+      // Identity
+      aadhaarNumber: aadhaarNumber?.trim() || "",
+      drivingLicenseNumber:
+        drivingLicenseNumber?.trim().toUpperCase() || "",
+
+      // Trip
+      destination: destination?.trim() || "",
+      tripType: tripType || "local",
+
+      fromDate: lead.fromDate,
+      toDate: lead.toDate,
+      totalDays: lead.totalDays,
+      residents: lead.residents,
+
+      // Vehicle
+      vehicleId,
+      vehicleName,
+
+      // Pricing
+      quotationAmount: lead.quotationAmount || 0,
+      bookingAmount: Number(bookingAmount) || 0,
+      discountAmount: Number(discountAmount) || 0,
+
+      // Status
+      status: "confirmed",
+    });
+
+    await booking.populate([
+      {
+        path: "vehicleId",
+        select:
+          "vehicleName vehicleNumber color manufacturer model pricePerDay",
+      },
+      {
+        path: "lead",
+        select:
+          "leadId customerName mobileNumber vehicleType fromDate toDate totalDays",
+      },
+    ]);
+
+    return res.status(201).json({
       success: true,
-      message: "Booking information saved successfully.",
-      data: lead,
+      message: "Booking created successfully.",
+      data: booking,
     });
   } catch (err) {
+    console.error("Create Booking Error:", err);
     next(err);
   }
 };
@@ -1256,7 +1322,6 @@ export const createLeadBooking = async (req, res, next) => {
 export const getLeadBookingDetails = async (req, res, next) => {
   try {
     const lead = await Lead.findById(req.params.id)
-      .populate("booking.vehicleId", "vehicleName vehicleNumber color")
       .populate("leadOwner", "name email")
       .populate("createdBy", "name");
 
@@ -1267,9 +1332,56 @@ export const getLeadBookingDetails = async (req, res, next) => {
       });
     }
 
+    // Latest booking for this customer
+    const latestBooking = await Booking.findOne({
+      lead: lead._id,
+      isDeleted: false,
+    })
+      .populate(
+        "vehicleId",
+        "vehicleName vehicleNumber color manufacturer model pricePerDay"
+      )
+      .sort({ createdAt: -1 });
+
+    const response = {
+      ...lead.toObject(),
+
+      booking: latestBooking
+        ? {
+            _id: latestBooking._id,
+            bookingCode: latestBooking.bookingCode,
+
+            alternateMobileNumber:
+              latestBooking.alternateMobileNumber || "",
+
+            occupation: latestBooking.occupation || "",
+
+            destination: latestBooking.destination || "",
+
+            aadhaarNumber: latestBooking.aadhaarNumber || "",
+
+            drivingLicenseNumber:
+              latestBooking.drivingLicenseNumber || "",
+
+            tripType: latestBooking.tripType || "local",
+
+            bookingAmount: latestBooking.bookingAmount || 0,
+
+            discountAmount: latestBooking.discountAmount || 0,
+
+            vehicleId: latestBooking.vehicleId,
+          }
+        : null,
+
+      totalBookings: await Booking.countDocuments({
+        lead: lead._id,
+        isDeleted: false,
+      }),
+    };
+
     return res.status(200).json({
       success: true,
-      data: lead,
+      data: response,
     });
   } catch (error) {
     next(error);
