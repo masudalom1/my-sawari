@@ -1207,18 +1207,17 @@ export const getBookingsDashboard = async (req, res) => {
       stats,
       bookings: dashboard,
     });
-  } catch (error) {
-    console.error(error);
+} catch (error) {
+  console.error("===== BOOKING DASHBOARD ERROR =====");
+  console.error(error);
+  console.error(error.stack);
 
-    return res.status(500).json({
-      success: false,
-      message: "Unable to fetch bookings.",
-      error:
-        process.env.NODE_ENV === "development"
-          ? error.message
-          : undefined,
-    });
-  }
+  return res.status(500).json({
+    success: false,
+    message: "Unable to fetch bookings.",
+    error: error.message,
+  });
+}
 };
 
 export const createLeadBooking = async (req, res, next) => {
