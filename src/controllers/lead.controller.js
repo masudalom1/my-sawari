@@ -1550,9 +1550,23 @@ export const createBooking = async (req, res, next) => {
       residents,
 
       vehicleId,
+
       bookingAmount,
       discountAmount,
+
+      // Pickup / Drop Service
+      pickupDropRequired = false,
+      serviceType = "pickup_drop",
+
+      pickup = {},
+      drop = {},
+
+      pickupDropNotes = "",
     } = req.body;
+
+    // =========================
+    // VALIDATIONS
+    // =========================
 
     if (!customerName?.trim()) {
       return res.status(400).json({
@@ -1582,6 +1596,34 @@ export const createBooking = async (req, res, next) => {
       });
     }
 
+    if (pickupDropRequired) {
+      if (
+        (serviceType === "pickup" ||
+          serviceType === "pickup_drop") &&
+        !pickup.location?.trim()
+      ) {
+        return res.status(400).json({
+          success: false,
+          message: "Pickup location is required.",
+        });
+      }
+
+      if (
+        (serviceType === "drop" ||
+          serviceType === "pickup_drop") &&
+        !drop.location?.trim()
+      ) {
+        return res.status(400).json({
+          success: false,
+          message: "Drop location is required.",
+        });
+      }
+    }
+
+    // =========================
+    // VEHICLE
+    // =========================
+
     const vehicle = await Vehicle.findById(vehicleId);
 
     if (!vehicle || vehicle.isDeleted) {
@@ -1591,9 +1633,9 @@ export const createBooking = async (req, res, next) => {
       });
     }
 
-    // ===========================
-    // Combine Date + Time
-    // ===========================
+    // =========================
+    // DATE + TIME
+    // =========================
 
     const createDateTime = (dateString, timeString) => {
       const date = new Date(dateString);
@@ -1606,7 +1648,6 @@ export const createBooking = async (req, res, next) => {
       if (period === "PM" && hours !== 12) hours += 12;
       if (period === "AM" && hours === 12) hours = 0;
 
-      // Store exactly what user selected (local time)
       date.setHours(hours, minutes, 0, 0);
 
       return date;
@@ -1615,20 +1656,47 @@ export const createBooking = async (req, res, next) => {
     const pickupDateTime = createDateTime(fromDate, pickupTime);
     const dropDateTime = createDateTime(toDate, dropTime);
 
-    // ===========================
-    // Calculate Total Days
-    // ===========================
+    // =========================
+    // TOTAL DAYS
+    // =========================
 
     const totalDays = Math.max(
       1,
       Math.ceil(
-        (new Date(toDate).getTime() - new Date(fromDate).getTime()) /
+        (new Date(toDate).getTime() -
+          new Date(fromDate).getTime()) /
           (1000 * 60 * 60 * 24)
       ) + 1
     );
 
-    const quotationAmount =
+    // =========================
+    // PRICING
+    // =========================
+
+    const vehicleRent =
       Number(vehicle.pricePerDay || 0) * totalDays;
+
+    const pickupCharge =
+      pickupDropRequired &&
+      (serviceType === "pickup" ||
+        serviceType === "pickup_drop")
+        ? Number(pickup.charge || 0)
+        : 0;
+
+    const dropCharge =
+      pickupDropRequired &&
+      (serviceType === "drop" ||
+        serviceType === "pickup_drop")
+        ? Number(drop.charge || 0)
+        : 0;
+
+    const serviceCharge = pickupCharge + dropCharge;
+
+    const quotationAmount = vehicleRent + serviceCharge;
+
+    // =========================
+    // CREATE BOOKING
+    // =========================
 
     const booking = await Booking.create({
       lead: null,
@@ -1638,11 +1706,16 @@ export const createBooking = async (req, res, next) => {
 
       customerName: customerName.trim(),
       mobileNumber: mobileNumber.trim(),
-      alternateMobileNumber: alternateMobileNumber?.trim() || "",
+
+      alternateMobileNumber:
+        alternateMobileNumber?.trim() || "",
+
       occupation: occupation?.trim() || "",
 
       destination: destination?.trim() || "",
+
       aadhaarNumber: aadhaarNumber?.trim() || "",
+
       drivingLicenseNumber:
         drivingLicenseNumber?.trim().toUpperCase() || "",
 
@@ -1663,8 +1736,31 @@ export const createBooking = async (req, res, next) => {
       vehicleColor: vehicle.color,
 
       quotationAmount,
+
       bookingAmount: Number(bookingAmount) || 0,
       discountAmount: Number(discountAmount) || 0,
+
+      // =========================
+      // PICKUP / DROP SERVICE
+      // =========================
+
+      pickupDropRequired,
+
+      serviceType,
+
+      pickup: {
+        location: pickup.location?.trim() || "",
+        landmark: pickup.landmark?.trim() || "",
+        charge: pickupCharge,
+      },
+
+      drop: {
+        location: drop.location?.trim() || "",
+        landmark: drop.landmark?.trim() || "",
+        charge: dropCharge,
+      },
+
+      pickupDropNotes: pickupDropNotes?.trim() || "",
 
       status: "confirmed",
     });

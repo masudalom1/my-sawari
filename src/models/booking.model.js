@@ -177,6 +177,67 @@ const bookingSchema = new mongoose.Schema(
       default: 0,
     },
 
+        // =========================
+    // PICKUP / DROP SERVICE
+    // =========================
+
+    pickupDropRequired: {
+      type: Boolean,
+      default: false,
+    },
+
+    serviceType: {
+      type: String,
+      enum: ["pickup", "drop", "pickup_drop"],
+      default: "pickup_drop",
+    },
+
+    pickup: {
+      location: {
+        type: String,
+        default: "",
+        trim: true,
+      },
+
+      landmark: {
+        type: String,
+        default: "",
+        trim: true,
+      },
+
+      charge: {
+        type: Number,
+        default: 0,
+        min: 0,
+      },
+    },
+
+    drop: {
+      location: {
+        type: String,
+        default: "",
+        trim: true,
+      },
+
+      landmark: {
+        type: String,
+        default: "",
+        trim: true,
+      },
+
+      charge: {
+        type: Number,
+        default: 0,
+        min: 0,
+      },
+    },
+
+    pickupDropNotes: {
+      type: String,
+      default: "",
+      trim: true,
+    },
+
     // =========================
     // STATUS
     // =========================
