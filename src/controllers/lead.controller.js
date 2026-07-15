@@ -1160,7 +1160,16 @@ export const getBookingsDashboard = async (req, res) => {
         pickupDate: booking.fromDate,
         dropDate: booking.toDate,
 
+        // Also expose the original booking fields
+        fromDate: booking.fromDate,
+        toDate: booking.toDate,
+
+        pickupTime: booking.pickupTime,
+        dropTime: booking.dropTime,
+
         tripDays: booking.totalDays,
+        totalDays: booking.totalDays,
+
         residents: booking.residents,
 
         quotationAmount: booking.quotationAmount,
