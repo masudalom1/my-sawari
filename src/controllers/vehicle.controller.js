@@ -139,29 +139,37 @@ export const getAvailableVehicles = async (req, res, next) => {
       status: "available",
       isDeleted: false,
     })
-      .select(
-        `
+      .select(`
         _id
         vehicleName
         vehicleNumber
-        color
         manufacturer
         model
+        variant
+        color
         vehicleType
-        status
-        pricePerDay
         seatingCapacity
         transmission
         fuelType
-        `
-      )
+        pricePerDay
+        status
+      `)
       .sort({ vehicleName: 1 })
       .lean();
 
+    const data = vehicles.map((vehicle) => ({
+      ...vehicle,
+
+      pricing: {
+        pricePerDay: vehicle.pricePerDay || 0,
+        currency: "INR",
+      },
+    }));
+
     return res.status(200).json({
       success: true,
-      count: vehicles.length,
-      data: vehicles,
+      count: data.length,
+      data,
     });
   } catch (error) {
     next(error);
