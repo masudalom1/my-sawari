@@ -1095,13 +1095,9 @@ export const getBookingsDashboard = async (req, res) => {
     };
 
     const dashboard = bookings.map((booking) => {
-      const pickup = booking.fromDate
-        ? new Date(booking.fromDate)
-        : null;
+      const pickup = booking.fromDate ? new Date(booking.fromDate) : null;
 
-      const drop = booking.toDate
-        ? new Date(booking.toDate)
-        : null;
+      const drop = booking.toDate ? new Date(booking.toDate) : null;
 
       let status = "Booking Confirmed";
 
@@ -1122,10 +1118,7 @@ export const getBookingsDashboard = async (req, res) => {
         const pickupDay = new Date(pickup);
         pickupDay.setHours(0, 0, 0, 0);
 
-        if (
-          booking.status !== "completed" &&
-          booking.status !== "cancelled"
-        ) {
+        if (booking.status !== "completed" && booking.status !== "cancelled") {
           if (pickupDay.getTime() === today.getTime()) {
             status = "Today's Pickup";
             stats.todayPickup++;
@@ -1176,16 +1169,12 @@ export const getBookingsDashboard = async (req, res) => {
 
         vehicleId: booking.vehicleId?._id || null,
 
-        vehicleName:
-          booking.vehicleId?.vehicleName || booking.vehicleName,
+        vehicleName: booking.vehicleId?.vehicleName || booking.vehicleName,
 
         vehicleNumber:
-          booking.vehicleId?.vehicleNumber ||
-          booking.vehicleNumber,
+          booking.vehicleId?.vehicleNumber || booking.vehicleNumber,
 
-        vehicleColor:
-          booking.vehicleId?.color ||
-          booking.vehicleColor,
+        vehicleColor: booking.vehicleId?.color || booking.vehicleColor,
 
         vehicleType: booking.lead?.vehicleType || "",
 
@@ -1207,8 +1196,7 @@ export const getBookingsDashboard = async (req, res) => {
 
         bookingStatus: booking.status,
 
-        handoverCompleted:
-          booking.status !== "confirmed",
+        handoverCompleted: booking.status !== "confirmed",
 
         handover: booking.handover,
 
@@ -1260,6 +1248,11 @@ export const createLeadBooking = async (req, res, next) => {
       vehicleName,
       bookingAmount,
       discountAmount,
+      // CAPTURE NEW FIELDS FROM MOBILE APP
+      fromDate,
+      toDate,
+      pickupTime,
+      dropTime,
     } = req.body;
 
     if (!vehicleId) {
@@ -1273,25 +1266,25 @@ export const createLeadBooking = async (req, res, next) => {
     if (customerName?.trim()) {
       lead.customerName = customerName.trim();
     }
-
     if (mobileNumber?.trim()) {
       lead.mobileNumber = mobileNumber.trim();
     }
-
     await lead.save();
 
     const companyId = req.user.company || req.user._id;
 
-    // Prevent duplicate booking for same vehicle and same trip
+    // Use current form inputs or fallback to historic lead record
+    const finalFromDate = fromDate ? new Date(fromDate) : lead.fromDate;
+    const finalToDate = toDate ? new Date(toDate) : lead.toDate;
+
+    // Prevent duplicate booking for same vehicle and same trip window
     const existingBooking = await Booking.findOne({
       lead: lead._id,
       vehicleId,
-      fromDate: lead.fromDate,
-      toDate: lead.toDate,
+      fromDate: finalFromDate,
+      toDate: finalToDate,
       isDeleted: false,
-      status: {
-        $nin: ["cancelled", "completed"],
-      },
+      status: { $nin: ["cancelled", "completed"] },
     });
 
     if (existingBooking) {
@@ -1303,41 +1296,34 @@ export const createLeadBooking = async (req, res, next) => {
     }
 
     const booking = await Booking.create({
-      // Relations
       lead: lead._id,
       company: companyId,
       createdBy: req.user._id,
 
-      // Customer
       customerName: customerName?.trim() || lead.customerName,
       mobileNumber: mobileNumber?.trim() || lead.mobileNumber,
       alternateMobileNumber: alternateMobileNumber?.trim() || "",
       occupation: occupation?.trim() || "",
 
-      // Identity
       aadhaarNumber: aadhaarNumber?.trim() || "",
-      drivingLicenseNumber:
-        drivingLicenseNumber?.trim().toUpperCase() || "",
+      drivingLicenseNumber: drivingLicenseNumber?.trim().toUpperCase() || "",
 
-      // Trip
       destination: destination?.trim() || "",
       tripType: tripType || "local",
 
-      fromDate: lead.fromDate,
-      toDate: lead.toDate,
-      totalDays: lead.totalDays,
-      residents: lead.residents,
+      // COMMIT UPDATED DATETIMES TO DB
+      fromDate: finalFromDate,
+      toDate: finalToDate,
+      pickupTime: pickupTime || "09:00 AM",
+      dropTime: dropTime || "06:00 PM",
 
-      // Vehicle
+      residents: lead.residents,
       vehicleId,
       vehicleName,
 
-      // Pricing
       quotationAmount: lead.quotationAmount || 0,
       bookingAmount: Number(bookingAmount) || 0,
       discountAmount: Number(discountAmount) || 0,
-
-      // Status
       status: "confirmed",
     });
 
@@ -1384,7 +1370,7 @@ export const getLeadBookingDetails = async (req, res, next) => {
     })
       .populate(
         "vehicleId",
-        "vehicleName vehicleNumber color manufacturer model pricePerDay"
+        "vehicleName vehicleNumber color manufacturer model pricePerDay",
       )
       .sort({ createdAt: -1 });
 
@@ -1403,8 +1389,7 @@ export const getLeadBookingDetails = async (req, res, next) => {
 
             customerName: latestBooking.customerName,
             mobileNumber: latestBooking.mobileNumber,
-            alternateMobileNumber:
-              latestBooking.alternateMobileNumber || "",
+            alternateMobileNumber: latestBooking.alternateMobileNumber || "",
 
             occupation: latestBooking.occupation || "",
 
@@ -1412,8 +1397,7 @@ export const getLeadBookingDetails = async (req, res, next) => {
 
             aadhaarNumber: latestBooking.aadhaarNumber || "",
 
-            drivingLicenseNumber:
-              latestBooking.drivingLicenseNumber || "",
+            drivingLicenseNumber: latestBooking.drivingLicenseNumber || "",
 
             tripType: latestBooking.tripType,
 
@@ -1426,20 +1410,20 @@ export const getLeadBookingDetails = async (req, res, next) => {
             vehicleId: latestBooking.vehicleId,
 
             vehicleName:
-              latestBooking.vehicleId?.vehicleName ||
-              latestBooking.vehicleName,
+              latestBooking.vehicleId?.vehicleName || latestBooking.vehicleName,
 
             vehicleNumber:
               latestBooking.vehicleId?.vehicleNumber ||
               latestBooking.vehicleNumber,
 
             vehicleColor:
-              latestBooking.vehicleId?.color ||
-              latestBooking.vehicleColor,
+              latestBooking.vehicleId?.color || latestBooking.vehicleColor,
 
             fromDate: latestBooking.fromDate,
 
             toDate: latestBooking.toDate,
+            pickupTime: latestBooking.pickupTime || "08:00 AM",
+            dropTime: latestBooking.dropTime || "08:00 PM",
 
             totalDays: latestBooking.totalDays,
 
@@ -1452,8 +1436,7 @@ export const getLeadBookingDetails = async (req, res, next) => {
         : {
             customerName: lead.customerName,
             mobileNumber: lead.mobileNumber,
-            alternateMobileNumber:
-              lead.booking?.alternateMobileNumber || "",
+            alternateMobileNumber: lead.booking?.alternateMobileNumber || "",
 
             occupation: lead.booking?.occupation || "",
 
@@ -1461,25 +1444,19 @@ export const getLeadBookingDetails = async (req, res, next) => {
 
             aadhaarNumber: lead.booking?.aadhaarNumber || "",
 
-            drivingLicenseNumber:
-              lead.booking?.drivingLicenseNumber || "",
+            drivingLicenseNumber: lead.booking?.drivingLicenseNumber || "",
 
             tripType: lead.booking?.tripType || "local",
 
-            bookingAmount:
-              lead.booking?.bookingAmount || 0,
+            bookingAmount: lead.booking?.bookingAmount || 0,
 
-            discountAmount:
-              lead.booking?.discountAmount || 0,
+            discountAmount: lead.booking?.discountAmount || 0,
 
-            quotationAmount:
-              lead.quotationAmount || 0,
+            quotationAmount: lead.quotationAmount || 0,
 
             vehicleId: lead.booking?.vehicleId || null,
 
-            vehicleName:
-              lead.booking?.vehicleName ||
-              lead.vehicleName,
+            vehicleName: lead.booking?.vehicleName || lead.vehicleName,
 
             vehicleNumber: "",
 
@@ -1529,7 +1506,7 @@ export const getLeadBookings = async (req, res, next) => {
     })
       .populate(
         "vehicleId",
-        "vehicleName vehicleNumber color manufacturer model"
+        "vehicleName vehicleNumber color manufacturer model",
       )
       .populate("createdBy", "name fullName")
       .sort({ createdAt: -1 });
