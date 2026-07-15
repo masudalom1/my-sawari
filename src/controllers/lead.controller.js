@@ -1529,3 +1529,119 @@ export const getLeadBookings = async (req, res, next) => {
     next(error);
   }
 };
+
+export const createBooking = async (req, res, next) => {
+  try {
+    const {
+      customerName,
+      mobileNumber,
+      alternateMobileNumber,
+      occupation,
+      destination,
+      aadhaarNumber,
+      drivingLicenseNumber,
+
+      tripType,
+      fromDate,
+      toDate,
+      pickupTime,
+      dropTime,
+      residents,
+
+      vehicleId,
+      bookingAmount,
+      discountAmount,
+    } = req.body;
+
+    if (!customerName?.trim()) {
+      return res.status(400).json({
+        success: false,
+        message: "Customer name is required.",
+      });
+    }
+
+    if (!mobileNumber?.trim()) {
+      return res.status(400).json({
+        success: false,
+        message: "Mobile number is required.",
+      });
+    }
+
+    if (!vehicleId) {
+      return res.status(400).json({
+        success: false,
+        message: "Vehicle is required.",
+      });
+    }
+
+    if (!fromDate || !toDate) {
+      return res.status(400).json({
+        success: false,
+        message: "Trip dates are required.",
+      });
+    }
+
+    const vehicle = await Vehicle.findById(vehicleId);
+
+    if (!vehicle || vehicle.isDeleted) {
+      return res.status(404).json({
+        success: false,
+        message: "Vehicle not found.",
+      });
+    }
+
+    const booking = await Booking.create({
+      // No lead for manual booking
+      lead: null,
+
+      company: req.user.company || req.user._id,
+      createdBy: req.user._id,
+
+      customerName,
+      mobileNumber,
+      alternateMobileNumber,
+      occupation,
+
+      destination,
+      aadhaarNumber,
+      drivingLicenseNumber,
+
+      tripType: tripType || "local",
+
+      fromDate,
+      toDate,
+      pickupTime,
+      dropTime,
+
+      residents: residents || 1,
+
+      vehicleId: vehicle._id,
+      vehicleName: vehicle.vehicleName,
+      vehicleNumber: vehicle.vehicleNumber,
+      vehicleColor: vehicle.color,
+
+      quotationAmount:
+        Number(vehicle.pricePerDay || 0) *
+        Math.max(
+          1,
+          Math.ceil(
+            (new Date(toDate) - new Date(fromDate)) /
+              (1000 * 60 * 60 * 24)
+          ) + 1
+        ),
+
+      bookingAmount: Number(bookingAmount) || 0,
+      discountAmount: Number(discountAmount) || 0,
+
+      status: "confirmed",
+    });
+
+    return res.status(201).json({
+      success: true,
+      message: "Booking created successfully.",
+      booking,
+    });
+  } catch (error) {
+    next(error);
+  }
+};

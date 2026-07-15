@@ -3,6 +3,7 @@ import protect from "../middlewares/auth.middleware.js";
 
 import {
   checkLeadByMobile,
+  createBooking,
   createLead,
   createLeadBooking,
   getBookingsDashboard,
@@ -35,5 +36,6 @@ router.get("/check/:mobile",protect,checkLeadByMobile);
 router.put("/:id/create-booking",protect,createLeadBooking);
 router.get("/:id/create-booking",protect,getLeadBookingDetails);
 router.get("/:id/bookings",protect,getLeadBookings);
+router.post("/create",protect,createBooking);
 
 export default router;
