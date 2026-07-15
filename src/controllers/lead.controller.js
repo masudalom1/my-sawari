@@ -1591,46 +1591,78 @@ export const createBooking = async (req, res, next) => {
       });
     }
 
+    // ===========================
+    // Combine Date + Time
+    // ===========================
+
+    const createDateTime = (dateString, timeString) => {
+      const date = new Date(dateString);
+
+      if (!timeString) return date;
+
+      const [time, period] = timeString.split(" ");
+      let [hours, minutes] = time.split(":").map(Number);
+
+      if (period === "PM" && hours !== 12) hours += 12;
+      if (period === "AM" && hours === 12) hours = 0;
+
+      // Store exactly what user selected (local time)
+      date.setHours(hours, minutes, 0, 0);
+
+      return date;
+    };
+
+    const pickupDateTime = createDateTime(fromDate, pickupTime);
+    const dropDateTime = createDateTime(toDate, dropTime);
+
+    // ===========================
+    // Calculate Total Days
+    // ===========================
+
+    const totalDays = Math.max(
+      1,
+      Math.ceil(
+        (new Date(toDate).getTime() - new Date(fromDate).getTime()) /
+          (1000 * 60 * 60 * 24)
+      ) + 1
+    );
+
+    const quotationAmount =
+      Number(vehicle.pricePerDay || 0) * totalDays;
+
     const booking = await Booking.create({
-      // No lead for manual booking
       lead: null,
 
       company: req.user.company || req.user._id,
       createdBy: req.user._id,
 
-      customerName,
-      mobileNumber,
-      alternateMobileNumber,
-      occupation,
+      customerName: customerName.trim(),
+      mobileNumber: mobileNumber.trim(),
+      alternateMobileNumber: alternateMobileNumber?.trim() || "",
+      occupation: occupation?.trim() || "",
 
-      destination,
-      aadhaarNumber,
-      drivingLicenseNumber,
+      destination: destination?.trim() || "",
+      aadhaarNumber: aadhaarNumber?.trim() || "",
+      drivingLicenseNumber:
+        drivingLicenseNumber?.trim().toUpperCase() || "",
 
       tripType: tripType || "local",
 
-      fromDate,
-      toDate,
+      fromDate: pickupDateTime,
+      toDate: dropDateTime,
+
       pickupTime,
       dropTime,
 
-      residents: residents || 1,
+      totalDays,
+      residents: Number(residents) || 1,
 
       vehicleId: vehicle._id,
       vehicleName: vehicle.vehicleName,
       vehicleNumber: vehicle.vehicleNumber,
       vehicleColor: vehicle.color,
 
-      quotationAmount:
-        Number(vehicle.pricePerDay || 0) *
-        Math.max(
-          1,
-          Math.ceil(
-            (new Date(toDate) - new Date(fromDate)) /
-              (1000 * 60 * 60 * 24)
-          ) + 1
-        ),
-
+      quotationAmount,
       bookingAmount: Number(bookingAmount) || 0,
       discountAmount: Number(discountAmount) || 0,
 
