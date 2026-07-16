@@ -568,12 +568,6 @@ export const createHandover = async (req, res, next) => {
 
     const booking = await Booking.findById(bookingId);
 
-    if (!booking) {
-      return res.status(404).json({
-        success: false,
-        message: "Booking not found",
-      });
-    }
     // ==========================
     // CREATE HANDOVER
     // ==========================

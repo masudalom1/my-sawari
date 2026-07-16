@@ -39,10 +39,10 @@ const bookingSchema = new mongoose.Schema(
     // CUSTOMER DETAILS
     // =========================
     bookingId: {
-  type: mongoose.Schema.Types.ObjectId,
-  ref: "Booking",
-  index: true,
-},
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Booking",
+      index: true,
+    },
 
     customerName: {
       type: String,
@@ -322,7 +322,7 @@ const bookingSchema = new mongoose.Schema(
   },
   {
     timestamps: true,
-  }
+  },
 );
 
 // =========================
@@ -337,13 +337,9 @@ bookingSchema.pre("save", function () {
 
   if (this.fromDate && this.toDate) {
     const diff =
-      new Date(this.toDate).getTime() -
-      new Date(this.fromDate).getTime();
+      new Date(this.toDate).getTime() - new Date(this.fromDate).getTime();
 
-    this.totalDays = Math.max(
-      1,
-      Math.ceil(diff / (1000 * 60 * 60 * 24)) + 1
-    );
+    this.totalDays = Math.max(1, Math.ceil(diff / (1000 * 60 * 60 * 24)) + 1);
   }
 });
 
