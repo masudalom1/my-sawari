@@ -38,6 +38,11 @@ const bookingSchema = new mongoose.Schema(
     // =========================
     // CUSTOMER DETAILS
     // =========================
+    bookingId: {
+  type: mongoose.Schema.Types.ObjectId,
+  ref: "Booking",
+  index: true,
+},
 
     customerName: {
       type: String,
