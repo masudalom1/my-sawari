@@ -3,6 +3,7 @@ import Handover from "../models/handover.model.js";
 import Vehicle from "../models/vehicle.model.js";
 import { sendBookingConfirmation } from "../services/wati.service.js";
 import VehicleReturn from "../models/vehicleReturn.model.js";
+import Booking from "../models/booking.model.js";
 
 // ==========================================
 // Draft contoller
@@ -489,8 +490,16 @@ export const completeDraftHandover = async (req, res) => {
 // ==========================================
 export const createHandover = async (req, res, next) => {
   try {
-    const { bookingId, customer, identity, vehicle, trip, payment, notes, bookingStatus } =
-      req.body;
+    const {
+      bookingId,
+      customer,
+      identity,
+      vehicle,
+      trip,
+      payment,
+      notes,
+      bookingStatus,
+    } = req.body;
 
     const files = req.files || {};
 
@@ -559,19 +568,19 @@ export const createHandover = async (req, res, next) => {
 
     const booking = await Booking.findById(bookingId);
 
-if (!booking) {
-  return res.status(404).json({
-    success: false,
-    message: "Booking not found",
-  });
-}
+    if (!booking) {
+      return res.status(404).json({
+        success: false,
+        message: "Booking not found",
+      });
+    }
     // ==========================
     // CREATE HANDOVER
     // ==========================
     const handover = await Handover.create({
       company: req.user.company || req.user._id,
       createdBy: req.user._id,
-bookingId,
+      bookingId,
       customer: {
         fullName: customer.fullName,
         mobileNumber: customer.mobileNumber,
@@ -664,10 +673,10 @@ bookingId,
     }
 
     await selectedVehicle.save();
-await Booking.findByIdAndUpdate(bookingId, {
-  handover: handover._id,
-  status: "vehicle_handover",
-});
+    await Booking.findByIdAndUpdate(bookingId, {
+      handover: handover._id,
+      status: "vehicle_handover",
+    });
     // ==========================
     // SEND WHATSAPP BOOKING MESSAGE
     // ==========================
