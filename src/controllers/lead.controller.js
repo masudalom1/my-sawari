@@ -1258,11 +1258,17 @@ export const createLeadBooking = async (req, res, next) => {
       vehicleName,
       bookingAmount,
       discountAmount,
-      // CAPTURE NEW FIELDS FROM MOBILE APP
       fromDate,
       toDate,
       pickupTime,
       dropTime,
+
+      // PICKUP / DROP SERVICE FIELDS FROM MOBILE APP
+      pickupDropRequired,
+      serviceType,
+      pickup,
+      drop,
+      pickupDropNotes,
     } = req.body;
 
     if (!vehicleId) {
@@ -1305,6 +1311,42 @@ export const createLeadBooking = async (req, res, next) => {
       });
     }
 
+    // Normalize pickup/drop service inputs — only persist the leg(s) that
+    // actually apply to the chosen serviceType, so a "pickup" only booking
+    // doesn't carry stray drop details (and vice versa).
+    const isPickupDropRequired = Boolean(pickupDropRequired);
+    const finalServiceType = ["pickup", "drop", "pickup_drop"].includes(
+      serviceType,
+    )
+      ? serviceType
+      : "pickup_drop";
+
+    const includesPickup =
+      isPickupDropRequired &&
+      (finalServiceType === "pickup" || finalServiceType === "pickup_drop");
+
+    const includesDrop =
+      isPickupDropRequired &&
+      (finalServiceType === "drop" || finalServiceType === "pickup_drop");
+
+    const pickupDetails = includesPickup
+      ? {
+          location: pickup?.location?.trim() || "",
+          landmark: pickup?.landmark?.trim() || "",
+          mapLink: pickup?.mapLink?.trim() || "",
+          charge: Number(pickup?.charge) || 0,
+        }
+      : { location: "", landmark: "", mapLink: "", charge: 0 };
+
+    const dropDetails = includesDrop
+      ? {
+          location: drop?.location?.trim() || "",
+          landmark: drop?.landmark?.trim() || "",
+          mapLink: drop?.mapLink?.trim() || "",
+          charge: Number(drop?.charge) || 0,
+        }
+      : { location: "", landmark: "", mapLink: "", charge: 0 };
+
     const booking = await Booking.create({
       lead: lead._id,
       company: companyId,
@@ -1321,7 +1363,6 @@ export const createLeadBooking = async (req, res, next) => {
       destination: destination?.trim() || "",
       tripType: tripType || "local",
 
-      // COMMIT UPDATED DATETIMES TO DB
       fromDate: finalFromDate,
       toDate: finalToDate,
       pickupTime: pickupTime || "09:00 AM",
@@ -1334,6 +1375,14 @@ export const createLeadBooking = async (req, res, next) => {
       quotationAmount: lead.quotationAmount || 0,
       bookingAmount: Number(bookingAmount) || 0,
       discountAmount: Number(discountAmount) || 0,
+
+      // PERSIST PICKUP / DROP SERVICE
+      pickupDropRequired: isPickupDropRequired,
+      serviceType: finalServiceType,
+      pickup: pickupDetails,
+      drop: dropDetails,
+      pickupDropNotes: pickupDropNotes?.trim() || "",
+
       status: "confirmed",
     });
 

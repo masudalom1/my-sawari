@@ -177,7 +177,7 @@ const bookingSchema = new mongoose.Schema(
       default: 0,
     },
 
-        // =========================
+    // =========================
     // PICKUP / DROP SERVICE
     // =========================
 
@@ -205,6 +205,12 @@ const bookingSchema = new mongoose.Schema(
         trim: true,
       },
 
+      mapLink: {
+        type: String,
+        default: "",
+        trim: true,
+      },
+
       charge: {
         type: Number,
         default: 0,
@@ -220,6 +226,12 @@ const bookingSchema = new mongoose.Schema(
       },
 
       landmark: {
+        type: String,
+        default: "",
+        trim: true,
+      },
+
+      mapLink: {
         type: String,
         default: "",
         trim: true,

@@ -1116,71 +1116,71 @@ export const getReceiveCarList = async (req, res) => {
       const obj = handover.toObject();
 
       //new added for calculate overdue time and don't move overdue untile date chnage
-    const now = new Date();
-const dropDateTime = new Date(obj.trip.dropDateTime);
+      const now = new Date();
+      const dropDateTime = new Date(obj.trip.dropDateTime);
 
-const diffMs = dropDateTime.getTime() - now.getTime();
-const absMs = Math.abs(diffMs);
+      const diffMs = dropDateTime.getTime() - now.getTime();
+      const absMs = Math.abs(diffMs);
 
-const days = Math.floor(absMs / (1000 * 60 * 60 * 24));
-const hours = Math.floor((absMs / (1000 * 60 * 60)) % 24);
-const minutes = Math.floor((absMs / (1000 * 60)) % 60);
+      const days = Math.floor(absMs / (1000 * 60 * 60 * 24));
+      const hours = Math.floor((absMs / (1000 * 60 * 60)) % 24);
+      const minutes = Math.floor((absMs / (1000 * 60)) % 60);
 
-const formatDuration = () => {
-  const parts = [];
+      const formatDuration = () => {
+        const parts = [];
 
-  if (days > 0) parts.push(`${days}d`);
-  if (hours > 0) parts.push(`${hours}h`);
-  if (minutes > 0 || parts.length === 0) parts.push(`${minutes}m`);
+        if (days > 0) parts.push(`${days}d`);
+        if (hours > 0) parts.push(`${hours}h`);
+        if (minutes > 0 || parts.length === 0) parts.push(`${minutes}m`);
 
-  return parts.join(" ");
-};
+        return parts.join(" ");
+      };
 
-const today = new Date();
-today.setHours(0, 0, 0, 0);
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
 
-const tomorrow = new Date(today);
-tomorrow.setDate(tomorrow.getDate() + 1);
+      const tomorrow = new Date(today);
+      tomorrow.setDate(tomorrow.getDate() + 1);
 
-const dropDay = new Date(dropDateTime);
-dropDay.setHours(0, 0, 0, 0);
+      const dropDay = new Date(dropDateTime);
+      dropDay.setHours(0, 0, 0, 0);
 
-const isToday = dropDay.getTime() === today.getTime();
-const isTomorrow = dropDay.getTime() === tomorrow.getTime();
+      const isToday = dropDay.getTime() === today.getTime();
+      const isTomorrow = dropDay.getTime() === tomorrow.getTime();
 
-let receiveStatus = "";
-let receiveLabel = "";
+      let receiveStatus = "";
+      let receiveLabel = "";
 
-if (diffMs >= 0) {
-  if (isToday) {
-    receiveStatus = "today";
-  } else if (isTomorrow) {
-    receiveStatus = "tomorrow";
-  } else {
-    receiveStatus = "upcoming";
-  }
+      if (diffMs >= 0) {
+        if (isToday) {
+          receiveStatus = "today";
+        } else if (isTomorrow) {
+          receiveStatus = "tomorrow";
+        } else {
+          receiveStatus = "upcoming";
+        }
 
-  receiveLabel = `Due in ${formatDuration()}`;
-} else {
-  if (isToday) {
-    // Stay in Today tab until the day changes
-    receiveStatus = "today_overdue";
-  } else {
-    // Next day onwards
-    receiveStatus = "overdue";
-  }
+        receiveLabel = `Due in ${formatDuration()}`;
+      } else {
+        if (isToday) {
+          // Stay in Today tab until the day changes
+          receiveStatus = "today_overdue";
+        } else {
+          // Next day onwards
+          receiveStatus = "overdue";
+        }
 
-  receiveLabel = `Overdue by ${formatDuration()}`;
-}
+        receiveLabel = `Overdue by ${formatDuration()}`;
+      }
 
-obj.receiveTracker = {
-  status: receiveStatus,
-  label: receiveLabel,
-  overdue: diffMs < 0,
-  isToday,
-  isTomorrow,
-  remainingMs: diffMs,
-};
+      obj.receiveTracker = {
+        status: receiveStatus,
+        label: receiveLabel,
+        overdue: diffMs < 0,
+        isToday,
+        isTomorrow,
+        remainingMs: diffMs,
+      };
 
       // Always include created by user
       obj.createdByUser = handover.createdBy
