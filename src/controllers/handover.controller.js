@@ -1116,11 +1116,10 @@ export const getReceiveCarList = async (req, res) => {
       const obj = handover.toObject();
 
       //new added for calculate overdue time and don't move overdue untile date chnage
-      const now = new Date();
+    const now = new Date();
 const dropDateTime = new Date(obj.trip.dropDateTime);
 
 const diffMs = dropDateTime.getTime() - now.getTime();
-
 const absMs = Math.abs(diffMs);
 
 const days = Math.floor(absMs / (1000 * 60 * 60 * 24));
@@ -1130,9 +1129,9 @@ const minutes = Math.floor((absMs / (1000 * 60)) % 60);
 const formatDuration = () => {
   const parts = [];
 
-  if (days) parts.push(`${days}d`);
-  if (hours) parts.push(`${hours}h`);
-  if (minutes || parts.length === 0) parts.push(`${minutes}m`);
+  if (days > 0) parts.push(`${days}d`);
+  if (hours > 0) parts.push(`${hours}h`);
+  if (minutes > 0 || parts.length === 0) parts.push(`${minutes}m`);
 
   return parts.join(" ");
 };
@@ -1140,28 +1139,38 @@ const formatDuration = () => {
 const today = new Date();
 today.setHours(0, 0, 0, 0);
 
+const tomorrow = new Date(today);
+tomorrow.setDate(tomorrow.getDate() + 1);
+
 const dropDay = new Date(dropDateTime);
 dropDay.setHours(0, 0, 0, 0);
 
-const isToday =
-  today.getTime() === dropDay.getTime();
+const isToday = dropDay.getTime() === today.getTime();
+const isTomorrow = dropDay.getTime() === tomorrow.getTime();
 
-const isPastTime = now > dropDateTime;
-
-let receiveStatus = "upcoming";
+let receiveStatus = "";
 let receiveLabel = "";
 
-if (diffMs > 0) {
-  receiveStatus = "upcoming";
+if (diffMs >= 0) {
+  if (isToday) {
+    receiveStatus = "today";
+  } else if (isTomorrow) {
+    receiveStatus = "tomorrow";
+  } else {
+    receiveStatus = "upcoming";
+  }
+
   receiveLabel = `Due in ${formatDuration()}`;
 } else {
   if (isToday) {
+    // Stay in Today tab until the day changes
     receiveStatus = "today_overdue";
-    receiveLabel = `Overdue by ${formatDuration()}`;
   } else {
+    // Next day onwards
     receiveStatus = "overdue";
-    receiveLabel = `Overdue by ${formatDuration()}`;
   }
+
+  receiveLabel = `Overdue by ${formatDuration()}`;
 }
 
 obj.receiveTracker = {
@@ -1169,6 +1178,7 @@ obj.receiveTracker = {
   label: receiveLabel,
   overdue: diffMs < 0,
   isToday,
+  isTomorrow,
   remainingMs: diffMs,
 };
 
