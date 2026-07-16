@@ -1683,27 +1683,38 @@ export const createBooking = async (req, res, next) => {
     }
 
     // =========================
-    // DATE + TIME
+    // DATES
     // =========================
+    // Keep fromDate/toDate date-only (no time-of-day baked in). This matches
+    // createLeadBooking and keeps the schema's pre-save totalDays calc
+    // (which re-derives totalDays from fromDate/toDate) consistent with the
+    // totalDays used below to compute quotationAmount. pickupTime/dropTime
+    // are stored separately as display strings, same as the lead flow.
 
-    const createDateTime = (dateString, timeString) => {
-      const date = new Date(dateString);
+    const finalFromDate = new Date(fromDate);
+    const finalToDate = new Date(toDate);
 
-      if (!timeString) return date;
+    // =========================
+    // DUPLICATE BOOKING CHECK
+    // =========================
+    // Prevent double-booking the same vehicle for an overlapping trip window,
+    // mirroring the guard in createLeadBooking.
 
-      const [time, period] = timeString.split(" ");
-      let [hours, minutes] = time.split(":").map(Number);
+    const existingBooking = await Booking.findOne({
+      vehicleId,
+      fromDate: finalFromDate,
+      toDate: finalToDate,
+      isDeleted: false,
+      status: { $nin: ["cancelled", "completed"] },
+    });
 
-      if (period === "PM" && hours !== 12) hours += 12;
-      if (period === "AM" && hours === 12) hours = 0;
-
-      date.setHours(hours, minutes, 0, 0);
-
-      return date;
-    };
-
-    const pickupDateTime = createDateTime(fromDate, pickupTime);
-    const dropDateTime = createDateTime(toDate, dropTime);
+    if (existingBooking) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "A booking already exists for this vehicle during the selected trip.",
+      });
+    }
 
     // =========================
     // TOTAL DAYS
@@ -1712,8 +1723,7 @@ export const createBooking = async (req, res, next) => {
     const totalDays = Math.max(
       1,
       Math.ceil(
-        (new Date(toDate).getTime() -
-          new Date(fromDate).getTime()) /
+        (finalToDate.getTime() - finalFromDate.getTime()) /
           (1000 * 60 * 60 * 24)
       ) + 1
     );
@@ -1770,11 +1780,11 @@ export const createBooking = async (req, res, next) => {
 
       tripType: tripType || "local",
 
-      fromDate: pickupDateTime,
-      toDate: dropDateTime,
+      fromDate: finalFromDate,
+      toDate: finalToDate,
 
-      pickupTime,
-      dropTime,
+      pickupTime: pickupTime || "09:00 AM",
+      dropTime: dropTime || "06:00 PM",
 
       totalDays,
       residents: Number(residents) || 1,
@@ -1800,18 +1810,26 @@ export const createBooking = async (req, res, next) => {
       pickup: {
         location: pickup.location?.trim() || "",
         landmark: pickup.landmark?.trim() || "",
+        mapLink: pickup.mapLink?.trim() || "",
         charge: pickupCharge,
       },
 
       drop: {
         location: drop.location?.trim() || "",
         landmark: drop.landmark?.trim() || "",
+        mapLink: drop.mapLink?.trim() || "",
         charge: dropCharge,
       },
 
       pickupDropNotes: pickupDropNotes?.trim() || "",
 
       status: "confirmed",
+    });
+
+    await booking.populate({
+      path: "vehicleId",
+      select:
+        "vehicleName vehicleNumber color manufacturer model pricePerDay",
     });
 
     return res.status(201).json({
