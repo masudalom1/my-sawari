@@ -1211,6 +1211,13 @@ export const getBookingsDashboard = async (req, res) => {
         handover: booking.handover,
 
         vehicleReturn: booking.vehicleReturn,
+        pickupDropRequired: booking.pickupDropRequired,
+        serviceType: booking.serviceType,
+
+        pickup: booking.pickup,
+        drop: booking.drop,
+
+        pickupDropNotes: booking.pickupDropNotes,
 
         createdAt: booking.createdAt,
       };
@@ -1647,8 +1654,7 @@ export const createBooking = async (req, res, next) => {
 
     if (pickupDropRequired) {
       if (
-        (serviceType === "pickup" ||
-          serviceType === "pickup_drop") &&
+        (serviceType === "pickup" || serviceType === "pickup_drop") &&
         !pickup.location?.trim()
       ) {
         return res.status(400).json({
@@ -1658,8 +1664,7 @@ export const createBooking = async (req, res, next) => {
       }
 
       if (
-        (serviceType === "drop" ||
-          serviceType === "pickup_drop") &&
+        (serviceType === "drop" || serviceType === "pickup_drop") &&
         !drop.location?.trim()
       ) {
         return res.status(400).json({
@@ -1724,28 +1729,25 @@ export const createBooking = async (req, res, next) => {
       1,
       Math.ceil(
         (finalToDate.getTime() - finalFromDate.getTime()) /
-          (1000 * 60 * 60 * 24)
-      ) + 1
+          (1000 * 60 * 60 * 24),
+      ) + 1,
     );
 
     // =========================
     // PRICING
     // =========================
 
-    const vehicleRent =
-      Number(vehicle.pricePerDay || 0) * totalDays;
+    const vehicleRent = Number(vehicle.pricePerDay || 0) * totalDays;
 
     const pickupCharge =
       pickupDropRequired &&
-      (serviceType === "pickup" ||
-        serviceType === "pickup_drop")
+      (serviceType === "pickup" || serviceType === "pickup_drop")
         ? Number(pickup.charge || 0)
         : 0;
 
     const dropCharge =
       pickupDropRequired &&
-      (serviceType === "drop" ||
-        serviceType === "pickup_drop")
+      (serviceType === "drop" || serviceType === "pickup_drop")
         ? Number(drop.charge || 0)
         : 0;
 
@@ -1766,8 +1768,7 @@ export const createBooking = async (req, res, next) => {
       customerName: customerName.trim(),
       mobileNumber: mobileNumber.trim(),
 
-      alternateMobileNumber:
-        alternateMobileNumber?.trim() || "",
+      alternateMobileNumber: alternateMobileNumber?.trim() || "",
 
       occupation: occupation?.trim() || "",
 
@@ -1775,8 +1776,7 @@ export const createBooking = async (req, res, next) => {
 
       aadhaarNumber: aadhaarNumber?.trim() || "",
 
-      drivingLicenseNumber:
-        drivingLicenseNumber?.trim().toUpperCase() || "",
+      drivingLicenseNumber: drivingLicenseNumber?.trim().toUpperCase() || "",
 
       tripType: tripType || "local",
 
@@ -1828,8 +1828,7 @@ export const createBooking = async (req, res, next) => {
 
     await booking.populate({
       path: "vehicleId",
-      select:
-        "vehicleName vehicleNumber color manufacturer model pricePerDay",
+      select: "vehicleName vehicleNumber color manufacturer model pricePerDay",
     });
 
     return res.status(201).json({
