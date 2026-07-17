@@ -1057,11 +1057,22 @@ export const getLeadHistory = async (req, res) => {
 
 export const getBookingsDashboard = async (req, res) => {
   try {
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
+    // ==========================
+    // IST DATE HELPERS
+    // ==========================
+    const getISTDateString = (date) =>
+      new Date(date).toLocaleDateString("en-CA", {
+        timeZone: "Asia/Kolkata",
+      }); // YYYY-MM-DD
 
-    const tomorrow = new Date(today);
-    tomorrow.setDate(today.getDate() + 1);
+    const now = new Date();
+
+    const today = getISTDateString(now);
+
+    const tomorrowDate = new Date(now);
+    tomorrowDate.setDate(tomorrowDate.getDate() + 1);
+
+    const tomorrow = getISTDateString(tomorrowDate);
 
     const bookings = await Booking.find({
       isDeleted: false,
@@ -1096,12 +1107,11 @@ export const getBookingsDashboard = async (req, res) => {
     };
 
     const dashboard = bookings.map((booking) => {
-      const pickup = booking.fromDate ? new Date(booking.fromDate) : null;
-
-      const drop = booking.toDate ? new Date(booking.toDate) : null;
-
       let status = "Booking Confirmed";
 
+      // ==========================
+      // COMPLETED / CANCELLED
+      // ==========================
       if (booking.status === "completed") {
         status = "Completed";
         stats.completed++;
@@ -1115,27 +1125,37 @@ export const getBookingsDashboard = async (req, res) => {
         stats.pendingHandover++;
       }
 
-      if (pickup) {
-        const pickupDay = new Date(pickup);
-        pickupDay.setHours(0, 0, 0, 0);
-
-        if (booking.status !== "completed" && booking.status !== "cancelled") {
-          if (pickupDay.getTime() === today.getTime()) {
-            status = "Today's Pickup";
-            stats.todayPickup++;
-          } else if (pickupDay.getTime() === tomorrow.getTime()) {
-            status = "Tomorrow's Pickup";
-            stats.tomorrowPickup++;
-          }
-        }
-      }
-
+      // ==========================
+      // ACTIVE RENTAL
+      // ==========================
       if (
         booking.status === "active" ||
         booking.status === "vehicle_handover"
       ) {
         status = "Active Rental";
         stats.activeRentals++;
+      }
+
+      // ==========================
+      // TODAY / TOMORROW PICKUP
+      // DATE ONLY (TIME IGNORED)
+      // ==========================
+      if (
+        booking.fromDate &&
+        booking.status !== "completed" &&
+        booking.status !== "cancelled" &&
+        booking.status !== "active" &&
+        booking.status !== "vehicle_handover"
+      ) {
+        const pickupDate = getISTDateString(booking.fromDate);
+
+        if (pickupDate === today) {
+          status = "Today's Pickup";
+          stats.todayPickup++;
+        } else if (pickupDate === tomorrow) {
+          status = "Tomorrow's Pickup";
+          stats.tomorrowPickup++;
+        }
       }
 
       return {
@@ -1161,7 +1181,6 @@ export const getBookingsDashboard = async (req, res) => {
         pickupDate: booking.fromDate,
         dropDate: booking.toDate,
 
-        // Also expose the original booking fields
         fromDate: booking.fromDate,
         toDate: booking.toDate,
 
@@ -1211,6 +1230,7 @@ export const getBookingsDashboard = async (req, res) => {
         handover: booking.handover,
 
         vehicleReturn: booking.vehicleReturn,
+
         pickupDropRequired: booking.pickupDropRequired,
         serviceType: booking.serviceType,
 
