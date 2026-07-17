@@ -1163,29 +1163,26 @@ export const getReceiveCarList = async (req, res) => {
       const isTomorrow = dropDay.getTime() === tomorrow.getTime();
 
       let receiveStatus = "";
-      let receiveLabel = "";
+let receiveLabel = "";
 
-      if (diffMs >= 0) {
-        if (isToday) {
-          receiveStatus = "today";
-        } else if (isTomorrow) {
-          receiveStatus = "tomorrow";
-        } else {
-          receiveStatus = "upcoming";
-        }
-
-        receiveLabel = `Due in ${formatDuration()}`;
-      } else {
-        if (isToday) {
-          // Stay in Today tab until the day changes
-          receiveStatus = "today_overdue";
-        } else {
-          // Next day onwards
-          receiveStatus = "overdue";
-        }
-
-        receiveLabel = `Overdue by ${formatDuration()}`;
-      }
+if (isToday) {
+  // Always stay in Today tab for the entire day
+  receiveStatus = diffMs >= 0 ? "today" : "today_overdue";
+  receiveLabel =
+    diffMs >= 0
+      ? `Due in ${formatDuration()}`
+      : `Overdue by ${formatDuration()}`;
+} else if (isTomorrow) {
+  receiveStatus = "tomorrow";
+  receiveLabel = `Due in ${formatDuration()}`;
+} else if (dropDay < today) {
+  // Only previous dates are overdue
+  receiveStatus = "overdue";
+  receiveLabel = `Overdue by ${formatDuration()}`;
+} else {
+  receiveStatus = "upcoming";
+  receiveLabel = `Due in ${formatDuration()}`;
+}
 
       obj.receiveTracker = {
         status: receiveStatus,
