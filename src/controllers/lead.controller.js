@@ -1587,6 +1587,26 @@ export const getLeadBookings = async (req, res, next) => {
   }
 };
 
+// 
+const parseTime = (time = "08:00 AM") => {
+  let [clock, period] = time.split(" ");
+  let [hours, minutes] = clock.split(":").map(Number);
+
+  if (period === "PM" && hours !== 12) hours += 12;
+  if (period === "AM" && hours === 12) hours = 0;
+
+  return { hours, minutes };
+};
+
+const combineDateAndTime = (date, time) => {
+  const d = new Date(date);
+  const { hours, minutes } = parseTime(time);
+
+  d.setHours(hours, minutes, 0, 0);
+
+  return d;
+};
+
 export const createBooking = async (req, res, next) => {
   try {
     const {
@@ -1616,7 +1636,6 @@ export const createBooking = async (req, res, next) => {
 
       pickup = {},
       drop = {},
-
       pickupDropNotes = "",
     } = req.body;
 
@@ -1724,14 +1743,26 @@ export const createBooking = async (req, res, next) => {
     // =========================
     // TOTAL DAYS
     // =========================
+// =========================
+// TOTAL DAYS
+// =========================
 
-    const totalDays = Math.max(
-      1,
-      Math.ceil(
-        (finalToDate.getTime() - finalFromDate.getTime()) /
-          (1000 * 60 * 60 * 24),
-      ) + 1,
-    );
+const pickupDateTime = combineDateAndTime(
+  finalFromDate,
+  pickupTime || "08:00 AM"
+);
+
+const dropDateTime = combineDateAndTime(
+  finalToDate,
+  dropTime || "08:00 AM"
+);
+
+const diffMs = dropDateTime.getTime() - pickupDateTime.getTime();
+
+const totalDays = Math.max(
+  1,
+  Math.ceil(diffMs / (1000 * 60 * 60 * 24))
+);
 
     // =========================
     // PRICING
@@ -1754,6 +1785,7 @@ export const createBooking = async (req, res, next) => {
     const serviceCharge = pickupCharge + dropCharge;
 
     const quotationAmount = vehicleRent + serviceCharge;
+    
 
     // =========================
     // CREATE BOOKING
