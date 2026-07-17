@@ -175,6 +175,48 @@ export const getAvailableVehicles = async (req, res, next) => {
     next(error);
   }
 };
+export const getAll = async (req, res, next) => {
+  try {
+    const vehicles = await Vehicle.find({
+      status: "available",
+      isDeleted: false,
+    })
+      .select(`
+        _id
+        vehicleName
+        vehicleNumber
+        manufacturer
+        model
+        variant
+        color
+        vehicleType
+        seatingCapacity
+        transmission
+        fuelType
+        pricePerDay
+        status
+      `)
+      .sort({ vehicleName: 1 })
+      .lean();
+
+    const data = vehicles.map((vehicle) => ({
+      ...vehicle,
+
+      pricing: {
+        pricePerDay: vehicle.pricePerDay || 0,
+        currency: "INR",
+      },
+    }));
+
+    return res.status(200).json({
+      success: true,
+      count: data.length,
+      data,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
 
 export const getSingleVehicle = async (
   req,

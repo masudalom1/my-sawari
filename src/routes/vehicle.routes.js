@@ -23,6 +23,7 @@ router.get("/all", getAllVehicles);
 
 // Showing Available car in handover screen
 router.get("/available", protect, getAvailableVehicles);
+router.get("/getAll", protect, getAvailableVehicles);
 
 // NOT IN USED
 router.get("/:id", getSingleVehicle);
