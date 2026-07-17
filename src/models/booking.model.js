@@ -334,13 +334,6 @@ bookingSchema.pre("save", function () {
     const random = Math.floor(1000 + Math.random() * 9000);
     this.bookingCode = `BK${Date.now()}${random}`;
   }
-
-  if (this.fromDate && this.toDate) {
-    const diff =
-      new Date(this.toDate).getTime() - new Date(this.fromDate).getTime();
-
-    this.totalDays = Math.max(1, Math.ceil(diff / (1000 * 60 * 60 * 24)) + 1);
-  }
 });
 
 // =========================
