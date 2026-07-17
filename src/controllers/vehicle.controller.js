@@ -238,6 +238,14 @@ export const updateVehicle = async (req, res, next) => {
 
 export const deleteVehicle = async (req, res, next) => {
   try {
+    // Only SUPER_ADMIN can delete vehicles
+    if (req.user.role !== "SUPER_ADMIN") {
+      return res.status(403).json({
+        success: false,
+        message: "Only Super Admin can delete vehicles. Please contact your administrator.",
+      });
+    }
+
     const vehicle = await Vehicle.findOne({
       _id: req.params.id,
       isDeleted: false,
