@@ -2,10 +2,12 @@ import express from "express";
 import protect from "../middlewares/auth.middleware.js";
 
 import {
+  cancelBooking,
   checkLeadByMobile,
   createBooking,
   createLead,
   createLeadBooking,
+  getBookingDetails,
   getBookingsDashboard,
   getLeadBookingDetails,
   getLeadBookings,
@@ -13,6 +15,7 @@ import {
   getLeadDashboardStats,
   getLeadHistory,
   getLeads,
+  updateBooking,
   updateLead,
 } from "../controllers/lead.controller.js";
 import { createLeadActivity, getLeadActivities } from "../controllers/leadActivity.controller.js";
@@ -37,5 +40,8 @@ router.put("/:id/create-booking",protect,createLeadBooking);
 router.get("/:id/create-booking",protect,getLeadBookingDetails);
 router.get("/:id/bookings",protect,getLeadBookings);
 router.post("/create",protect,createBooking);
+router.get("booking-details/:id", protect, getBookingDetails);
+router.put("booking-update/:id", protect, updateBooking);
+router.put("/:id/cancel", protect, cancelBooking);
 
 export default router;

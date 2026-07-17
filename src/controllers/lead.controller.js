@@ -1872,3 +1872,301 @@ const totalDays = Math.max(
     next(error);
   }
 };
+
+export const getBookingDetails = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+
+    const booking = await Booking.findOne({
+      _id: id,
+      isDeleted: false,
+    })
+      .populate({
+        path: "vehicleId",
+        select:
+          "vehicleName vehicleNumber manufacturer model variant color fuelType transmission seatingCapacity pricePerDay images",
+      })
+      .populate({
+        path: "createdBy",
+        select: "fullName email mobileNumber role profileImage",
+      })
+      .populate({
+        path: "handover",
+      })
+      .populate({
+        path: "vehicleReturn",
+      })
+      .lean();
+
+    if (!booking) {
+      return res.status(404).json({
+        success: false,
+        message: "Booking not found.",
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      booking,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const updateBooking = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+
+    const booking = await Booking.findOne({
+      _id: id,
+      isDeleted: false,
+    });
+
+    if (!booking) {
+      return res.status(404).json({
+        success: false,
+        message: "Booking not found.",
+      });
+    }
+
+    const {
+      customerName,
+      mobileNumber,
+      alternateMobileNumber,
+      occupation,
+      destination,
+      aadhaarNumber,
+      drivingLicenseNumber,
+
+      tripType,
+      fromDate,
+      toDate,
+      pickupTime,
+      dropTime,
+      residents,
+
+      vehicleId,
+
+      bookingAmount,
+      discountAmount,
+
+      pickupDropRequired = false,
+      serviceType = "pickup_drop",
+
+      pickup = {},
+      drop = {},
+      pickupDropNotes = "",
+    } = req.body;
+
+    // =========================
+    // VEHICLE
+    // =========================
+
+    const vehicle = await Vehicle.findById(vehicleId);
+
+    if (!vehicle || vehicle.isDeleted) {
+      return res.status(404).json({
+        success: false,
+        message: "Vehicle not found.",
+      });
+    }
+
+    // =========================
+    // DATES
+    // =========================
+
+    const finalFromDate = new Date(fromDate);
+    const finalToDate = new Date(toDate);
+
+    // =========================
+    // DUPLICATE CHECK
+    // =========================
+
+    const duplicate = await Booking.findOne({
+      _id: { $ne: id },
+      vehicleId,
+      fromDate: finalFromDate,
+      toDate: finalToDate,
+      isDeleted: false,
+      status: {
+        $nin: ["cancelled", "completed"],
+      },
+    });
+
+    if (duplicate) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "A booking already exists for this vehicle during the selected trip.",
+      });
+    }
+
+    // =========================
+    // TOTAL DAYS
+    // =========================
+
+    const pickupDateTime = combineDateAndTime(
+      finalFromDate,
+      pickupTime || "08:00 AM"
+    );
+
+    const dropDateTime = combineDateAndTime(
+      finalToDate,
+      dropTime || "08:00 AM"
+    );
+
+    const diffMs = dropDateTime.getTime() - pickupDateTime.getTime();
+
+    const totalDays = Math.max(
+      1,
+      Math.ceil(diffMs / (1000 * 60 * 60 * 24))
+    );
+
+    // =========================
+    // PRICING
+    // =========================
+
+    const vehicleRent =
+      Number(vehicle.pricePerDay || 0) * totalDays;
+
+    const pickupCharge =
+      pickupDropRequired &&
+      (serviceType === "pickup" ||
+        serviceType === "pickup_drop")
+        ? Number(pickup.charge || 0)
+        : 0;
+
+    const dropCharge =
+      pickupDropRequired &&
+      (serviceType === "drop" ||
+        serviceType === "pickup_drop")
+        ? Number(drop.charge || 0)
+        : 0;
+
+    const quotationAmount =
+      vehicleRent + pickupCharge + dropCharge;
+
+    // =========================
+    // UPDATE
+    // =========================
+
+    booking.customerName = customerName?.trim() || "";
+    booking.mobileNumber = mobileNumber?.trim() || "";
+    booking.alternateMobileNumber =
+      alternateMobileNumber?.trim() || "";
+    booking.occupation = occupation?.trim() || "";
+
+    booking.destination = destination?.trim() || "";
+
+    booking.aadhaarNumber = aadhaarNumber?.trim() || "";
+
+    booking.drivingLicenseNumber =
+      drivingLicenseNumber?.trim().toUpperCase() || "";
+
+    booking.tripType = tripType || "local";
+
+    booking.fromDate = finalFromDate;
+    booking.toDate = finalToDate;
+
+    booking.pickupTime = pickupTime || "09:00 AM";
+    booking.dropTime = dropTime || "06:00 PM";
+
+    booking.totalDays = totalDays;
+    booking.residents = Number(residents) || 1;
+
+    booking.vehicleId = vehicle._id;
+    booking.vehicleName = vehicle.vehicleName;
+    booking.vehicleNumber = vehicle.vehicleNumber;
+    booking.vehicleColor = vehicle.color;
+
+    booking.quotationAmount = quotationAmount;
+    booking.bookingAmount = Number(bookingAmount) || 0;
+    booking.discountAmount = Number(discountAmount) || 0;
+
+    booking.pickupDropRequired = pickupDropRequired;
+    booking.serviceType = serviceType;
+
+    booking.pickup = {
+      location: pickup.location?.trim() || "",
+      landmark: pickup.landmark?.trim() || "",
+      mapLink: pickup.mapLink?.trim() || "",
+      charge: pickupCharge,
+    };
+
+    booking.drop = {
+      location: drop.location?.trim() || "",
+      landmark: drop.landmark?.trim() || "",
+      mapLink: drop.mapLink?.trim() || "",
+      charge: dropCharge,
+    };
+
+    booking.pickupDropNotes =
+      pickupDropNotes?.trim() || "";
+
+    await booking.save();
+
+    await booking.populate({
+      path: "vehicleId",
+      select:
+        "vehicleName vehicleNumber manufacturer model color pricePerDay images",
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: "Booking updated successfully.",
+      booking,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const cancelBooking = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+
+    const booking = await Booking.findOne({
+      _id: id,
+      isDeleted: false,
+    });
+
+    if (!booking) {
+      return res.status(404).json({
+        success: false,
+        message: "Booking not found.",
+      });
+    }
+
+    // Prevent cancelling active/completed bookings
+    if (booking.status === "active") {
+      return res.status(400).json({
+        success: false,
+        message:
+          "Vehicle has already been handed over. Active bookings cannot be cancelled.",
+      });
+    }
+
+    if (booking.status === "completed") {
+      return res.status(400).json({
+        success: false,
+        message: "Completed bookings cannot be cancelled.",
+      });
+    }
+
+    booking.status = "cancelled";
+    booking.isDeleted = true;
+    booking.deletedAt = new Date();
+    booking.deletedBy = req.user._id;
+
+    await booking.save();
+
+    return res.status(200).json({
+      success: true,
+      message: "Booking cancelled successfully.",
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
