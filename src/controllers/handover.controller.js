@@ -1103,7 +1103,9 @@ export const getReceiveCarList = async (req, res) => {
 
     const vehicleReturns = await VehicleReturn.find({
       returnStatus: "completed",
-    }).populate("receivedBy", "fullName role email mobileNumber").select(`
+    })
+      .populate("receivedBy", "fullName role email mobileNumber")
+      .select(`
         handover
         returnStatus
         receivedBy
@@ -1129,7 +1131,6 @@ export const getReceiveCarList = async (req, res) => {
     const finalData = handovers.map((handover) => {
       const obj = handover.toObject();
 
-      //new added for calculate overdue time and don't move overdue untile date chnage
       const now = new Date();
       const dropDateTime = new Date(obj.trip.dropDateTime);
 
@@ -1150,45 +1151,54 @@ export const getReceiveCarList = async (req, res) => {
         return parts.join(" ");
       };
 
- const todayStr = new Date().toLocaleDateString("en-CA", {
-  timeZone: "Asia/Kolkata",
-});
+      // ==========================
+      // DATE COMPARISON (IST)
+      // ==========================
 
-const tomorrow = new Date();
-tomorrow.setDate(tomorrow.getDate() + 1);
+      const today = new Date();
+      const tomorrow = new Date();
+      tomorrow.setDate(today.getDate() + 1);
 
-const tomorrowStr = tomorrow.toLocaleDateString("en-CA", {
-  timeZone: "Asia/Kolkata",
-});
+      const todayStr = today.toLocaleDateString("en-CA", {
+        timeZone: "Asia/Kolkata",
+      });
 
-const dropStr = new Date(dropDateTime).toLocaleDateString("en-CA", {
-  timeZone: "Asia/Kolkata",
-});
+      const tomorrowStr = tomorrow.toLocaleDateString("en-CA", {
+        timeZone: "Asia/Kolkata",
+      });
 
-const isToday = dropStr === todayStr;
-const isTomorrow = dropStr === tomorrowStr;
+      const dropStr = dropDateTime.toLocaleDateString("en-CA", {
+        timeZone: "Asia/Kolkata",
+      });
+
+      const isToday = dropStr === todayStr;
+      const isTomorrow = dropStr === tomorrowStr;
+      const isPastDate = dropStr < todayStr;
+      const isFutureDate = dropStr > tomorrowStr;
 
       let receiveStatus = "";
-let receiveLabel = "";
+      let receiveLabel = "";
 
-if (isToday) {
-  // Always stay in Today tab for the entire day
-  receiveStatus = diffMs >= 0 ? "today" : "today_overdue";
-  receiveLabel =
-    diffMs >= 0
-      ? `Due in ${formatDuration()}`
-      : `Overdue by ${formatDuration()}`;
-} else if (isTomorrow) {
-  receiveStatus = "tomorrow";
-  receiveLabel = `Due in ${formatDuration()}`;
-} else if (dropDay < today) {
-  // Only previous dates are overdue
-  receiveStatus = "overdue";
-  receiveLabel = `Overdue by ${formatDuration()}`;
-} else {
-  receiveStatus = "upcoming";
-  receiveLabel = `Due in ${formatDuration()}`;
-}
+      if (isToday) {
+        // Keep in Today tab for the entire calendar day
+        receiveStatus = diffMs >= 0 ? "today" : "today_overdue";
+        receiveLabel =
+          diffMs >= 0
+            ? `Due in ${formatDuration()}`
+            : `Overdue by ${formatDuration()}`;
+      } else if (isTomorrow) {
+        receiveStatus = "tomorrow";
+        receiveLabel = `Due in ${formatDuration()}`;
+      } else if (isPastDate) {
+        receiveStatus = "overdue";
+        receiveLabel = `Overdue by ${formatDuration()}`;
+      } else if (isFutureDate) {
+        receiveStatus = "upcoming";
+        receiveLabel = `Due in ${formatDuration()}`;
+      } else {
+        receiveStatus = "upcoming";
+        receiveLabel = `Due in ${formatDuration()}`;
+      }
 
       obj.receiveTracker = {
         status: receiveStatus,
@@ -1199,7 +1209,10 @@ if (isToday) {
         remainingMs: diffMs,
       };
 
-      // Always include created by user
+      // ==========================
+      // CREATED BY
+      // ==========================
+
       obj.createdByUser = handover.createdBy
         ? {
             _id: handover.createdBy._id,
@@ -1210,6 +1223,10 @@ if (isToday) {
             profileImage: handover.createdBy.profileImage,
           }
         : null;
+
+      // ==========================
+      // RETURN DETAILS
+      // ==========================
 
       const returnData = completedMap.get(handover._id.toString());
 
