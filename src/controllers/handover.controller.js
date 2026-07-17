@@ -1338,11 +1338,13 @@ export const updateRental = async (req, res) => {
       reasonForChange,
     } = req.body;
 
-    const companyId = req.user.company || req.user._id;
+    /* ==========================
+       GET ACTIVE RENTAL
+       (NO COMPANY RESTRICTION)
+    ========================== */
 
     const handover = await Handover.findOne({
       _id: id,
-      company: companyId,
       isDeleted: false,
       handoverStatus: "active",
     });
@@ -1355,8 +1357,8 @@ export const updateRental = async (req, res) => {
     }
 
     /* ==========================
-   CHANGE VEHICLE
-========================== */
+       CHANGE VEHICLE
+    ========================== */
 
     if (
       vehicleId &&
@@ -1366,6 +1368,7 @@ export const updateRental = async (req, res) => {
       const oldVehicleId = handover.vehicle.vehicleId;
       const oldVehicleNumber = handover.vehicle.vehicleNumber;
 
+      // Fetch vehicle WITHOUT company restriction
       const vehicle = await Vehicle.findById(vehicleId);
 
       if (!vehicle || vehicle.isDeleted) {
@@ -1375,6 +1378,7 @@ export const updateRental = async (req, res) => {
         });
       }
 
+      // Vehicle should only be available or already rented
       if (!["available", "rent"].includes(vehicle.status)) {
         return res.status(400).json({
           success: false,
@@ -1382,17 +1386,17 @@ export const updateRental = async (req, res) => {
         });
       }
 
-      // Make previous vehicle available
+      // Previous vehicle becomes available
       await Vehicle.findByIdAndUpdate(oldVehicleId, {
         status: "available",
       });
 
-      // Make selected vehicle rent
+      // New vehicle becomes rented
       await Vehicle.findByIdAndUpdate(vehicle._id, {
         status: "rent",
       });
 
-      // Update handover vehicle
+      // Update rental vehicle details
       handover.vehicle.vehicleId = vehicle._id;
       handover.vehicle.vehicleName = vehicle.vehicleName;
       handover.vehicle.vehicleNumber = vehicle.vehicleNumber;
@@ -1401,8 +1405,8 @@ export const updateRental = async (req, res) => {
       if (reasonForChange?.trim()) {
         const vehicleNote = `
 [Vehicle Changed - ${new Date().toLocaleString()}]
-Old: ${oldVehicleNumber}
-New: ${vehicle.vehicleNumber}
+Old Vehicle: ${oldVehicleNumber}
+New Vehicle: ${vehicle.vehicleNumber}
 Reason: ${reasonForChange}
 `;
 
@@ -1411,6 +1415,7 @@ Reason: ${reasonForChange}
           .slice(-500);
       }
     }
+
     /* ==========================
        UPDATE TRIP
     ========================== */
@@ -1430,18 +1435,32 @@ Reason: ${reasonForChange}
        UPDATE PAYMENT
     ========================== */
 
-    handover.payment.totalFare = Number(totalFare) || 0;
-    handover.payment.fastTagPayableAmount = Number(fastagCharges) || 0;
-    handover.payment.securityDeposit = Number(securityDeposit) || 0;
-    handover.payment.extraCharges = Number(extraCharges) || 0;
+    if (totalFare !== undefined)
+      handover.payment.totalFare = Number(totalFare) || 0;
+
+    if (fastagCharges !== undefined)
+      handover.payment.fastTagPayableAmount =
+        Number(fastagCharges) || 0;
+
+    if (securityDeposit !== undefined)
+      handover.payment.securityDeposit =
+        Number(securityDeposit) || 0;
+
+    if (extraCharges !== undefined)
+      handover.payment.extraCharges =
+        Number(extraCharges) || 0;
 
     handover.payment.totalAmount =
-      handover.payment.totalFare +
-      handover.payment.fastTagPayableAmount +
-      handover.payment.securityDeposit +
-      handover.payment.extraCharges;
+      (handover.payment.totalFare || 0) +
+      (handover.payment.fastTagPayableAmount || 0) +
+      (handover.payment.securityDeposit || 0) +
+      (handover.payment.extraCharges || 0);
 
-    handover.payment.amountReceivedNow += Number(amountReceivedNow) || 0;
+    if (amountReceivedNow !== undefined) {
+      handover.payment.amountReceivedNow =
+        (handover.payment.amountReceivedNow || 0) +
+        (Number(amountReceivedNow) || 0);
+    }
 
     const totalPaid =
       (handover.payment.bookingAmountPaid || 0) +
@@ -1449,7 +1468,7 @@ Reason: ${reasonForChange}
 
     handover.payment.balanceAmount = Math.max(
       0,
-      handover.payment.totalAmount - totalPaid,
+      handover.payment.totalAmount - totalPaid
     );
 
     if (handover.payment.balanceAmount === 0) {
@@ -1461,7 +1480,7 @@ Reason: ${reasonForChange}
     }
 
     /* ==========================
-       UPDATE NOTE
+       UPDATE NOTES
     ========================== */
 
     if (reasonForChange?.trim()) {
