@@ -1150,17 +1150,23 @@ export const getReceiveCarList = async (req, res) => {
         return parts.join(" ");
       };
 
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
+ const todayStr = new Date().toLocaleDateString("en-CA", {
+  timeZone: "Asia/Kolkata",
+});
 
-      const tomorrow = new Date(today);
-      tomorrow.setDate(tomorrow.getDate() + 1);
+const tomorrow = new Date();
+tomorrow.setDate(tomorrow.getDate() + 1);
 
-      const dropDay = new Date(dropDateTime);
-      dropDay.setHours(0, 0, 0, 0);
+const tomorrowStr = tomorrow.toLocaleDateString("en-CA", {
+  timeZone: "Asia/Kolkata",
+});
 
-      const isToday = dropDay.getTime() === today.getTime();
-      const isTomorrow = dropDay.getTime() === tomorrow.getTime();
+const dropStr = new Date(dropDateTime).toLocaleDateString("en-CA", {
+  timeZone: "Asia/Kolkata",
+});
+
+const isToday = dropStr === todayStr;
+const isTomorrow = dropStr === tomorrowStr;
 
       let receiveStatus = "";
 let receiveLabel = "";
