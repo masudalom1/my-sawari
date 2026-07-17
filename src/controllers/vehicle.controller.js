@@ -178,7 +178,6 @@ export const getAvailableVehicles = async (req, res, next) => {
 export const getAll = async (req, res, next) => {
   try {
     const vehicles = await Vehicle.find({
-      status: "available",
       isDeleted: false,
     })
       .select(`
