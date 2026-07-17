@@ -1982,25 +1982,39 @@ export const updateBooking = async (req, res, next) => {
     // =========================
     // DUPLICATE CHECK
     // =========================
+// =========================
+// DUPLICATE CHECK (Only if vehicle or dates changed)
+// =========================
 
-    const duplicate = await Booking.findOne({
-      _id: { $ne: id },
-      vehicleId,
-      fromDate: finalFromDate,
-      toDate: finalToDate,
-      isDeleted: false,
-      status: {
-        $nin: ["cancelled", "completed"],
-      },
+const vehicleChanged =
+  booking.vehicleId.toString() !== vehicleId;
+
+const fromChanged =
+  booking.fromDate.getTime() !== finalFromDate.getTime();
+
+const toChanged =
+  booking.toDate.getTime() !== finalToDate.getTime();
+
+if (vehicleChanged || fromChanged || toChanged) {
+  const duplicate = await Booking.findOne({
+    _id: { $ne: booking._id },
+    vehicleId,
+    isDeleted: false,
+    status: {
+      $nin: ["cancelled", "completed"],
+    },
+    fromDate: { $lte: finalToDate },
+    toDate: { $gte: finalFromDate },
+  });
+
+  if (duplicate) {
+    return res.status(400).json({
+      success: false,
+      message:
+        "A booking already exists for this vehicle during the selected trip.",
     });
-
-    if (duplicate) {
-      return res.status(400).json({
-        success: false,
-        message:
-          "A booking already exists for this vehicle during the selected trip.",
-      });
-    }
+  }
+}
 
     // =========================
     // TOTAL DAYS
