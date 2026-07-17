@@ -40,8 +40,8 @@ router.put("/:id/create-booking",protect,createLeadBooking);
 router.get("/:id/create-booking",protect,getLeadBookingDetails);
 router.get("/:id/bookings",protect,getLeadBookings);
 router.post("/create",protect,createBooking);
-router.get("booking-details/:id", protect, getBookingDetails);
-router.put("booking-update/:id", protect, updateBooking);
+router.get("/booking-details/:id", protect, getBookingDetails);
+router.put("/booking-update/:id", protect, updateBooking);
 router.put("/:id/cancel", protect, cancelBooking);
 
 export default router;
