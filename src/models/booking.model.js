@@ -181,6 +181,11 @@ const bookingSchema = new mongoose.Schema(
       type: Number,
       default: 0,
     },
+    securityDeposit: {
+  type: Number,
+  default: 0,
+  min: 0,
+},
 
     // =========================
     // PICKUP / DROP SERVICE

@@ -1649,6 +1649,7 @@ export const createBooking = async (req, res, next) => {
 
       bookingAmount,
       discountAmount,
+      securityDeposit,
 
       // Pickup / Drop Service
       pickupDropRequired = false,
@@ -1850,6 +1851,7 @@ const totalDays = Math.max(
 
       bookingAmount: Number(bookingAmount) || 0,
       discountAmount: Number(discountAmount) || 0,
+      securityDeposit: Number(securityDeposit) || 0,
 
       // =========================
       // PICKUP / DROP SERVICE
