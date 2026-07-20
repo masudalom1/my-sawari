@@ -98,6 +98,57 @@ const handoverSchema = new mongoose.Schema(
       },
     },
 
+    vehicleHistory: [
+      {
+        oldVehicle: {
+          vehicleId: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: "Vehicle",
+          },
+          vehicleName: {
+            type: String,
+            default: "",
+          },
+          vehicleNumber: {
+            type: String,
+            default: "",
+          },
+        },
+
+        newVehicle: {
+          vehicleId: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: "Vehicle",
+          },
+          vehicleName: {
+            type: String,
+            default: "",
+          },
+          vehicleNumber: {
+            type: String,
+            default: "",
+          },
+        },
+
+        changedBy: {
+          type: mongoose.Schema.Types.ObjectId,
+          ref: "User",
+          required: true,
+        },
+
+        changedAt: {
+          type: Date,
+          default: Date.now,
+        },
+
+        reason: {
+          type: String,
+          default: "",
+          trim: true,
+        },
+      },
+    ],
+
     trip: {
       tripType: {
         type: String,

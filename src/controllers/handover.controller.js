@@ -1103,9 +1103,7 @@ export const getReceiveCarList = async (req, res) => {
 
     const vehicleReturns = await VehicleReturn.find({
       returnStatus: "completed",
-    })
-      .populate("receivedBy", "fullName role email mobileNumber")
-      .select(`
+    }).populate("receivedBy", "fullName role email mobileNumber").select(`
         handover
         returnStatus
         receivedBy
@@ -1386,9 +1384,11 @@ export const updateRental = async (req, res) => {
       vehicleId.toString() !== handover.vehicle.vehicleId.toString()
     ) {
       const oldVehicleId = handover.vehicle.vehicleId;
+
+      const oldVehicleName = handover.vehicle.vehicleName;
+
       const oldVehicleNumber = handover.vehicle.vehicleNumber;
 
-      // Fetch vehicle WITHOUT company restriction
       const vehicle = await Vehicle.findById(vehicleId);
 
       if (!vehicle || vehicle.isDeleted) {
@@ -1398,7 +1398,6 @@ export const updateRental = async (req, res) => {
         });
       }
 
-      // Vehicle should only be available or already rented
       if (!["available", "rent"].includes(vehicle.status)) {
         return res.status(400).json({
           success: false,
@@ -1406,7 +1405,7 @@ export const updateRental = async (req, res) => {
         });
       }
 
-      // Previous vehicle becomes available
+      // Old vehicle becomes available
       await Vehicle.findByIdAndUpdate(oldVehicleId, {
         status: "available",
       });
@@ -1416,24 +1415,32 @@ export const updateRental = async (req, res) => {
         status: "rent",
       });
 
-      // Update rental vehicle details
+      // Save vehicle exchange history
+      handover.vehicleHistory.push({
+        oldVehicle: {
+          vehicleId: oldVehicleId,
+          vehicleName: oldVehicleName,
+          vehicleNumber: oldVehicleNumber,
+        },
+
+        newVehicle: {
+          vehicleId: vehicle._id,
+          vehicleName: vehicle.vehicleName,
+          vehicleNumber: vehicle.vehicleNumber,
+        },
+
+        changedBy: req.user._id,
+
+        changedAt: new Date(),
+
+        reason: reasonForChange || "",
+      });
+
+      // Update current vehicle
       handover.vehicle.vehicleId = vehicle._id;
       handover.vehicle.vehicleName = vehicle.vehicleName;
       handover.vehicle.vehicleNumber = vehicle.vehicleNumber;
       handover.vehicle.vehicleColor = vehicle.color || "";
-
-      if (reasonForChange?.trim()) {
-        const vehicleNote = `
-[Vehicle Changed - ${new Date().toLocaleString()}]
-Old Vehicle: ${oldVehicleNumber}
-New Vehicle: ${vehicle.vehicleNumber}
-Reason: ${reasonForChange}
-`;
-
-        handover.notes = `${handover.notes || ""}\n${vehicleNote}`
-          .trim()
-          .slice(-500);
-      }
     }
 
     /* ==========================
@@ -1459,16 +1466,13 @@ Reason: ${reasonForChange}
       handover.payment.totalFare = Number(totalFare) || 0;
 
     if (fastagCharges !== undefined)
-      handover.payment.fastTagPayableAmount =
-        Number(fastagCharges) || 0;
+      handover.payment.fastTagPayableAmount = Number(fastagCharges) || 0;
 
     if (securityDeposit !== undefined)
-      handover.payment.securityDeposit =
-        Number(securityDeposit) || 0;
+      handover.payment.securityDeposit = Number(securityDeposit) || 0;
 
     if (extraCharges !== undefined)
-      handover.payment.extraCharges =
-        Number(extraCharges) || 0;
+      handover.payment.extraCharges = Number(extraCharges) || 0;
 
     handover.payment.totalAmount =
       (handover.payment.totalFare || 0) +
@@ -1488,7 +1492,7 @@ Reason: ${reasonForChange}
 
     handover.payment.balanceAmount = Math.max(
       0,
-      handover.payment.totalAmount - totalPaid
+      handover.payment.totalAmount - totalPaid,
     );
 
     if (handover.payment.balanceAmount === 0) {
