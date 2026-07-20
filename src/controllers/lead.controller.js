@@ -1607,7 +1607,7 @@ export const getLeadBookings = async (req, res, next) => {
   }
 };
 
-// 
+//
 const parseTime = (time = "08:00 AM") => {
   let [clock, period] = time.split(" ");
   let [hours, minutes] = clock.split(":").map(Number);
@@ -1764,26 +1764,23 @@ export const createBooking = async (req, res, next) => {
     // =========================
     // TOTAL DAYS
     // =========================
-// =========================
-// TOTAL DAYS
-// =========================
+    // =========================
+    // TOTAL DAYS
+    // =========================
 
-const pickupDateTime = combineDateAndTime(
-  finalFromDate,
-  pickupTime || "08:00 AM"
-);
+    const pickupDateTime = combineDateAndTime(
+      finalFromDate,
+      pickupTime || "08:00 AM",
+    );
 
-const dropDateTime = combineDateAndTime(
-  finalToDate,
-  dropTime || "08:00 AM"
-);
+    const dropDateTime = combineDateAndTime(
+      finalToDate,
+      dropTime || "08:00 AM",
+    );
 
-const diffMs = dropDateTime.getTime() - pickupDateTime.getTime();
+    const diffMs = dropDateTime.getTime() - pickupDateTime.getTime();
 
-const totalDays = Math.max(
-  1,
-  Math.ceil(diffMs / (1000 * 60 * 60 * 24))
-);
+    const totalDays = Math.max(1, Math.ceil(diffMs / (1000 * 60 * 60 * 24)));
 
     // =========================
     // PRICING
@@ -1806,7 +1803,6 @@ const totalDays = Math.max(
     const serviceCharge = pickupCharge + dropCharge;
 
     const quotationAmount = vehicleRent + serviceCharge;
-    
 
     // =========================
     // CREATE BOOKING
@@ -2011,44 +2007,37 @@ export const updateBooking = async (req, res, next) => {
 
     const pickupDateTime = combineDateAndTime(
       finalFromDate,
-      pickupTime || "08:00 AM"
+      pickupTime || "08:00 AM",
     );
 
     const dropDateTime = combineDateAndTime(
       finalToDate,
-      dropTime || "08:00 AM"
+      dropTime || "08:00 AM",
     );
 
     const diffMs = dropDateTime.getTime() - pickupDateTime.getTime();
 
-    const totalDays = Math.max(
-      1,
-      Math.ceil(diffMs / (1000 * 60 * 60 * 24))
-    );
+    const totalDays = Math.max(1, Math.ceil(diffMs / (1000 * 60 * 60 * 24)));
 
     // =========================
     // PRICING
     // =========================
 
-    const vehicleRent =
-      Number(vehicle.pricePerDay || 0) * totalDays;
+    const vehicleRent = Number(vehicle.pricePerDay || 0) * totalDays;
 
     const pickupCharge =
       pickupDropRequired &&
-      (serviceType === "pickup" ||
-        serviceType === "pickup_drop")
+      (serviceType === "pickup" || serviceType === "pickup_drop")
         ? Number(pickup.charge || 0)
         : 0;
 
     const dropCharge =
       pickupDropRequired &&
-      (serviceType === "drop" ||
-        serviceType === "pickup_drop")
+      (serviceType === "drop" || serviceType === "pickup_drop")
         ? Number(drop.charge || 0)
         : 0;
 
-    const quotationAmount =
-      vehicleRent + pickupCharge + dropCharge;
+    const quotationAmount = vehicleRent + pickupCharge + dropCharge;
 
     // =========================
     // UPDATE
@@ -2056,8 +2045,7 @@ export const updateBooking = async (req, res, next) => {
 
     booking.customerName = customerName?.trim() || "";
     booking.mobileNumber = mobileNumber?.trim() || "";
-    booking.alternateMobileNumber =
-      alternateMobileNumber?.trim() || "";
+    booking.alternateMobileNumber = alternateMobileNumber?.trim() || "";
     booking.occupation = occupation?.trim() || "";
 
     booking.destination = destination?.trim() || "";
@@ -2104,8 +2092,7 @@ export const updateBooking = async (req, res, next) => {
       charge: dropCharge,
     };
 
-    booking.pickupDropNotes =
-      pickupDropNotes?.trim() || "";
+    booking.pickupDropNotes = pickupDropNotes?.trim() || "";
 
     await booking.save();
 
@@ -2172,4 +2159,3 @@ export const cancelBooking = async (req, res, next) => {
     next(error);
   }
 };
-
