@@ -1637,7 +1637,7 @@ export const createBooking = async (req, res, next) => {
       destination,
       aadhaarNumber,
       drivingLicenseNumber,
-
+      totalDays,
       tripType,
       fromDate,
       toDate,
@@ -1780,8 +1780,6 @@ export const createBooking = async (req, res, next) => {
 
     const diffMs = dropDateTime.getTime() - pickupDateTime.getTime();
 
-    const totalDays = Math.max(1, Math.ceil(diffMs / (1000 * 60 * 60 * 24)));
-
     // =========================
     // PRICING
     // =========================
@@ -1835,7 +1833,7 @@ export const createBooking = async (req, res, next) => {
       pickupTime: pickupTime || "09:00 AM",
       dropTime: dropTime || "06:00 PM",
 
-      totalDays,
+      totalDays: finalTotalDays,
       residents: Number(residents) || 1,
 
       vehicleId: vehicle._id,
@@ -2005,25 +2003,20 @@ export const updateBooking = async (req, res, next) => {
     // TOTAL DAYS
     // =========================
 
-    const pickupDateTime = combineDateAndTime(
-      finalFromDate,
-      pickupTime || "08:00 AM",
-    );
+    const finalTotalDays = Number(totalDays);
 
-    const dropDateTime = combineDateAndTime(
-      finalToDate,
-      dropTime || "08:00 AM",
-    );
-
-    const diffMs = dropDateTime.getTime() - pickupDateTime.getTime();
-
-    const totalDays = Math.max(1, Math.ceil(diffMs / (1000 * 60 * 60 * 24)));
+    if (!finalTotalDays || finalTotalDays < 1) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid total days.",
+      });
+    }
 
     // =========================
     // PRICING
     // =========================
 
-    const vehicleRent = Number(vehicle.pricePerDay || 0) * totalDays;
+    const vehicleRent = Number(vehicle.pricePerDay || 0) * finalTotalDays;
 
     const pickupCharge =
       pickupDropRequired &&
