@@ -1738,6 +1738,14 @@ export const createBooking = async (req, res, next) => {
 
     const finalFromDate = new Date(fromDate);
     const finalToDate = new Date(toDate);
+    const finalTotalDays = Number(totalDays);
+
+if (!Number.isInteger(finalTotalDays) || finalTotalDays < 1) {
+  return res.status(400).json({
+    success: false,
+    message: "Invalid total days.",
+  });
+}
 
     // =========================
     // DUPLICATE BOOKING CHECK
@@ -1784,7 +1792,8 @@ export const createBooking = async (req, res, next) => {
     // PRICING
     // =========================
 
-    const vehicleRent = Number(vehicle.pricePerDay || 0) * totalDays;
+    const vehicleRent =
+  Number(vehicle.pricePerDay || 0) * finalTotalDays;
 
     const pickupCharge =
       pickupDropRequired &&
