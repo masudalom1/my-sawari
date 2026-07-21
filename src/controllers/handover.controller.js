@@ -863,11 +863,7 @@ export const saveHandoverImages = async (req, res) => {
 
     if (vehicleRight) update["images.vehicleRight"] = vehicleRight;
 
-    // If at least one image is uploaded
-   if (Object.keys(update).length > 0) {
-  update.hasUploadedImages = true;
-}
-
+    // Save uploaded images
     const handover = await Handover.findByIdAndUpdate(
       handoverId,
       {
@@ -877,7 +873,7 @@ export const saveHandoverImages = async (req, res) => {
         new: true,
         runValidators: true,
       },
-    ).select("_id images");
+    );
 
     if (!handover) {
       return res.status(404).json({
@@ -886,10 +882,37 @@ export const saveHandoverImages = async (req, res) => {
       });
     }
 
+    // Check if ALL required images are uploaded
+    const images = handover.images || {};
+
+    const allImagesUploaded = [
+      images.customerPhoto,
+      images.customerProfileImage,
+      images.customerWithVehicle,
+      images.idCardFront,
+      images.idCardBack,
+      images.vehicleFront,
+      images.vehicleRear,
+      images.vehicleLeft,
+      images.vehicleRight,
+    ].every(
+      (img) => typeof img === "string" && img.trim() !== "",
+    );
+
+    // Update flag only when all images are uploaded
+    if (handover.hasUploadedImages !== allImagesUploaded) {
+      handover.hasUploadedImages = allImagesUploaded;
+      await handover.save();
+    }
+
     return res.status(200).json({
       success: true,
       message: "Images saved successfully",
-      data: handover,
+      data: {
+        _id: handover._id,
+        images: handover.images,
+        hasUploadedImages: handover.hasUploadedImages,
+      },
     });
   } catch (error) {
     console.error(error);
