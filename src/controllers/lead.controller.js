@@ -1917,13 +1917,13 @@ export const createBookings = async (req, res, next) => {
       pickupTime,
       dropTime,
       residents,
-
       vehicleId,
       vehicleType, // "car" | "bike" — needed for the Lead record
 
       bookingAmount,
       discountAmount,
       securityDeposit,
+      fastagBalance,
 
       pickupDropRequired = false,
       serviceType = "pickup_drop",
@@ -2102,6 +2102,7 @@ export const createBookings = async (req, res, next) => {
           bookingAmount: Number(bookingAmount) || 0,
           discountAmount: Number(discountAmount) || 0,
           securityDeposit: Number(securityDeposit) || 0,
+          fastagBalance: Number(fastagBalance) || 0,
 
           pickupDropRequired,
           serviceType,
