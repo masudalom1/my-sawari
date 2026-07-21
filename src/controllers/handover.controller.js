@@ -863,6 +863,11 @@ export const saveHandoverImages = async (req, res) => {
 
     if (vehicleRight) update["images.vehicleRight"] = vehicleRight;
 
+    // If at least one image is uploaded
+    if (Object.keys(update).length > 0) {
+      update["images.hasUploadedImages"] = true;
+    }
+
     const handover = await Handover.findByIdAndUpdate(
       handoverId,
       {

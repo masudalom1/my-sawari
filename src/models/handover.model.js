@@ -325,6 +325,10 @@ const handoverSchema = new mongoose.Schema(
         default: "",
       },
     },
+    hasUploadedImages: {
+      type: Boolean,
+      default: false,
+    },
     bookingStatus: {
       type: String,
       enum: ["draft", "confirmed", "active", "completed", "cancelled"],
