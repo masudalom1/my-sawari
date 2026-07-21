@@ -1595,6 +1595,7 @@ export const getHandovers = async (req, res) => {
         payment
         bookingStatus
         handoverStatus
+        hasUploadedImages
         notes
         createdAt
         updatedAt
@@ -1636,6 +1637,7 @@ export const getHandovers = async (req, res) => {
 
       bookingStatus: item.bookingStatus,
       handoverStatus: item.handoverStatus,
+      hasUploadedImages: item.hasUploadedImages || false,
 
       notes: item.notes || "",
 
