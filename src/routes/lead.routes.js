@@ -4,7 +4,7 @@ import protect from "../middlewares/auth.middleware.js";
 import {
   cancelBooking,
   checkLeadByMobile,
-  createBooking,
+  createBookings,
   createLead,
   createLeadBooking,
   getBookingDetails,
