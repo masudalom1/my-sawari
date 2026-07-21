@@ -1287,10 +1287,15 @@ export const createLeadBooking = async (req, res, next) => {
       vehicleName,
       bookingAmount,
       discountAmount,
+      securityDeposit,
+      fastagBalance,
+      totalDays,
       fromDate,
       toDate,
       pickupTime,
       dropTime,
+      rentalType,
+      residents,
 
       // PICKUP / DROP SERVICE FIELDS FROM MOBILE APP
       pickupDropRequired,
@@ -1391,19 +1396,23 @@ export const createLeadBooking = async (req, res, next) => {
 
       destination: destination?.trim() || "",
       tripType: tripType || "local",
+      rentalType: rentalType === "flexible" ? "flexible" : "standard",
 
       fromDate: finalFromDate,
       toDate: finalToDate,
       pickupTime: pickupTime || "09:00 AM",
       dropTime: dropTime || "06:00 PM",
 
-      residents: lead.residents,
+      residents: Number(residents) || lead.residents || 1,
       vehicleId,
       vehicleName,
 
       quotationAmount: lead.quotationAmount || 0,
       bookingAmount: Number(bookingAmount) || 0,
       discountAmount: Number(discountAmount) || 0,
+      securityDeposit: Number(securityDeposit) || 0,
+      fastagBalance: Number(fastagBalance) || 0,
+      totalDays: Number(totalDays) || 1,
 
       // PERSIST PICKUP / DROP SERVICE
       pickupDropRequired: isPickupDropRequired,
