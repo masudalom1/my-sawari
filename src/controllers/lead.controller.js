@@ -2187,7 +2187,6 @@ export const updateBooking = async (req, res, next) => {
       destination,
       aadhaarNumber,
       drivingLicenseNumber,
-
       tripType,
       fromDate,
       toDate,
