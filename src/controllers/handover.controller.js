@@ -1586,28 +1586,28 @@ export const getHandovers = async (req, res) => {
     // record was CREATED (createdAt), not the trip's pickupDateTime.
     // A handover created today can have a pickup scheduled for any
     // date, so filtering by pickupDateTime hid same-day entries.
-    switch (tab) {
-      case "today":
-        query.createdAt = {
-          $gte: today,
-          $lt: tomorrow,
-        };
-        break;
+switch (tab) {
+  case "today":
+    query.createdAt = {
+      $gte: today,
+      $lt: tomorrow,
+    };
+    break;
 
-      case "yesterday":
-        query.createdAt = {
-          $gte: yesterday,
-          $lt: today,
-        };
-        break;
+  case "yesterday":
+    query.createdAt = {
+      $gte: yesterday,
+      $lt: today,
+    };
+    break;
 
-      case "draft":
-        query.hasUploadedImages = true;
-        break;
+  case "draft":
+    query.hasUploadedImages = false;
+    break;
 
-      default:
-        break;
-    }
+  default:
+    break;
+}
 
     const handovers = await Handover.find(query)
       .populate("createdBy", "fullName email")
