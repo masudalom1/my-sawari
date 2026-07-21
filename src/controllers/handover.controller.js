@@ -1566,23 +1566,9 @@ export const getHandovers = async (req, res) => {
   try {
     const { tab = "all" } = req.query;
 
-    // Scope to the requesting user's company (tenant).
-    // NOTE: adjust this line to match how your auth middleware attaches
-    // the company/tenant id to req.user — e.g. req.user.company,
-    // req.user.companyId, or req.user._id if the "company" field on
-    // Handover actually stores the account owner's own User _id.
-    const companyId = req.user?.company || req.user?._id;
-
-    if (!companyId) {
-      return res.status(401).json({
-        success: false,
-        message: "Company/user context missing from request.",
-      });
-    }
-
+    // No company filter
     const query = {
       isDeleted: false,
-      company: companyId,
     };
 
     const today = new Date();
@@ -1594,9 +1580,10 @@ export const getHandovers = async (req, res) => {
     const yesterday = new Date(today);
     yesterday.setDate(today.getDate() - 1);
 
-    // "today" / "yesterday" describe when the handover record was
-    // CREATED (createdAt), not the trip's pickupDateTime — a handover
-    // created today can have a pickup scheduled for any date.
+    // IMPORTANT: "today" / "yesterday" describe when the handover
+    // record was CREATED (createdAt), not the trip's pickupDateTime.
+    // A handover created today can have a pickup scheduled for any
+    // date, so filtering by pickupDateTime hid same-day entries.
     switch (tab) {
       case "today":
         query.createdAt = {
@@ -1613,9 +1600,7 @@ export const getHandovers = async (req, res) => {
         break;
 
       case "draft":
-        // Aligned with frontend: a draft is defined by bookingStatus,
-        // not by whether images have been uploaded yet.
-        query.bookingStatus = "draft";
+        query.hasUploadedImages = false;
         break;
 
       default:
@@ -1677,11 +1662,6 @@ export const getHandovers = async (req, res) => {
       bookingStatus: item.bookingStatus,
       handoverStatus: item.handoverStatus,
       hasUploadedImages: item.hasUploadedImages || false,
-
-      // NOT SENT: draftStep / totalSteps — these fields don't exist on
-      // the Handover schema. The frontend's progress bar will keep
-      // falling back to the "Saved X ago" line until this is resolved
-      // (see note above the code block).
 
       notes: item.notes || "",
 
