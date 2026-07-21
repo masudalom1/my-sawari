@@ -864,9 +864,9 @@ export const saveHandoverImages = async (req, res) => {
     if (vehicleRight) update["images.vehicleRight"] = vehicleRight;
 
     // If at least one image is uploaded
-    if (Object.keys(update).length > 0) {
-      update["images.hasUploadedImages"] = true;
-    }
+   if (Object.keys(update).length > 0) {
+  update.hasUploadedImages = true;
+}
 
     const handover = await Handover.findByIdAndUpdate(
       handoverId,
@@ -1556,26 +1556,30 @@ export const getHandovers = async (req, res) => {
     const tomorrow = new Date(today);
     tomorrow.setDate(today.getDate() + 1);
 
-    const dayAfterTomorrow = new Date(today);
-    dayAfterTomorrow.setDate(today.getDate() + 2);
+    const yesterday = new Date(today);
+    yesterday.setDate(today.getDate() - 1);
 
+    // IMPORTANT: "today" / "yesterday" describe when the handover
+    // record was CREATED (createdAt), not the trip's pickupDateTime.
+    // A handover created today can have a pickup scheduled for any
+    // date, so filtering by pickupDateTime hid same-day entries.
     switch (tab) {
       case "today":
-        query["trip.pickupDateTime"] = {
+        query.createdAt = {
           $gte: today,
           $lt: tomorrow,
         };
         break;
 
-      case "tomorrow":
-        query["trip.pickupDateTime"] = {
-          $gte: tomorrow,
-          $lt: dayAfterTomorrow,
+      case "yesterday":
+        query.createdAt = {
+          $gte: yesterday,
+          $lt: today,
         };
         break;
 
       case "draft":
-        query.bookingStatus = "draft";
+        query.hasUploadedImages = true;
         break;
 
       default:
@@ -1603,7 +1607,6 @@ export const getHandovers = async (req, res) => {
       `,
       )
       .sort({
-        "trip.pickupDateTime": 1,
         createdAt: -1,
       })
       .lean();
