@@ -1627,6 +1627,7 @@ const combineDateAndTime = (date, time) => {
   return d;
 };
 
+//old fresh booking and below new one creating leand booking both
 export const createBooking = async (req, res, next) => {
   try {
     const {
@@ -1740,12 +1741,12 @@ export const createBooking = async (req, res, next) => {
     const finalToDate = new Date(toDate);
     const finalTotalDays = Number(totalDays);
 
-if (!Number.isInteger(finalTotalDays) || finalTotalDays < 1) {
-  return res.status(400).json({
-    success: false,
-    message: "Invalid total days.",
-  });
-}
+    if (!Number.isInteger(finalTotalDays) || finalTotalDays < 1) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid total days.",
+      });
+    }
 
     // =========================
     // DUPLICATE BOOKING CHECK
@@ -1792,8 +1793,7 @@ if (!Number.isInteger(finalTotalDays) || finalTotalDays < 1) {
     // PRICING
     // =========================
 
-    const vehicleRent =
-  Number(vehicle.pricePerDay || 0) * finalTotalDays;
+    const vehicleRent = Number(vehicle.pricePerDay || 0) * finalTotalDays;
 
     const pickupCharge =
       pickupDropRequired &&
@@ -1895,6 +1895,223 @@ if (!Number.isInteger(finalTotalDays) || finalTotalDays < 1) {
     });
   } catch (error) {
     next(error);
+  }
+};
+export const createBookingWithLead = async (req, res, next) => {
+  const session = await mongoose.startSession();
+  try {
+    const {
+      customerName,
+      mobileNumber,
+      alternateMobileNumber,
+      occupation,
+      destination,
+      aadhaarNumber,
+      drivingLicenseNumber,
+      totalDays,
+      tripType,
+      fromDate,
+      toDate,
+      pickupTime,
+      dropTime,
+      residents,
+
+      vehicleId,
+      vehicleType, // "car" | "bike" — needed for the Lead record
+
+      bookingAmount,
+      discountAmount,
+      securityDeposit,
+
+      pickupDropRequired = false,
+      serviceType = "pickup_drop",
+      pickup = {},
+      drop = {},
+      pickupDropNotes = "",
+    } = req.body;
+
+    // =========================
+    // VALIDATIONS (same as before)
+    // =========================
+    if (!customerName?.trim()) {
+      return res.status(400).json({ success: false, message: "Customer name is required." });
+    }
+    if (!mobileNumber?.trim()) {
+      return res.status(400).json({ success: false, message: "Mobile number is required." });
+    }
+    if (!vehicleId) {
+      return res.status(400).json({ success: false, message: "Vehicle is required." });
+    }
+    if (!fromDate || !toDate) {
+      return res.status(400).json({ success: false, message: "Trip dates are required." });
+    }
+    if (pickupDropRequired) {
+      if ((serviceType === "pickup" || serviceType === "pickup_drop") && !pickup.location?.trim()) {
+        return res.status(400).json({ success: false, message: "Pickup location is required." });
+      }
+      if ((serviceType === "drop" || serviceType === "pickup_drop") && !drop.location?.trim()) {
+        return res.status(400).json({ success: false, message: "Drop location is required." });
+      }
+    }
+
+    const finalTotalDays = Number(totalDays);
+    if (!Number.isInteger(finalTotalDays) || finalTotalDays < 1) {
+      return res.status(400).json({ success: false, message: "Invalid total days." });
+    }
+
+    const vehicle = await Vehicle.findById(vehicleId);
+    if (!vehicle || vehicle.isDeleted) {
+      return res.status(404).json({ success: false, message: "Vehicle not found." });
+    }
+
+    const finalFromDate = new Date(fromDate);
+    const finalToDate = new Date(toDate);
+
+    const existingBooking = await Booking.findOne({
+      vehicleId,
+      fromDate: finalFromDate,
+      toDate: finalToDate,
+      isDeleted: false,
+      status: { $nin: ["cancelled", "completed"] },
+    });
+    if (existingBooking) {
+      return res.status(400).json({
+        success: false,
+        message: "A booking already exists for this vehicle during the selected trip.",
+      });
+    }
+
+    // =========================
+    // PRICING
+    // =========================
+    const vehicleRent = Number(vehicle.pricePerDay || 0) * finalTotalDays;
+    const pickupCharge =
+      pickupDropRequired && (serviceType === "pickup" || serviceType === "pickup_drop")
+        ? Number(pickup.charge || 0)
+        : 0;
+    const dropCharge =
+      pickupDropRequired && (serviceType === "drop" || serviceType === "pickup_drop")
+        ? Number(drop.charge || 0)
+        : 0;
+    const quotationAmount = vehicleRent + pickupCharge + dropCharge;
+
+    // =========================
+    // TRANSACTION: Lead -> Booking -> link
+    // =========================
+    session.startTransaction();
+
+    const [lead] = await Lead.create(
+      [
+        {
+          customerName: customerName.trim(),
+          mobileNumber: mobileNumber.trim(),
+          vehicleType: vehicleType === "bike" ? "bike" : "car",
+          vehicleName: vehicle.vehicleName,
+          fromDate: finalFromDate,
+          toDate: finalToDate,
+          totalDays: finalTotalDays,
+          residents: Number(residents) || 1,
+          source: "other",
+          status: "Booking confirmed",
+          quotationAmount,
+          isBookingCreated: true,
+          company: req.user.company || req.user._id,
+          createdBy: req.user._id,
+          booking: {
+            alternateMobileNumber: alternateMobileNumber?.trim() || "",
+            occupation: occupation?.trim() || "",
+            destination: destination?.trim() || "",
+            aadhaarNumber: aadhaarNumber?.trim() || "",
+            drivingLicenseNumber: drivingLicenseNumber?.trim().toUpperCase() || "",
+            tripType: tripType || "local",
+            vehicleId: vehicle._id,
+            vehicleName: vehicle.vehicleName,
+            bookingAmount: Number(bookingAmount) || 0,
+            discountAmount: Number(discountAmount) || 0,
+            createdAt: new Date(),
+          },
+        },
+      ],
+      { session },
+    );
+
+    const [booking] = await Booking.create(
+      [
+        {
+          lead: lead._id,
+          company: req.user.company || req.user._id,
+          createdBy: req.user._id,
+
+          customerName: customerName.trim(),
+          mobileNumber: mobileNumber.trim(),
+          alternateMobileNumber: alternateMobileNumber?.trim() || "",
+          occupation: occupation?.trim() || "",
+          destination: destination?.trim() || "",
+          aadhaarNumber: aadhaarNumber?.trim() || "",
+          drivingLicenseNumber: drivingLicenseNumber?.trim().toUpperCase() || "",
+
+          tripType: tripType || "local",
+          fromDate: finalFromDate,
+          toDate: finalToDate,
+          pickupTime: pickupTime || "08:00 AM",
+          dropTime: dropTime || "08:00 AM",
+          totalDays: finalTotalDays,
+          residents: Number(residents) || 1,
+
+          vehicleId: vehicle._id,
+          vehicleName: vehicle.vehicleName,
+          vehicleNumber: vehicle.vehicleNumber,
+          vehicleColor: vehicle.color,
+
+          quotationAmount,
+          bookingAmount: Number(bookingAmount) || 0,
+          discountAmount: Number(discountAmount) || 0,
+          securityDeposit: Number(securityDeposit) || 0,
+
+          pickupDropRequired,
+          serviceType,
+          pickup: {
+            location: pickup.location?.trim() || "",
+            landmark: pickup.landmark?.trim() || "",
+            mapLink: pickup.mapLink?.trim() || "",
+            charge: pickupCharge,
+          },
+          drop: {
+            location: drop.location?.trim() || "",
+            landmark: drop.landmark?.trim() || "",
+            mapLink: drop.mapLink?.trim() || "",
+            charge: dropCharge,
+          },
+          pickupDropNotes: pickupDropNotes?.trim() || "",
+
+          status: "confirmed",
+        },
+      ],
+      { session },
+    );
+
+    lead.bookingId = booking._id;
+    lead.bookingConfirmedAt = new Date();
+    await lead.save({ session });
+
+    await session.commitTransaction();
+
+    await booking.populate({
+      path: "vehicleId",
+      select: "vehicleName vehicleNumber color manufacturer model pricePerDay",
+    });
+
+    return res.status(201).json({
+      success: true,
+      message: "Booking created successfully.",
+      booking,
+      leadId: lead._id,
+    });
+  } catch (error) {
+    if (session.inTransaction()) await session.abortTransaction();
+    next(error);
+  } finally {
+    session.endSession();
   }
 };
 
