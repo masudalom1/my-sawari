@@ -1195,6 +1195,8 @@ export const getBookingsDashboard = async (req, res) => {
         quotationAmount: booking.quotationAmount,
         bookingAmount: booking.bookingAmount,
         discountAmount: booking.discountAmount,
+        fastagBalance: booking.fastagBalance,
+        securityDeposit: booking.securityDeposit,
 
         vehicleId: booking.vehicleId?._id || null,
 
@@ -1932,34 +1934,56 @@ export const createBookings = async (req, res, next) => {
 
     // ========================= VALIDATIONS (unchanged) =========================
     if (!customerName?.trim()) {
-      return res.status(400).json({ success: false, message: "Customer name is required." });
+      return res
+        .status(400)
+        .json({ success: false, message: "Customer name is required." });
     }
     if (!mobileNumber?.trim()) {
-      return res.status(400).json({ success: false, message: "Mobile number is required." });
+      return res
+        .status(400)
+        .json({ success: false, message: "Mobile number is required." });
     }
     if (!vehicleId) {
-      return res.status(400).json({ success: false, message: "Vehicle is required." });
+      return res
+        .status(400)
+        .json({ success: false, message: "Vehicle is required." });
     }
     if (!fromDate || !toDate) {
-      return res.status(400).json({ success: false, message: "Trip dates are required." });
+      return res
+        .status(400)
+        .json({ success: false, message: "Trip dates are required." });
     }
     if (pickupDropRequired) {
-      if ((serviceType === "pickup" || serviceType === "pickup_drop") && !pickup.location?.trim()) {
-        return res.status(400).json({ success: false, message: "Pickup location is required." });
+      if (
+        (serviceType === "pickup" || serviceType === "pickup_drop") &&
+        !pickup.location?.trim()
+      ) {
+        return res
+          .status(400)
+          .json({ success: false, message: "Pickup location is required." });
       }
-      if ((serviceType === "drop" || serviceType === "pickup_drop") && !drop.location?.trim()) {
-        return res.status(400).json({ success: false, message: "Drop location is required." });
+      if (
+        (serviceType === "drop" || serviceType === "pickup_drop") &&
+        !drop.location?.trim()
+      ) {
+        return res
+          .status(400)
+          .json({ success: false, message: "Drop location is required." });
       }
     }
 
     const finalTotalDays = Number(totalDays);
     if (!Number.isInteger(finalTotalDays) || finalTotalDays < 1) {
-      return res.status(400).json({ success: false, message: "Invalid total days." });
+      return res
+        .status(400)
+        .json({ success: false, message: "Invalid total days." });
     }
 
     const vehicle = await Vehicle.findById(vehicleId);
     if (!vehicle || vehicle.isDeleted) {
-      return res.status(404).json({ success: false, message: "Vehicle not found." });
+      return res
+        .status(404)
+        .json({ success: false, message: "Vehicle not found." });
     }
 
     const finalFromDate = new Date(fromDate);
@@ -1975,18 +1999,21 @@ export const createBookings = async (req, res, next) => {
     if (existingBooking) {
       return res.status(400).json({
         success: false,
-        message: "A booking already exists for this vehicle during the selected trip.",
+        message:
+          "A booking already exists for this vehicle during the selected trip.",
       });
     }
 
     // ========================= PRICING (unchanged) =========================
     const vehicleRent = Number(vehicle.pricePerDay || 0) * finalTotalDays;
     const pickupCharge =
-      pickupDropRequired && (serviceType === "pickup" || serviceType === "pickup_drop")
+      pickupDropRequired &&
+      (serviceType === "pickup" || serviceType === "pickup_drop")
         ? Number(pickup.charge || 0)
         : 0;
     const dropCharge =
-      pickupDropRequired && (serviceType === "drop" || serviceType === "pickup_drop")
+      pickupDropRequired &&
+      (serviceType === "drop" || serviceType === "pickup_drop")
         ? Number(drop.charge || 0)
         : 0;
     const quotationAmount = vehicleRent + pickupCharge + dropCharge;
@@ -2026,7 +2053,8 @@ export const createBookings = async (req, res, next) => {
               occupation: occupation?.trim() || "",
               destination: destination?.trim() || "",
               aadhaarNumber: aadhaarNumber?.trim() || "",
-              drivingLicenseNumber: drivingLicenseNumber?.trim().toUpperCase() || "",
+              drivingLicenseNumber:
+                drivingLicenseNumber?.trim().toUpperCase() || "",
               tripType: tripType || "local",
               vehicleId: vehicle._id,
               vehicleName: vehicle.vehicleName,
@@ -2054,7 +2082,8 @@ export const createBookings = async (req, res, next) => {
           occupation: occupation?.trim() || "",
           destination: destination?.trim() || "",
           aadhaarNumber: aadhaarNumber?.trim() || "",
-          drivingLicenseNumber: drivingLicenseNumber?.trim().toUpperCase() || "",
+          drivingLicenseNumber:
+            drivingLicenseNumber?.trim().toUpperCase() || "",
 
           tripType: tripType || "local",
           fromDate: finalFromDate,
