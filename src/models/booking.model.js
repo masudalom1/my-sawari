@@ -186,6 +186,11 @@ const bookingSchema = new mongoose.Schema(
       default: 0,
       min: 0,
     },
+       fastagBalance: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
 
     // =========================
     // PICKUP / DROP SERVICE
