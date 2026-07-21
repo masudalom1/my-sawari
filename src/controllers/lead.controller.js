@@ -2195,10 +2195,14 @@ export const updateBooking = async (req, res, next) => {
       dropTime,
       residents,
 
+      totalDays, // FIX: was referenced below but never destructured
+
       vehicleId,
 
       bookingAmount,
       discountAmount,
+      securityDeposit, // ADDED
+      fastagBalance, // ADDED
 
       pickupDropRequired = false,
       serviceType = "pickup_drop",
@@ -2238,7 +2242,7 @@ export const updateBooking = async (req, res, next) => {
 
     const finalTotalDays = Number(totalDays);
 
-    if (!finalTotalDays || finalTotalDays < 1) {
+    if (!Number.isInteger(finalTotalDays) || finalTotalDays < 1) {
       return res.status(400).json({
         success: false,
         message: "Invalid total days.",
@@ -2289,7 +2293,7 @@ export const updateBooking = async (req, res, next) => {
     booking.pickupTime = pickupTime || "09:00 AM";
     booking.dropTime = dropTime || "06:00 PM";
 
-    booking.totalDays = totalDays;
+    booking.totalDays = finalTotalDays; // FIX: use the validated/coerced number, not the raw body value
     booking.residents = Number(residents) || 1;
 
     booking.vehicleId = vehicle._id;
@@ -2300,6 +2304,8 @@ export const updateBooking = async (req, res, next) => {
     booking.quotationAmount = quotationAmount;
     booking.bookingAmount = Number(bookingAmount) || 0;
     booking.discountAmount = Number(discountAmount) || 0;
+    booking.securityDeposit = Number(securityDeposit) || 0; // ADDED
+    booking.fastagBalance = Number(fastagBalance) || 0; // ADDED — requires schema field, see note below
 
     booking.pickupDropRequired = pickupDropRequired;
     booking.serviceType = serviceType;
