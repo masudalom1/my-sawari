@@ -1930,9 +1930,7 @@ export const createBookings = async (req, res, next) => {
       pickupDropNotes = "",
     } = req.body;
 
-    // =========================
-    // VALIDATIONS (same as before)
-    // =========================
+    // ========================= VALIDATIONS (unchanged) =========================
     if (!customerName?.trim()) {
       return res.status(400).json({ success: false, message: "Customer name is required." });
     }
@@ -1981,9 +1979,7 @@ export const createBookings = async (req, res, next) => {
       });
     }
 
-    // =========================
-    // PRICING
-    // =========================
+    // ========================= PRICING (unchanged) =========================
     const vehicleRent = Number(vehicle.pricePerDay || 0) * finalTotalDays;
     const pickupCharge =
       pickupDropRequired && (serviceType === "pickup" || serviceType === "pickup_drop")
@@ -1995,51 +1991,61 @@ export const createBookings = async (req, res, next) => {
         : 0;
     const quotationAmount = vehicleRent + pickupCharge + dropCharge;
 
-    // =========================
-    // TRANSACTION: Lead -> Booking -> link
-    // =========================
+    // ========================= TRANSACTION: Lead (existing or new) -> Booking -> link =========================
     session.startTransaction();
 
-    const [lead] = await Lead.create(
-      [
-        {
-          customerName: customerName.trim(),
-          mobileNumber: mobileNumber.trim(),
-          vehicleType: vehicleType === "bike" ? "bike" : "car",
-          vehicleName: vehicle.vehicleName,
-          fromDate: finalFromDate,
-          toDate: finalToDate,
-          totalDays: finalTotalDays,
-          residents: Number(residents) || 1,
-          source: "other",
-          status: "Booking confirmed",
-          quotationAmount,
-          isBookingCreated: true,
-          company: req.user.company || req.user._id,
-          createdBy: req.user._id,
-          booking: {
-            alternateMobileNumber: alternateMobileNumber?.trim() || "",
-            occupation: occupation?.trim() || "",
-            destination: destination?.trim() || "",
-            aadhaarNumber: aadhaarNumber?.trim() || "",
-            drivingLicenseNumber: drivingLicenseNumber?.trim().toUpperCase() || "",
-            tripType: tripType || "local",
-            vehicleId: vehicle._id,
+    const companyId = req.user.company || req.user._id;
+
+    // NEW: check for an existing lead with this mobile number before creating one
+    let lead = await Lead.findOne({
+      mobileNumber: mobileNumber.trim(),
+      company: companyId,
+      isDeleted: false,
+    }).session(session);
+
+    if (!lead) {
+      const [newLead] = await Lead.create(
+        [
+          {
+            customerName: customerName.trim(),
+            mobileNumber: mobileNumber.trim(),
+            vehicleType: vehicleType === "bike" ? "bike" : "car",
             vehicleName: vehicle.vehicleName,
-            bookingAmount: Number(bookingAmount) || 0,
-            discountAmount: Number(discountAmount) || 0,
-            createdAt: new Date(),
+            fromDate: finalFromDate,
+            toDate: finalToDate,
+            totalDays: finalTotalDays,
+            residents: Number(residents) || 1,
+            source: "other",
+            status: "Booking confirmed",
+            quotationAmount,
+            isBookingCreated: true,
+            company: companyId,
+            createdBy: req.user._id,
+            booking: {
+              alternateMobileNumber: alternateMobileNumber?.trim() || "",
+              occupation: occupation?.trim() || "",
+              destination: destination?.trim() || "",
+              aadhaarNumber: aadhaarNumber?.trim() || "",
+              drivingLicenseNumber: drivingLicenseNumber?.trim().toUpperCase() || "",
+              tripType: tripType || "local",
+              vehicleId: vehicle._id,
+              vehicleName: vehicle.vehicleName,
+              bookingAmount: Number(bookingAmount) || 0,
+              discountAmount: Number(discountAmount) || 0,
+              createdAt: new Date(),
+            },
           },
-        },
-      ],
-      { session },
-    );
+        ],
+        { session },
+      );
+      lead = newLead;
+    }
 
     const [booking] = await Booking.create(
       [
         {
           lead: lead._id,
-          company: req.user.company || req.user._id,
+          company: companyId,
           createdBy: req.user._id,
 
           customerName: customerName.trim(),
@@ -2092,6 +2098,7 @@ export const createBookings = async (req, res, next) => {
 
     lead.bookingId = booking._id;
     lead.bookingConfirmedAt = new Date();
+    lead.isBookingCreated = true;
     await lead.save({ session });
 
     await session.commitTransaction();
