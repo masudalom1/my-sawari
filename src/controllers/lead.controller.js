@@ -1897,7 +1897,7 @@ export const createBooking = async (req, res, next) => {
     next(error);
   }
 };
-export const createBookingWithLead = async (req, res, next) => {
+export const createBookings = async (req, res, next) => {
   const session = await mongoose.startSession();
   try {
     const {
