@@ -640,7 +640,7 @@ export const createHandover = async (req, res, next) => {
 
       notes: notes || "",
 
-      bookingStatus: bookingStatus || "confirmed",
+      bookingStatus:"draft",
 
       images: {
         customerPhoto: files?.customerPhoto?.[0]?.path || "",
@@ -989,13 +989,16 @@ export const saveHandoverImages = async (req, res) => {
       (uploadedCount / totalRequired) * 100,
     );
 
-    handover.hasUploadedImages = allImagesUploaded;
+handover.hasUploadedImages = allImagesUploaded;
 
-    handover.bookingStatus = allImagesUploaded
-      ? "confirmed"
-      : "draft";
+// Keep booking as draft until every required image is uploaded
+if (allImagesUploaded) {
+  handover.bookingStatus = "confirmed";
+} else {
+  handover.bookingStatus = "draft";
+}
 
-    await handover.save();
+await handover.save();
 
     return res.status(200).json({
       success: true,
