@@ -50,6 +50,7 @@ router.get("single/:id", getSingleHandover);
 router.put("/update/:id", updateHandover);
 router.delete("/delete/:id", deleteHandover);
 
+router.get("/:id",protect,getHandoverById);
 
 
 // Draft route 
@@ -57,7 +58,7 @@ router.post("/draft", protect, createDraftHandover);
 router.put("/draft/:id", protect, updateDraftHandover);
 router.put("/images/:id",protect,handoverUpload,updateDraftImages);
 router.get("/draft/latest",protect,getLatestDraftHandover);
-router.get("/:id",protect,getHandoverById);
+
 router.put("/complete/:id",protect,completeDraftHandover);
 
 export default router;

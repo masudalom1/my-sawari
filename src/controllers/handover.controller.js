@@ -372,6 +372,7 @@ export const getHandoverById = async (req, res) => {
     });
   }
 };
+
 export const completeDraftHandover = async (req, res) => {
   try {
     const { id } = req.params;
