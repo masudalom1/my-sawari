@@ -844,26 +844,17 @@ export const saveHandoverImages = async (req, res) => {
     const update = {};
 
     if (customerPhoto) update["images.customerPhoto"] = customerPhoto;
-
     if (customerProfileImage)
       update["images.customerProfileImage"] = customerProfileImage;
-
     if (customerWithVehicle)
       update["images.customerWithVehicle"] = customerWithVehicle;
-
     if (idCardFront) update["images.idCardFront"] = idCardFront;
-
     if (idCardBack) update["images.idCardBack"] = idCardBack;
-
     if (vehicleFront) update["images.vehicleFront"] = vehicleFront;
-
     if (vehicleRear) update["images.vehicleRear"] = vehicleRear;
-
     if (vehicleLeft) update["images.vehicleLeft"] = vehicleLeft;
-
     if (vehicleRight) update["images.vehicleRight"] = vehicleRight;
 
-    // Save uploaded images
     const handover = await Handover.findByIdAndUpdate(
       handoverId,
       {
@@ -882,7 +873,6 @@ export const saveHandoverImages = async (req, res) => {
       });
     }
 
-    // Check if ALL required images are uploaded
     const images = handover.images || {};
 
     const allImagesUploaded = [
@@ -897,19 +887,22 @@ export const saveHandoverImages = async (req, res) => {
       images.vehicleRight,
     ].every((img) => typeof img === "string" && img.trim() !== "");
 
-    // Update flag only when all images are uploaded
-    if (handover.hasUploadedImages !== allImagesUploaded) {
-      handover.hasUploadedImages = allImagesUploaded;
-      await handover.save();
+    handover.hasUploadedImages = allImagesUploaded;
+
+    if (!allImagesUploaded) {
+      handover.bookingStatus = "draft";
     }
+
+    await handover.save();
 
     return res.status(200).json({
       success: true,
       message: "Images saved successfully",
       data: {
         _id: handover._id,
-        images: handover.images,
+        bookingStatus: handover.bookingStatus,
         hasUploadedImages: handover.hasUploadedImages,
+        images: handover.images,
       },
     });
   } catch (error) {
@@ -1600,7 +1593,7 @@ export const getHandovers = async (req, res) => {
         break;
 
       case "draft":
-        query.hasUploadedImages = false;
+        query.bookingStatus = "draft";
         break;
 
       default:
