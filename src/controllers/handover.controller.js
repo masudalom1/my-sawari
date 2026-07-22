@@ -640,7 +640,7 @@ export const createHandover = async (req, res, next) => {
 
       notes: notes || "",
 
-      bookingStatus:"draft",
+      bookingStatus: "draft",
 
       images: {
         customerPhoto: files?.customerPhoto?.[0]?.path || "",
@@ -944,10 +944,7 @@ export const saveHandoverImages = async (req, res) => {
     REQUIRED_IMAGES.forEach((key) => {
       const value = req.body[key];
 
-      if (
-        typeof value === "string" &&
-        value.trim() !== ""
-      ) {
+      if (typeof value === "string" && value.trim() !== "") {
         update[`images.${key}`] = value.trim();
       }
     });
@@ -974,31 +971,25 @@ export const saveHandoverImages = async (req, res) => {
 
     const uploadedCount = REQUIRED_IMAGES.filter((key) => {
       const value = images[key];
-      return (
-        typeof value === "string" &&
-        value.trim() !== ""
-      );
+      return typeof value === "string" && value.trim() !== "";
     }).length;
 
     const totalRequired = REQUIRED_IMAGES.length;
 
-    const allImagesUploaded =
-      uploadedCount === totalRequired;
+    const allImagesUploaded = uploadedCount === totalRequired;
 
-    const progress = Math.round(
-      (uploadedCount / totalRequired) * 100,
-    );
+    const progress = Math.round((uploadedCount / totalRequired) * 100);
 
-handover.hasUploadedImages = allImagesUploaded;
+    handover.hasUploadedImages = allImagesUploaded;
 
-// Keep booking as draft until every required image is uploaded
-if (allImagesUploaded) {
-  handover.bookingStatus = "confirmed";
-} else {
-  handover.bookingStatus = "draft";
-}
+    // Keep booking as draft until every required image is uploaded
+    if (allImagesUploaded) {
+      handover.bookingStatus = "confirmed";
+    } else {
+      handover.bookingStatus = "draft";
+    }
 
-await handover.save();
+    await handover.save();
 
     return res.status(200).json({
       success: true,
@@ -1011,8 +1002,7 @@ await handover.save();
 
         bookingStatus: handover.bookingStatus,
 
-        hasUploadedImages:
-          handover.hasUploadedImages,
+        hasUploadedImages: handover.hasUploadedImages,
 
         uploadedCount,
 
@@ -1020,16 +1010,11 @@ await handover.save();
 
         progress,
 
-        remainingImages: REQUIRED_IMAGES.filter(
-          (key) => {
-            const value = images[key];
+        remainingImages: REQUIRED_IMAGES.filter((key) => {
+          const value = images[key];
 
-            return !(
-              typeof value === "string" &&
-              value.trim() !== ""
-            );
-          },
-        ),
+          return !(typeof value === "string" && value.trim() !== "");
+        }),
 
         images: handover.images,
       },
@@ -1040,10 +1025,7 @@ await handover.save();
     return res.status(500).json({
       success: false,
       message: "Failed to save images",
-      error:
-        process.env.NODE_ENV === "development"
-          ? error.message
-          : undefined,
+      error: process.env.NODE_ENV === "development" ? error.message : undefined,
     });
   }
 };
