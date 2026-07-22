@@ -818,7 +818,8 @@ export const uploadSingleImage = async (req, res) => {
     });
   }
 };
-export const saveHandoverImages = async (req, res) => {
+// version 1.0
+export const saveHandoverImage = async (req, res) => {
   try {
     const { handoverId } = req.params;
 
@@ -914,7 +915,135 @@ export const saveHandoverImages = async (req, res) => {
     });
   }
 };
+// version 1.1
+export const saveHandoverImages = async (req, res) => {
+  try {
+    const { handoverId } = req.params;
 
+    if (!handoverId) {
+      return res.status(400).json({
+        success: false,
+        message: "Handover ID is required",
+      });
+    }
+
+    const REQUIRED_IMAGES = [
+      "customerPhoto",
+      "customerProfileImage",
+      "customerWithVehicle",
+      "idCardFront",
+      "idCardBack",
+      "vehicleFront",
+      "vehicleRear",
+      "vehicleLeft",
+      "vehicleRight",
+    ];
+
+    const update = {};
+
+    REQUIRED_IMAGES.forEach((key) => {
+      const value = req.body[key];
+
+      if (
+        typeof value === "string" &&
+        value.trim() !== ""
+      ) {
+        update[`images.${key}`] = value.trim();
+      }
+    });
+
+    const handover = await Handover.findByIdAndUpdate(
+      handoverId,
+      {
+        $set: update,
+      },
+      {
+        new: true,
+        runValidators: true,
+      },
+    );
+
+    if (!handover) {
+      return res.status(404).json({
+        success: false,
+        message: "Handover not found",
+      });
+    }
+
+    const images = handover.images || {};
+
+    const uploadedCount = REQUIRED_IMAGES.filter((key) => {
+      const value = images[key];
+      return (
+        typeof value === "string" &&
+        value.trim() !== ""
+      );
+    }).length;
+
+    const totalRequired = REQUIRED_IMAGES.length;
+
+    const allImagesUploaded =
+      uploadedCount === totalRequired;
+
+    const progress = Math.round(
+      (uploadedCount / totalRequired) * 100,
+    );
+
+    handover.hasUploadedImages = allImagesUploaded;
+
+    handover.bookingStatus = allImagesUploaded
+      ? "confirmed"
+      : "draft";
+
+    await handover.save();
+
+    return res.status(200).json({
+      success: true,
+      message: allImagesUploaded
+        ? "All images uploaded successfully."
+        : "Images saved successfully. Draft updated.",
+
+      data: {
+        _id: handover._id,
+
+        bookingStatus: handover.bookingStatus,
+
+        hasUploadedImages:
+          handover.hasUploadedImages,
+
+        uploadedCount,
+
+        totalRequired,
+
+        progress,
+
+        remainingImages: REQUIRED_IMAGES.filter(
+          (key) => {
+            const value = images[key];
+
+            return !(
+              typeof value === "string" &&
+              value.trim() !== ""
+            );
+          },
+        ),
+
+        images: handover.images,
+      },
+    });
+  } catch (error) {
+    console.error("Save Handover Images Error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Failed to save images",
+      error:
+        process.env.NODE_ENV === "development"
+          ? error.message
+          : undefined,
+    });
+  }
+};
 // active rental screen
 export const getActiveHandovers = async (req, res) => {
   try {
