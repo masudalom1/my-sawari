@@ -1667,7 +1667,6 @@ Reason: ${reasonForChange}
     });
   }
 };
-
 // hanver get api
 export const getHandovers = async (req, res) => {
   try {
@@ -1878,7 +1877,6 @@ export const updateHandover = async (req, res, next) => {
   try {
     const handover = await Handover.findOne({
       _id: req.params.id,
-      company: req.user.company || req.user._id,
       isDeleted: false,
     });
 
@@ -1916,7 +1914,6 @@ export const deleteHandover = async (req, res, next) => {
   try {
     const handover = await Handover.findOne({
       _id: req.params.id,
-      company: req.user.company || req.user._id,
     });
 
     if (!handover) {
