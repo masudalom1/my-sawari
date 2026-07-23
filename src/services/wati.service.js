@@ -65,7 +65,7 @@ export const sendBookingConfirmation = async ({
         {
           name: "5",
           value: String(
-            payment.totalFare || 0
+            payment.totalAmount || 0
           ),
         },
       ],
