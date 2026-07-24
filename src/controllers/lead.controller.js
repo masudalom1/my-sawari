@@ -2025,7 +2025,10 @@ export const createBookings = async (req, res, next) => {
       (serviceType === "drop" || serviceType === "pickup_drop")
         ? Number(drop.charge || 0)
         : 0;
-    const quotationAmount = vehicleRent + pickupCharge + dropCharge;
+    const fastagAmount = Number(fastagBalance || 0);
+
+    const quotationAmount =
+      vehicleRent + pickupCharge + dropCharge + fastagAmount;
 
     // ========================= TRANSACTION: Lead (existing or new) -> Booking -> link =========================
     session.startTransaction();
@@ -2305,7 +2308,10 @@ export const updateBooking = async (req, res, next) => {
         ? Number(drop.charge || 0)
         : 0;
 
-    const quotationAmount = vehicleRent + pickupCharge + dropCharge;
+    const fastagAmount = Number(fastagBalance || 0);
+
+    const quotationAmount =
+      vehicleRent + pickupCharge + dropCharge + fastagAmount;
 
     // =========================
     // UPDATE
