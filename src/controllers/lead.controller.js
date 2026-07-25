@@ -1192,11 +1192,13 @@ export const getBookingsDashboard = async (req, res) => {
 
         residents: booking.residents,
 
-        quotationAmount: booking.quotationAmount,
-        bookingAmount: booking.bookingAmount,
-        discountAmount: booking.discountAmount,
-        fastagBalance: booking.fastagBalance,
-        securityDeposit: booking.securityDeposit,
+      // Legacy flat fields kept for backward compatibility with older screens
+        quotationAmount: booking.payment?.totalAmount || 0,
+        bookingAmount: booking.payment?.bookingAmountPaid || 0,
+        discountAmount: booking.payment?.discountAmount || 0,
+        fastagBalance: booking.payment?.fastagAmount || 0,
+        securityDeposit: booking.payment?.securityDeposit || 0,
+        payment: booking.payment || null,
 
         vehicleId: booking.vehicleId?._id || null,
 
