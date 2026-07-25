@@ -191,6 +191,98 @@ const bookingSchema = new mongoose.Schema(
       default: 0,
       min: 0,
     },
+    payment: {
+      vehicleRent: {
+        type: Number,
+        default: 0,
+        min: 0,
+      },
+      pickupCharge: {
+        type: Number,
+        default: 0,
+        min: 0,
+      },
+      dropCharge: {
+        type: Number,
+        default: 0,
+        min: 0,
+      },
+      fastagAmount: {
+        type: Number,
+        default: 0,
+        min: 0,
+      },
+
+      // vehicleRent + pickupCharge + dropCharge + fastagAmount
+      totalAmount: {
+        type: Number,
+        default: 0,
+        min: 0,
+      },
+
+      discountAmount: {
+        type: Number,
+        default: 0,
+        min: 0,
+      },
+
+      securityDeposit: {
+        type: Number,
+        default: 0,
+        min: 0,
+      },
+
+      // Advance paid at the time of booking
+      bookingAmountPaid: {
+        type: Number,
+        default: 0,
+        min: 0,
+      },
+
+      // totalAmount - bookingAmountPaid - discountAmount
+      balanceAmount: {
+        type: Number,
+        default: 0,
+        min: 0,
+      },
+
+      // bookingAmountPaid + securityDeposit (cash-in-hand today)
+      totalCollected: {
+        type: Number,
+        default: 0,
+        min: 0,
+      },
+
+      paymentMethod: {
+        type: String,
+        enum: ["cash", "phonepe", "razorpay", "mixed"],
+        default: "cash",
+      },
+
+      paymentBreakdown: {
+        cash: {
+          type: Number,
+          default: 0,
+          min: 0,
+        },
+        phonePe: {
+          type: Number,
+          default: 0,
+          min: 0,
+        },
+        razorpay: {
+          type: Number,
+          default: 0,
+          min: 0,
+        },
+      },
+
+      paymentStatus: {
+        type: String,
+        enum: ["paid", "partial", "pending"],
+        default: "pending",
+      },
+    },
 
     // =========================
     // PICKUP / DROP SERVICE
@@ -339,10 +431,29 @@ const bookingSchema = new mongoose.Schema(
 // AUTO BOOKING CODE
 // =========================
 
+// =========================
+// AUTO-COMPUTE PAYMENT DERIVED FIELDS
+// Keeps balanceAmount / paymentStatus / totalCollected always in sync,
+// the same way Handover.payment does.
+// =========================
+
 bookingSchema.pre("save", function () {
-  if (!this.bookingCode) {
-    const random = Math.floor(1000 + Math.random() * 9000);
-    this.bookingCode = `BK${Date.now()}${random}`;
+  if (this.payment) {
+    const totalAmount = Number(this.payment.totalAmount) || 0;
+    const discount = Number(this.payment.discountAmount) || 0;
+    const paid = Number(this.payment.bookingAmountPaid) || 0;
+    const security = Number(this.payment.securityDeposit) || 0;
+
+    this.payment.balanceAmount = Math.max(0, totalAmount - discount - paid);
+    this.payment.totalCollected = paid + security;
+
+    if (this.payment.balanceAmount === 0 && paid > 0) {
+      this.payment.paymentStatus = "paid";
+    } else if (paid > 0) {
+      this.payment.paymentStatus = "partial";
+    } else {
+      this.payment.paymentStatus = "pending";
+    }
   }
 });
 

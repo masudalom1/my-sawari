@@ -1908,6 +1908,10 @@ export const createBooking = async (req, res, next) => {
     next(error);
   }
 };
+
+//v1.0
+
+//v1.1
 export const createBookings = async (req, res, next) => {
   const session = await mongoose.startSession();
   try {
@@ -1929,10 +1933,14 @@ export const createBookings = async (req, res, next) => {
       vehicleId,
       vehicleType, // "car" | "bike" — needed for the Lead record
 
-      bookingAmount,
+      bookingAmount, // advance paid now
       discountAmount,
       securityDeposit,
       fastagBalance,
+
+      // NEW: how the advance was collected
+      paymentMethod = "cash", // "cash" | "phonepe" | "razorpay" | "mixed"
+      paymentBreakdown = {}, // { cash, phonePe, razorpay } — only used/required when paymentMethod === "mixed"
 
       pickupDropRequired = false,
       serviceType = "pickup_drop",
@@ -1988,6 +1996,38 @@ export const createBookings = async (req, res, next) => {
         .json({ success: false, message: "Invalid total days." });
     }
 
+    // NEW: validate payment method / mixed breakdown
+    const VALID_PAYMENT_METHODS = ["cash", "phonepe", "razorpay", "mixed"];
+    if (!VALID_PAYMENT_METHODS.includes(paymentMethod)) {
+      return res
+        .status(400)
+        .json({ success: false, message: "Invalid payment method." });
+    }
+
+    const advancePaid = Number(bookingAmount) || 0;
+    const breakdown = {
+      cash: Number(paymentBreakdown.cash) || 0,
+      phonePe: Number(paymentBreakdown.phonePe) || 0,
+      razorpay: Number(paymentBreakdown.razorpay) || 0,
+    };
+
+    if (paymentMethod === "mixed") {
+      const breakdownSum = breakdown.cash + breakdown.phonePe + breakdown.razorpay;
+      if (advancePaid > 0 && breakdownSum !== advancePaid) {
+        return res.status(400).json({
+          success: false,
+          message: `Payment breakdown (₹${breakdownSum}) does not match the advance amount (₹${advancePaid}).`,
+        });
+      }
+    } else if (advancePaid > 0) {
+      // Single-method payments: mirror the full advance into that method's
+      // breakdown bucket so paymentBreakdown is always a complete record,
+      // even when the user didn't fill it in manually.
+      breakdown.cash = paymentMethod === "cash" ? advancePaid : 0;
+      breakdown.phonePe = paymentMethod === "phonepe" ? advancePaid : 0;
+      breakdown.razorpay = paymentMethod === "razorpay" ? advancePaid : 0;
+    }
+
     const vehicle = await Vehicle.findById(vehicleId);
     if (!vehicle || vehicle.isDeleted) {
       return res
@@ -2013,7 +2053,7 @@ export const createBookings = async (req, res, next) => {
       });
     }
 
-    // ========================= PRICING (unchanged) =========================
+    // ========================= PRICING =========================
     const vehicleRent = Number(vehicle.pricePerDay || 0) * finalTotalDays;
     const pickupCharge =
       pickupDropRequired &&
@@ -2027,15 +2067,19 @@ export const createBookings = async (req, res, next) => {
         : 0;
     const fastagAmount = Number(fastagBalance || 0);
 
+    // Total rental amount — discount is NOT subtracted here, it only
+    // reduces the balance due, matching the frontend bill summary logic.
     const quotationAmount =
       vehicleRent + pickupCharge + dropCharge + fastagAmount;
+
+    const finalDiscountAmount = Number(discountAmount) || 0;
+    const finalSecurityDeposit = Number(securityDeposit) || 0;
 
     // ========================= TRANSACTION: Lead (existing or new) -> Booking -> link =========================
     session.startTransaction();
 
     const companyId = req.user.company || req.user._id;
 
-    // NEW: check for an existing lead with this mobile number before creating one
     let lead = await Lead.findOne({
       mobileNumber: mobileNumber.trim(),
       company: companyId,
@@ -2070,8 +2114,8 @@ export const createBookings = async (req, res, next) => {
               tripType: tripType || "local",
               vehicleId: vehicle._id,
               vehicleName: vehicle.vehicleName,
-              bookingAmount: Number(bookingAmount) || 0,
-              discountAmount: Number(discountAmount) || 0,
+              bookingAmount: advancePaid,
+              discountAmount: finalDiscountAmount,
               createdAt: new Date(),
             },
           },
@@ -2110,11 +2154,28 @@ export const createBookings = async (req, res, next) => {
           vehicleNumber: vehicle.vehicleNumber,
           vehicleColor: vehicle.color,
 
+          // Flat fields kept for existing list/card screens
           quotationAmount,
-          bookingAmount: Number(bookingAmount) || 0,
-          discountAmount: Number(discountAmount) || 0,
-          securityDeposit: Number(securityDeposit) || 0,
-          fastagBalance: Number(fastagBalance) || 0,
+          bookingAmount: advancePaid,
+          discountAmount: finalDiscountAmount,
+          securityDeposit: finalSecurityDeposit,
+          fastagBalance: fastagAmount,
+
+          // NEW: structured payment/bill record
+          payment: {
+            vehicleRent,
+            pickupCharge,
+            dropCharge,
+            fastagAmount,
+            totalAmount: quotationAmount,
+            discountAmount: finalDiscountAmount,
+            securityDeposit: finalSecurityDeposit,
+            bookingAmountPaid: advancePaid,
+            paymentMethod,
+            paymentBreakdown: breakdown,
+            // balanceAmount / totalCollected / paymentStatus are computed
+            // by the pre("save") hook on the Booking model.
+          },
 
           pickupDropRequired,
           serviceType,
