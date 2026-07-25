@@ -48,14 +48,62 @@ export const getBookingDetails = async (req, res) => {
     // Flatten a bit so the frontend doesn't have to reach through
     // booking.handover.customer / booking.handover.payment etc. for
     // every field it already renders from the Booking doc itself.
-    const handover = booking.handover || null;
+const handover = booking.handover || null;
+    const handoverPayment = handover?.payment || null;
+    const bookingPayment = booking.payment || null; // Booking schema's own estimate
+
+    const computeStatus = (paid, balance) =>
+      balance === 0 && paid > 0 ? "paid" : paid > 0 ? "partial" : "pending";
+
+    // Merge into ONE shape the frontend can always rely on, whichever
+    // stage the booking is in.
+    const normalizedPayment = handoverPayment
+      ? {
+          isFinal: true,
+          totalAmount:
+            handoverPayment.totalAmount ?? handoverPayment.totalFare ?? 0,
+          extraCharges: handoverPayment.extraCharges || 0,
+          discountAmount: handoverPayment.discountAmount || 0,
+          securityDeposit: handoverPayment.securityDeposit || 0,
+          fastTagPayableAmount: handoverPayment.fastTagPayableAmount || 0,
+          bookingAmountPaid: handoverPayment.bookingAmountPaid || 0,
+          amountReceivedNow: handoverPayment.amountReceivedNow || 0,
+          balanceAmount: handoverPayment.balanceAmount || 0,
+          paymentMethod: handoverPayment.paymentMethod || null,
+          paymentBreakdown: handoverPayment.paymentBreakdown || null,
+          paymentStatus:
+            handoverPayment.paymentStatus ||
+            computeStatus(
+              (handoverPayment.bookingAmountPaid || 0) +
+                (handoverPayment.amountReceivedNow || 0),
+              handoverPayment.balanceAmount || 0,
+            ),
+        }
+      : bookingPayment
+        ? {
+            isFinal: false,
+            totalAmount: bookingPayment.totalAmount || 0,
+            extraCharges: 0,
+            discountAmount: bookingPayment.discountAmount || 0,
+            securityDeposit: bookingPayment.securityDeposit || 0,
+            fastTagPayableAmount: bookingPayment.fastagAmount || 0,
+            bookingAmountPaid: bookingPayment.bookingAmountPaid || 0,
+            amountReceivedNow: 0,
+            balanceAmount: bookingPayment.balanceAmount || 0,
+            paymentMethod: bookingPayment.paymentMethod || null,
+            paymentBreakdown: bookingPayment.paymentBreakdown || null,
+            paymentStatus:
+              bookingPayment.paymentStatus ||
+              computeStatus(
+                bookingPayment.bookingAmountPaid || 0,
+                bookingPayment.balanceAmount || 0,
+              ),
+          }
+        : null;
 
     const data = {
       ...booking,
 
-      // Prefer handover copies of these fields once handover exists
-      // (they may have been edited/confirmed at handover time),
-      // falling back to the original booking values.
       customerName: handover?.customer?.fullName || booking.customerName,
       mobileNumber: handover?.customer?.mobileNumber || booking.mobileNumber,
       alternateMobileNumber:
@@ -74,7 +122,7 @@ export const getBookingDetails = async (req, res) => {
       vehicleColor: handover?.vehicle?.vehicleColor || booking.vehicleColor,
       handoverKm: handover?.vehicle?.handoverKm ?? null,
 
-      payment: handover?.payment || null,
+      payment: normalizedPayment, // <-- always populated, one consistent shape
       images: handover?.images || null,
       hasUploadedImages: handover?.hasUploadedImages ?? false,
       vehicleHistory: handover?.vehicleHistory || [],
@@ -82,7 +130,6 @@ export const getBookingDetails = async (req, res) => {
       handoverStatus: handover?.handoverStatus || null,
       handoverNotes: handover?.notes || "",
 
-      // Keep the raw nested handover doc too, in case the UI needs it as-is.
       handoverRecord: handover,
     };
 
