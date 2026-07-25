@@ -2,15 +2,9 @@ import mongoose from "mongoose";
 import Booking from "../models/booking.model.js";
 import Handover from "../models/handover.model.js";
 
-/**
- * GET /api/bookings/:id/details
- * Returns a single booking with vehicle, handover, and lead data populated.
- * Used by the "View Booking" flow for Active Rental / Completed bookings.
- */
 export const getBookingDetails = async (req, res) => {
   try {
     const { id } = req.params;
-    const companyId = req.user?.company || req.user?._id; // adjust to your auth middleware shape
 
     if (!mongoose.isValidObjectId(id)) {
       return res.status(400).json({
@@ -21,7 +15,6 @@ export const getBookingDetails = async (req, res) => {
 
     const booking = await Booking.findOne({
       _id: id,
-      ...(companyId ? { company: companyId } : {}),
       isDeleted: false,
     })
       .populate("vehicleId")
@@ -48,7 +41,7 @@ export const getBookingDetails = async (req, res) => {
     // Flatten a bit so the frontend doesn't have to reach through
     // booking.handover.customer / booking.handover.payment etc. for
     // every field it already renders from the Booking doc itself.
-const handover = booking.handover || null;
+    const handover = booking.handover || null;
     const handoverPayment = handover?.payment || null;
     const bookingPayment = booking.payment || null; // Booking schema's own estimate
 
