@@ -1297,6 +1297,10 @@ export const createLeadBooking = async (req, res, next) => {
       rentalType,
       residents,
 
+      // NEW: how the advance was collected
+      paymentMethod = "cash", // "cash" | "phonepe" | "razorpay" | "mixed"
+      paymentBreakdown = {}, // { cash, phonePe, razorpay } — required when paymentMethod === "mixed"
+
       // PICKUP / DROP SERVICE FIELDS FROM MOBILE APP
       pickupDropRequired,
       serviceType,
@@ -1310,6 +1314,40 @@ export const createLeadBooking = async (req, res, next) => {
         success: false,
         message: "Vehicle is required.",
       });
+    }
+
+    // NEW: validate payment method / mixed breakdown up front
+    const VALID_PAYMENT_METHODS = ["cash", "phonepe", "razorpay", "mixed"];
+    if (!VALID_PAYMENT_METHODS.includes(paymentMethod)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid payment method.",
+      });
+    }
+
+    const advancePaid = Number(bookingAmount) || 0;
+    const breakdown = {
+      cash: Number(paymentBreakdown.cash) || 0,
+      phonePe: Number(paymentBreakdown.phonePe) || 0,
+      razorpay: Number(paymentBreakdown.razorpay) || 0,
+    };
+
+    if (paymentMethod === "mixed") {
+      const breakdownSum =
+        breakdown.cash + breakdown.phonePe + breakdown.razorpay;
+      if (advancePaid > 0 && breakdownSum !== advancePaid) {
+        return res.status(400).json({
+          success: false,
+          message: `Payment breakdown (₹${breakdownSum}) does not match the advance amount (₹${advancePaid}).`,
+        });
+      }
+    } else if (advancePaid > 0) {
+      // Single-method payments: mirror the full advance into that method's
+      // breakdown bucket so paymentBreakdown is always a complete record,
+      // even when the user didn't fill it in manually.
+      breakdown.cash = paymentMethod === "cash" ? advancePaid : 0;
+      breakdown.phonePe = paymentMethod === "phonepe" ? advancePaid : 0;
+      breakdown.razorpay = paymentMethod === "razorpay" ? advancePaid : 0;
     }
 
     // Keep latest customer info in Lead
@@ -1344,6 +1382,18 @@ export const createLeadBooking = async (req, res, next) => {
           "A booking already exists for this vehicle during the selected trip.",
       });
     }
+
+    // NEW: fetch the vehicle so we can compute a real vehicle-rent figure
+    // for the payment subdocument (same as the fresh-booking flow).
+    const vehicle = await Vehicle.findById(vehicleId);
+    if (!vehicle || vehicle.isDeleted) {
+      return res.status(404).json({
+        success: false,
+        message: "Vehicle not found.",
+      });
+    }
+
+    const finalTotalDays = Number(totalDays) || 1;
 
     // Normalize pickup/drop service inputs — only persist the leg(s) that
     // actually apply to the chosen serviceType, so a "pickup" only booking
@@ -1381,6 +1431,23 @@ export const createLeadBooking = async (req, res, next) => {
         }
       : { location: "", landmark: "", mapLink: "", charge: 0 };
 
+    // ========================= PRICING =========================
+    const vehicleRent = Number(vehicle.pricePerDay || 0) * finalTotalDays;
+    const pickupCharge = pickupDetails.charge;
+    const dropCharge = dropDetails.charge;
+    const fastagAmount = Number(fastagBalance) || 0;
+
+    // Prefer a freshly computed total from the actual vehicle rate; fall
+    // back to the lead's stored quotation only if the vehicle has no rate
+    // configured (keeps old behaviour as a safety net).
+    const computedTotal =
+      vehicleRent + pickupCharge + dropCharge + fastagAmount;
+    const finalQuotationAmount =
+      computedTotal > 0 ? computedTotal : lead.quotationAmount || 0;
+
+    const finalDiscountAmount = Number(discountAmount) || 0;
+    const finalSecurityDeposit = Number(securityDeposit) || 0;
+
     const booking = await Booking.create({
       lead: lead._id,
       company: companyId,
@@ -1405,14 +1472,34 @@ export const createLeadBooking = async (req, res, next) => {
 
       residents: Number(residents) || lead.residents || 1,
       vehicleId,
-      vehicleName,
+      vehicleName: vehicleName || vehicle.vehicleName,
+      vehicleNumber: vehicle.vehicleNumber,
+      vehicleColor: vehicle.color,
 
-      quotationAmount: lead.quotationAmount || 0,
-      bookingAmount: Number(bookingAmount) || 0,
-      discountAmount: Number(discountAmount) || 0,
-      securityDeposit: Number(securityDeposit) || 0,
-      fastagBalance: Number(fastagBalance) || 0,
-      totalDays: Number(totalDays) || 1,
+      // Flat fields kept for existing list/card screens
+      quotationAmount: finalQuotationAmount,
+      bookingAmount: advancePaid,
+      discountAmount: finalDiscountAmount,
+      securityDeposit: finalSecurityDeposit,
+      fastagBalance: fastagAmount,
+      totalDays: finalTotalDays,
+
+      // NEW: structured payment/bill record — mirrors Handover.payment so
+      // the "View Booking" bill screen renders identically pre/post handover.
+      payment: {
+        vehicleRent,
+        pickupCharge,
+        dropCharge,
+        fastagAmount,
+        totalAmount: finalQuotationAmount,
+        discountAmount: finalDiscountAmount,
+        securityDeposit: finalSecurityDeposit,
+        bookingAmountPaid: advancePaid,
+        paymentMethod,
+        paymentBreakdown: breakdown,
+        // balanceAmount / totalCollected / paymentStatus are computed
+        // by the pre("save") hook on the Booking model.
+      },
 
       // PERSIST PICKUP / DROP SERVICE
       pickupDropRequired: isPickupDropRequired,

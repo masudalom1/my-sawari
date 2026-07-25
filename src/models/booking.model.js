@@ -166,31 +166,6 @@ const bookingSchema = new mongoose.Schema(
     // =========================
     // PRICING
     // =========================
-
-    quotationAmount: {
-      type: Number,
-      default: 0,
-    },
-
-    bookingAmount: {
-      type: Number,
-      default: 0,
-    },
-
-    discountAmount: {
-      type: Number,
-      default: 0,
-    },
-    securityDeposit: {
-      type: Number,
-      default: 0,
-      min: 0,
-    },
-       fastagBalance: {
-      type: Number,
-      default: 0,
-      min: 0,
-    },
     payment: {
       vehicleRent: {
         type: Number,
