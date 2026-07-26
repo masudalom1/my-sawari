@@ -15,6 +15,12 @@ const handoverSchema = new mongoose.Schema(
       required: true,
     },
 
+      bookingId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Booking",
+      index: true,
+    },
+
     customer: {
       fullName: {
         type: String,
