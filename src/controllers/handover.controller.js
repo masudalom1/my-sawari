@@ -637,6 +637,33 @@ export const createHandover = async (req, res, next) => {
 
           razorpay: Number(payment?.paymentBreakdown?.razorpay) || 0,
         },
+        billSummary: {
+          totalFare: Number(payment?.totalFare) || 0,
+
+          fastTagPayable: Number(payment?.fastTagPayableAmount) || 0,
+
+          pickupCharge: Number(booking?.pickup?.charge) || 0,
+
+          dropCharge: Number(booking?.drop?.charge) || 0,
+
+          securityDeposit: Number(payment?.securityDeposit) || 0,
+
+          extraCharges: Number(payment?.extraCharges) || 0,
+
+          discountAmount: Number(payment?.discountAmount) || 0,
+
+          totalAmount: Number(payment?.totalAmount) || 0,
+
+          bookingAmountPaid: Number(payment?.bookingAmountPaid) || 0,
+
+          amountReceivedNow: Number(payment?.amountReceivedNow) || 0,
+
+          totalCollected:
+            Number(payment?.bookingAmountPaid || 0) +
+            Number(payment?.amountReceivedNow || 0),
+
+          balanceAmount: Number(payment?.balanceAmount) || 0,
+        },
       },
 
       notes: notes || "",

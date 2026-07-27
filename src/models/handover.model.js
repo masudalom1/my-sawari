@@ -15,7 +15,7 @@ const handoverSchema = new mongoose.Schema(
       required: true,
     },
 
-      bookingId: {
+    bookingId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Booking",
       index: true,
@@ -276,6 +276,67 @@ const handoverSchema = new mongoose.Schema(
         type: String,
         enum: ["paid", "partial", "pending"],
         default: "pending",
+      },
+      billSummary: {
+        totalFare: {
+          type: Number,
+          default: 0,
+        },
+
+        fastTagPayable: {
+          type: Number,
+          default: 0,
+        },
+
+        pickupCharge: {
+          type: Number,
+          default: 0,
+        },
+
+        dropCharge: {
+          type: Number,
+          default: 0,
+        },
+
+        securityDeposit: {
+          type: Number,
+          default: 0,
+        },
+
+        extraCharges: {
+          type: Number,
+          default: 0,
+        },
+
+        discountAmount: {
+          type: Number,
+          default: 0,
+        },
+
+        totalAmount: {
+          type: Number,
+          default: 0,
+        },
+
+        bookingAmountPaid: {
+          type: Number,
+          default: 0,
+        },
+
+        amountReceivedNow: {
+          type: Number,
+          default: 0,
+        },
+
+        totalCollected: {
+          type: Number,
+          default: 0,
+        },
+
+        balanceAmount: {
+          type: Number,
+          default: 0,
+        },
       },
     },
 
