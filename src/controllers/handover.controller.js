@@ -347,7 +347,7 @@ export const getHandoverById = async (req, res) => {
     }
 
     const handover = await Handover.findById(id)
-      .populate("createdBy", "fullName email")
+      .populate("createdBy", "fullName email mobileNumber role")
       .populate("vehicle.vehicleId")
       .lean();
 
@@ -363,12 +363,15 @@ export const getHandoverById = async (req, res) => {
       data: handover,
     });
   } catch (error) {
-    console.error(error);
+    console.error("GET HANDOVER BY ID ERROR:", error);
 
     return res.status(500).json({
       success: false,
       message: "Unable to fetch handover.",
-      error: process.env.NODE_ENV === "development" ? error.message : undefined,
+      error:
+        process.env.NODE_ENV === "development"
+          ? error.message
+          : undefined,
     });
   }
 };
