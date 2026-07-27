@@ -2317,7 +2317,7 @@ export const createBookings = async (req, res, next) => {
 export const getBookingDetails = async (req, res, next) => {
   try {
     const { id } = req.params;
-
+ 
     const booking = await Booking.findOne({
       _id: id,
       isDeleted: false,
@@ -2338,16 +2338,227 @@ export const getBookingDetails = async (req, res, next) => {
         path: "vehicleReturn",
       })
       .lean();
-
+ 
     if (!booking) {
       return res.status(404).json({
         success: false,
         message: "Booking not found.",
       });
     }
-
+ 
     return res.status(200).json({
       success: true,
+      booking,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+ 
+export const updateBooking = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+ 
+    const {
+      customerName,
+      mobileNumber,
+      alternateMobileNumber,
+      occupation,
+      destination,
+      aadhaarNumber,
+      drivingLicenseNumber,
+ 
+      vehicleId,
+      vehicleName,
+ 
+      tripType,
+ 
+      fromDate,
+      toDate,
+      pickupTime,
+      dropTime,
+      totalDays,
+ 
+      pickupDropRequired,
+      serviceType,
+ 
+      pickup,
+      drop,
+      pickupDropNotes,
+ 
+      payment,
+    } = req.body;
+ 
+    // ---- Basic validation ----
+    if (!customerName || !customerName.trim()) {
+      return res.status(400).json({
+        success: false,
+        message: "Customer name is required.",
+      });
+    }
+ 
+    if (!mobileNumber || !mobileNumber.trim()) {
+      return res.status(400).json({
+        success: false,
+        message: "Mobile number is required.",
+      });
+    }
+ 
+    if (!vehicleId) {
+      return res.status(400).json({
+        success: false,
+        message: "A vehicle must be selected.",
+      });
+    }
+ 
+    if (!fromDate || !toDate) {
+      return res.status(400).json({
+        success: false,
+        message: "Pickup and drop dates are required.",
+      });
+    }
+ 
+    // ---- Fetch existing booking ----
+    const booking = await Booking.findOne({ _id: id, isDeleted: false });
+ 
+    if (!booking) {
+      return res.status(404).json({
+        success: false,
+        message: "Booking not found.",
+      });
+    }
+ 
+    if (booking.status === "cancelled") {
+      return res.status(400).json({
+        success: false,
+        message: "Cancelled bookings cannot be edited.",
+      });
+    }
+ 
+    // ---- Validate the vehicle belongs to the same company ----
+    const vehicle = await Vehicle.findOne({
+      _id: vehicleId,
+      company: booking.company,
+    });
+ 
+    if (!vehicle) {
+      return res.status(404).json({
+        success: false,
+        message: "Selected vehicle not found.",
+      });
+    }
+ 
+    // ---- Customer / identity fields ----
+    booking.customerName = customerName.trim();
+    booking.mobileNumber = mobileNumber.trim();
+    booking.alternateMobileNumber = alternateMobileNumber || "";
+    booking.occupation = occupation || "";
+    booking.destination = destination || "";
+    booking.aadhaarNumber = aadhaarNumber || "";
+    booking.drivingLicenseNumber = drivingLicenseNumber || "";
+ 
+    // ---- Vehicle ----
+    booking.vehicleId = vehicle._id;
+    booking.vehicleName = vehicleName || vehicle.vehicleName || "";
+    booking.vehicleNumber = vehicle.vehicleNumber || "";
+    booking.vehicleColor = vehicle.color || booking.vehicleColor || "";
+ 
+    // ---- Trip schedule ----
+    booking.tripType = tripType || "local";
+    booking.fromDate = new Date(fromDate);
+    booking.toDate = new Date(toDate);
+    booking.pickupTime = pickupTime || booking.pickupTime;
+    booking.dropTime = dropTime || booking.dropTime;
+    booking.totalDays = Math.max(Number(totalDays) || 1, 1);
+ 
+    // ---- Pickup / Drop service ----
+    booking.pickupDropRequired = !!pickupDropRequired;
+    booking.serviceType = serviceType || "pickup_drop";
+ 
+    booking.pickup = {
+      location: pickup?.location || "",
+      landmark: pickup?.landmark || "",
+      mapLink: pickup?.mapLink || "",
+      charge: Number(pickup?.charge) || 0,
+    };
+ 
+    booking.drop = {
+      location: drop?.location || "",
+      landmark: drop?.landmark || "",
+      mapLink: drop?.mapLink || "",
+      charge: Number(drop?.charge) || 0,
+    };
+ 
+    booking.pickupDropNotes = pickupDropNotes || "";
+ 
+    // ---- Pricing (nested under `payment`, matches the schema) ----
+    if (payment) {
+      booking.payment.vehicleRent = Number(payment.vehicleRent) || 0;
+      booking.payment.pickupCharge = Number(payment.pickupCharge) || 0;
+      booking.payment.dropCharge = Number(payment.dropCharge) || 0;
+      booking.payment.fastagAmount = Number(payment.fastagAmount) || 0;
+      booking.payment.totalAmount = Number(payment.totalAmount) || 0;
+      booking.payment.discountAmount = Number(payment.discountAmount) || 0;
+      booking.payment.securityDeposit = Number(payment.securityDeposit) || 0;
+      booking.payment.bookingAmountPaid =
+        Number(payment.bookingAmountPaid) || 0;
+ 
+      if (payment.paymentMethod) {
+        booking.payment.paymentMethod = payment.paymentMethod;
+      }
+      // balanceAmount / totalCollected / paymentStatus are NOT set here —
+      // they're derived automatically by the schema's pre("save") hook.
+    }
+ 
+    await booking.save();
+ 
+    const updatedBooking = await Booking.findById(booking._id)
+      .populate({
+        path: "vehicleId",
+        select:
+          "vehicleName vehicleNumber manufacturer model variant color fuelType transmission seatingCapacity pricePerDay images",
+      })
+      .lean();
+ 
+    return res.status(200).json({
+      success: true,
+      message: "Booking updated successfully.",
+      booking: updatedBooking,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+ 
+// =========================================================
+// CANCEL BOOKING
+// =========================================================
+export const cancelBooking = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+ 
+    const booking = await Booking.findOne({ _id: id, isDeleted: false });
+ 
+    if (!booking) {
+      return res.status(404).json({
+        success: false,
+        message: "Booking not found.",
+      });
+    }
+ 
+    if (booking.status === "cancelled") {
+      return res.status(400).json({
+        success: false,
+        message: "Booking is already cancelled.",
+      });
+    }
+ 
+    booking.status = "cancelled";
+    await booking.save();
+ 
+    return res.status(200).json({
+      success: true,
+      message: "Booking cancelled successfully.",
       booking,
     });
   } catch (error) {
