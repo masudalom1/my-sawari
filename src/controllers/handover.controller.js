@@ -1107,6 +1107,39 @@ export const getSingleHandover = async (req, res) => {
 
     const data = handover.toObject();
 
+    // FIX: build the bill the frontend renders straight from the stored
+    // payment.billSummary — the single already-computed, already-saved
+    // breakdown — instead of the frontend re-deriving a "Financial Ledger"
+    // from loose top-level payment fields. Falls back to the flat payment
+    // fields only for older documents saved before billSummary existed, so
+    // nothing on old handovers breaks.
+    const rawPayment = data.payment || {};
+    const bill = rawPayment.billSummary || {};
+
+    data.payment = {
+      ...rawPayment,
+      billSummary: {
+        totalFare: bill.totalFare ?? rawPayment.totalFare ?? 0,
+        fastTagPayable:
+          bill.fastTagPayable ?? rawPayment.fastTagPayableAmount ?? 0,
+        pickupCharge: bill.pickupCharge ?? 0,
+        dropCharge: bill.dropCharge ?? 0,
+        securityDeposit: bill.securityDeposit ?? rawPayment.securityDeposit ?? 0,
+        extraCharges: bill.extraCharges ?? rawPayment.extraCharges ?? 0,
+        discountAmount: bill.discountAmount ?? rawPayment.discountAmount ?? 0,
+        totalAmount: bill.totalAmount ?? rawPayment.totalAmount ?? 0,
+        bookingAmountPaid:
+          bill.bookingAmountPaid ?? rawPayment.bookingAmountPaid ?? 0,
+        amountReceivedNow:
+          bill.amountReceivedNow ?? rawPayment.amountReceivedNow ?? 0,
+        totalCollected:
+          bill.totalCollected ??
+          (rawPayment.bookingAmountPaid || 0) +
+            (rawPayment.amountReceivedNow || 0),
+        balanceAmount: bill.balanceAmount ?? rawPayment.balanceAmount ?? 0,
+      },
+    };
+
     data.gallery = {
       handover: [
         {
