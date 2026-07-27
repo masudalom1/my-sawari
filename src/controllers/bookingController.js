@@ -38,9 +38,6 @@ export const getBookingDetails = async (req, res) => {
       });
     }
 
-    // Flatten a bit so the frontend doesn't have to reach through
-    // booking.handover.customer / booking.handover.payment etc. for
-    // every field it already renders from the Booking doc itself.
     const handover = booking.handover || null;
     const handoverPayment = handover?.payment || null;
     const bookingPayment = booking.payment || null; // Booking schema's own estimate
@@ -48,11 +45,22 @@ export const getBookingDetails = async (req, res) => {
     const computeStatus = (paid, balance) =>
       balance === 0 && paid > 0 ? "paid" : paid > 0 ? "partial" : "pending";
 
-    // Merge into ONE shape the frontend can always rely on, whichever
-    // stage the booking is in.
+    // FIX: vehicleFare now comes straight from the field the DB actually
+    // stores it under — there is no field literally called "vehicleFare"
+    // in either schema:
+    //   - Handover.payment.totalFare   → the vehicle rent figure once the
+    //     handover is finalized (see Handover model: totalFare, required).
+    //   - Booking.payment.vehicleRent  → the vehicle rent figure at the
+    //     booking/estimate stage (see Booking model: payment.vehicleRent).
+    // The frontend previously tried to guess this from several
+    // never-populated field names (baseFare, rentAmount, vehiclePrice...)
+    // and fell back to reverse-engineering it via subtraction, which is
+    // what produced the ₹2000 → ₹2200-style mismatches. Mapping it here,
+    // once, from the correct source field removes the guesswork entirely.
     const normalizedPayment = handoverPayment
       ? {
           isFinal: true,
+          vehicleFare: handoverPayment.totalFare || 0,
           totalAmount:
             handoverPayment.totalAmount ?? handoverPayment.totalFare ?? 0,
           extraCharges: handoverPayment.extraCharges || 0,
@@ -75,6 +83,7 @@ export const getBookingDetails = async (req, res) => {
       : bookingPayment
         ? {
             isFinal: false,
+            vehicleFare: bookingPayment.vehicleRent || 0,
             totalAmount: bookingPayment.totalAmount || 0,
             extraCharges: 0,
             discountAmount: bookingPayment.discountAmount || 0,
@@ -115,7 +124,7 @@ export const getBookingDetails = async (req, res) => {
       vehicleColor: handover?.vehicle?.vehicleColor || booking.vehicleColor,
       handoverKm: handover?.vehicle?.handoverKm ?? null,
 
-      payment: normalizedPayment, // <-- always populated, one consistent shape
+      payment: normalizedPayment, // <-- always populated, one consistent shape, vehicleFare included
       images: handover?.images || null,
       hasUploadedImages: handover?.hasUploadedImages ?? false,
       vehicleHistory: handover?.vehicleHistory || [],
