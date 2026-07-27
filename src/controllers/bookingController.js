@@ -45,60 +45,72 @@ export const getBookingDetails = async (req, res) => {
     const computeStatus = (paid, balance) =>
       balance === 0 && paid > 0 ? "paid" : paid > 0 ? "partial" : "pending";
 
-    // FIX: vehicleFare now comes straight from the field the DB actually
-    // stores it under — there is no field literally called "vehicleFare"
-    // in either schema:
-    //   - Handover.payment.totalFare   → the vehicle rent figure once the
-    //     handover is finalized (see Handover model: totalFare, required).
-    //   - Booking.payment.vehicleRent  → the vehicle rent figure at the
-    //     booking/estimate stage (see Booking model: payment.vehicleRent).
-    // The frontend previously tried to guess this from several
-    // never-populated field names (baseFare, rentAmount, vehiclePrice...)
-    // and fell back to reverse-engineering it via subtraction, which is
-    // what produced the ₹2000 → ₹2200-style mismatches. Mapping it here,
-    // once, from the correct source field removes the guesswork entirely.
-    const normalizedPayment = handoverPayment
+    // FIX: normalizedPayment is now built straight from the stored
+    // `billSummary` object on whichever payment doc is active
+    // (Handover.payment.billSummary once finalized, or
+    // Booking.payment.billSummary at the estimate stage). billSummary is
+    // already the fully-computed, saved-to-DB bill — pickupCharge,
+    // dropCharge, totalFare, totalCollected, balanceAmount, all of it —
+    // so there is no more re-deriving individual charges from unrelated
+    // fields (booking.pickup.charge, manual addition for "collected",
+    // etc.) that could drift out of sync with each other. One source of
+    // truth in, one consistent shape out.
+    const handoverBill = handoverPayment?.billSummary || null;
+    const bookingBill = bookingPayment?.billSummary || null;
+
+    const normalizedPayment = handoverBill
       ? {
           isFinal: true,
-          vehicleFare: handoverPayment.totalFare || 0,
-          totalAmount:
-            handoverPayment.totalAmount ?? handoverPayment.totalFare ?? 0,
-          extraCharges: handoverPayment.extraCharges || 0,
-          discountAmount: handoverPayment.discountAmount || 0,
-          securityDeposit: handoverPayment.securityDeposit || 0,
-          fastTagPayableAmount: handoverPayment.fastTagPayableAmount || 0,
-          bookingAmountPaid: handoverPayment.bookingAmountPaid || 0,
-          amountReceivedNow: handoverPayment.amountReceivedNow || 0,
-          balanceAmount: handoverPayment.balanceAmount || 0,
+          vehicleFare: handoverBill.totalFare || 0,
+          pickupCharge: handoverBill.pickupCharge || 0,
+          dropCharge: handoverBill.dropCharge || 0,
+          extraCharges: handoverBill.extraCharges || 0,
+          discountAmount: handoverBill.discountAmount || 0,
+          securityDeposit: handoverBill.securityDeposit || 0,
+          fastTagPayableAmount: handoverBill.fastTagPayable || 0,
+          totalAmount: handoverBill.totalAmount || 0,
+          bookingAmountPaid: handoverBill.bookingAmountPaid || 0,
+          amountReceivedNow: handoverBill.amountReceivedNow || 0,
+          totalCollected:
+            handoverBill.totalCollected ??
+            (handoverBill.bookingAmountPaid || 0) +
+              (handoverBill.amountReceivedNow || 0),
+          balanceAmount: handoverBill.balanceAmount || 0,
           paymentMethod: handoverPayment.paymentMethod || null,
           paymentBreakdown: handoverPayment.paymentBreakdown || null,
           paymentStatus:
             handoverPayment.paymentStatus ||
             computeStatus(
-              (handoverPayment.bookingAmountPaid || 0) +
-                (handoverPayment.amountReceivedNow || 0),
-              handoverPayment.balanceAmount || 0,
+              (handoverBill.bookingAmountPaid || 0) +
+                (handoverBill.amountReceivedNow || 0),
+              handoverBill.balanceAmount || 0,
             ),
         }
-      : bookingPayment
+      : bookingBill
         ? {
             isFinal: false,
-            vehicleFare: bookingPayment.vehicleRent || 0,
-            totalAmount: bookingPayment.totalAmount || 0,
-            extraCharges: 0,
-            discountAmount: bookingPayment.discountAmount || 0,
-            securityDeposit: bookingPayment.securityDeposit || 0,
-            fastTagPayableAmount: bookingPayment.fastagAmount || 0,
-            bookingAmountPaid: bookingPayment.bookingAmountPaid || 0,
-            amountReceivedNow: 0,
-            balanceAmount: bookingPayment.balanceAmount || 0,
+            vehicleFare: bookingBill.totalFare || 0,
+            pickupCharge: bookingBill.pickupCharge || 0,
+            dropCharge: bookingBill.dropCharge || 0,
+            extraCharges: bookingBill.extraCharges || 0,
+            discountAmount: bookingBill.discountAmount || 0,
+            securityDeposit: bookingBill.securityDeposit || 0,
+            fastTagPayableAmount: bookingBill.fastTagPayable || 0,
+            totalAmount: bookingBill.totalAmount || 0,
+            bookingAmountPaid: bookingBill.bookingAmountPaid || 0,
+            amountReceivedNow: bookingBill.amountReceivedNow || 0,
+            totalCollected:
+              bookingBill.totalCollected ??
+              (bookingBill.bookingAmountPaid || 0) +
+                (bookingBill.amountReceivedNow || 0),
+            balanceAmount: bookingBill.balanceAmount || 0,
             paymentMethod: bookingPayment.paymentMethod || null,
             paymentBreakdown: bookingPayment.paymentBreakdown || null,
             paymentStatus:
               bookingPayment.paymentStatus ||
               computeStatus(
-                bookingPayment.bookingAmountPaid || 0,
-                bookingPayment.balanceAmount || 0,
+                bookingBill.bookingAmountPaid || 0,
+                bookingBill.balanceAmount || 0,
               ),
           }
         : null;
@@ -124,7 +136,7 @@ export const getBookingDetails = async (req, res) => {
       vehicleColor: handover?.vehicle?.vehicleColor || booking.vehicleColor,
       handoverKm: handover?.vehicle?.handoverKm ?? null,
 
-      payment: normalizedPayment, // <-- always populated, one consistent shape, vehicleFare included
+      payment: normalizedPayment, // <-- always populated, sourced from billSummary
       images: handover?.images || null,
       hasUploadedImages: handover?.hasUploadedImages ?? false,
       vehicleHistory: handover?.vehicleHistory || [],
