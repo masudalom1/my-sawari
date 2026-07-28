@@ -144,6 +144,14 @@ export const getBookingDetails = async (req, res) => {
       handoverStatus: handover?.handoverStatus || null,
       handoverNotes: handover?.notes || "",
 
+      handoverInfo: handover
+  ? {
+      name: handover.createdBy?.name || "",
+      email: handover.createdBy?.email || "",
+      handoverDateTime: handover.createdAt,
+    }
+  : null,
+
       handoverRecord: handover,
     };
 
