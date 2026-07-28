@@ -146,7 +146,7 @@ export const getBookingDetails = async (req, res) => {
 
       handoverInfo: handover
   ? {
-      name: handover.createdBy?.name || "",
+      fullName: handover.createdBy?.fullName || "",
       email: handover.createdBy?.email || "",
       handoverDateTime: handover.createdAt,
     }
