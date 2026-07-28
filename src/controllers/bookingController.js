@@ -23,7 +23,7 @@ export const getBookingDetails = async (req, res) => {
         path: "handover",
         populate: [
           { path: "vehicle.vehicleId" },
-          { path: "createdBy", select: "name email" },
+          { path: "createdBy", select: "fullName email" },
           { path: "vehicleHistory.oldVehicle.vehicleId" },
           { path: "vehicleHistory.newVehicle.vehicleId" },
           { path: "returnDetails.returnedBy", select: "name email" },
