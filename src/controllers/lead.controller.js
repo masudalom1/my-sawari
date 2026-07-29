@@ -2499,11 +2499,97 @@ export const updateBooking = async (req, res, next) => {
     booking.vehicleNumber = vehicle.vehicleNumber;
     booking.vehicleColor = vehicle.color;
 
-    booking.quotationAmount = quotationAmount;
-    booking.bookingAmount = Number(bookingAmount) || 0;
-    booking.discountAmount = Number(discountAmount) || 0;
-    booking.securityDeposit = Number(securityDeposit) || 0; // ADDED
-    booking.fastagBalance = Number(fastagBalance) || 0; // ADDED — requires schema field, see note below
+// =========================
+// PAYMENT
+// =========================
+
+const bookingAmountPaid = Number(bookingAmount) || 0;
+const discount = Number(discountAmount) || 0;
+const security = Number(securityDeposit) || 0;
+const fastTagPayable = Number(fastagBalance) || 0;
+
+const extraCharges = Number(req.body.extraCharges || 0);
+
+// Vehicle + Pickup + Drop + Fastag
+const totalFare =
+  vehicleRent +
+  pickupCharge +
+  dropCharge +
+  fastTagPayable;
+
+// Final Amount
+const totalAmount =
+  totalFare +
+  security +
+  extraCharges -
+  discount;
+
+// Update Screen only edits booking advance.
+// Received now remains 0.
+const amountReceivedNow = 0;
+
+const totalCollected =
+  bookingAmountPaid +
+  amountReceivedNow;
+
+const balanceAmount = Math.max(
+  totalAmount - totalCollected,
+  0,
+);
+
+let paymentStatus = "pending";
+
+if (balanceAmount === 0) {
+  paymentStatus = "paid";
+} else if (totalCollected > 0) {
+  paymentStatus = "partial";
+}
+
+booking.quotationAmount = totalFare;
+
+booking.bookingAmount = bookingAmountPaid;
+booking.discountAmount = discount;
+booking.securityDeposit = security;
+booking.fastagBalance = fastTagPayable;
+
+booking.payment = booking.payment || {};
+
+booking.payment.totalFare = totalFare;
+
+booking.payment.fastTagBalance = fastTagPayable;
+
+booking.payment.fastTagPayableAmount = fastTagPayable;
+
+booking.payment.securityDeposit = security;
+
+booking.payment.extraCharges = extraCharges;
+
+booking.payment.discountAmount = discount;
+
+booking.payment.totalAmount = totalAmount;
+
+booking.payment.bookingAmountPaid = bookingAmountPaid;
+
+booking.payment.amountReceivedNow = amountReceivedNow;
+
+booking.payment.balanceAmount = balanceAmount;
+
+booking.payment.paymentStatus = paymentStatus;
+
+booking.payment.billSummary = {
+  totalFare,
+  fastTagPayable,
+  pickupCharge,
+  dropCharge,
+  securityDeposit: security,
+  extraCharges,
+  discountAmount: discount,
+  totalAmount,
+  bookingAmountPaid,
+  amountReceivedNow,
+  totalCollected,
+  balanceAmount,
+};
 
     booking.pickupDropRequired = pickupDropRequired;
     booking.serviceType = serviceType;
