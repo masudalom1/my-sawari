@@ -1491,30 +1491,40 @@ export const getReceiveCarList = async (req, res) => {
 function buildBillSummaryResponse(handover) {
   const payment = handover.payment || {};
   const extensionBills = handover.extensionBills || [];
- 
+
+  // FIX: payment.billSummary is the single snapshot updateRental
+  // maintains (it has pickupCharge, dropCharge, totalAmount,
+  // balanceAmount, totalCollected — all correctly computed there).
+  // Read from it instead of recomputing separate numbers under
+  // different names here, which is what caused pickupCharge/
+  // dropCharge to go missing entirely from this response, and
+  // totalAmount/balanceAmount to be renamed to grandTotal/balanceDue
+  // (fields the frontend never asked for, so they always read as 0).
+  const billSummary = payment.billSummary || {};
+
   const totalExtensionAmount = extensionBills.reduce(
     (sum, bill) => sum + (bill.extensionAmount || 0),
     0,
   );
- 
+
   const baseFare = Math.max(0, (payment.totalFare || 0) - totalExtensionAmount);
- 
+
   const originalNumberOfDays =
     extensionBills.length > 0
       ? extensionBills[0].previousNumberOfDays
       : handover.trip?.numberOfDays;
- 
+
   const originalDropDateTime =
     extensionBills.length > 0
       ? extensionBills[0].previousDropDateTime
       : handover.trip?.dropDateTime;
- 
+
   // "Previous bill total" = what totalFare was right before the CURRENT
   // in-progress edit — i.e. baseFare + every extension already applied.
   // If this rental has never been extended, there's no "previous bill"
   // distinct from the original booking, so this equals baseFare.
   const previousBillTotal = payment.totalFare || 0;
- 
+
   return {
     originalBill: {
       pickupDateTime: handover.trip?.pickupDateTime,
@@ -1522,7 +1532,7 @@ function buildBillSummaryResponse(handover) {
       numberOfDays: originalNumberOfDays,
       baseFare,
     },
- 
+
     extensionBills: extensionBills.map((bill) => ({
       billNumber: bill.billNumber,
       previousDropDateTime: bill.previousDropDateTime,
@@ -1536,24 +1546,44 @@ function buildBillSummaryResponse(handover) {
       reason: bill.reason,
       createdAt: bill.createdAt,
     })),
- 
+
     previousBillTotal,
- 
+
+    // FIX: pickupCharge/dropCharge added — previously absent entirely
+    // from this object, so the frontend always read them as undefined.
     charges: {
       baseFare,
       totalExtensionAmount,
-      totalFare: payment.totalFare || 0,
-      fastTagPayableAmount: payment.fastTagPayableAmount || 0,
-      securityDeposit: payment.securityDeposit || 0,
-      extraCharges: payment.extraCharges || 0,
-      discountAmount: payment.discountAmount || 0,
+      totalFare: billSummary.totalFare ?? payment.totalFare ?? 0,
+      fastTagPayableAmount:
+        billSummary.fastTagPayable ?? payment.fastTagPayableAmount ?? 0,
+      pickupCharge: billSummary.pickupCharge || 0,
+      dropCharge: billSummary.dropCharge || 0,
+      securityDeposit:
+        billSummary.securityDeposit ?? payment.securityDeposit ?? 0,
+      extraCharges: billSummary.extraCharges ?? payment.extraCharges ?? 0,
+      discountAmount:
+        billSummary.discountAmount ?? payment.discountAmount ?? 0,
     },
- 
-    grandTotal: payment.totalAmount || 0,
+
+    // FIX: flat fields matching payment.billSummary's own field names
+    // exactly, so this is what the frontend actually reads
+    // (billSummary.pickupCharge, billSummary.totalAmount,
+    // billSummary.balanceAmount, etc.) instead of the old
+    // grandTotal/balanceDue names it never looked for.
+    pickupCharge: billSummary.pickupCharge || 0,
+    dropCharge: billSummary.dropCharge || 0,
+    totalAmount: billSummary.totalAmount ?? payment.totalAmount ?? 0,
     totalCollected:
+      billSummary.totalCollected ??
       (payment.bookingAmountPaid || 0) + (payment.amountReceivedNow || 0),
-    balanceDue: payment.balanceAmount || 0,
+    balanceAmount: billSummary.balanceAmount ?? payment.balanceAmount ?? 0,
     paymentStatus: payment.paymentStatus || "pending",
+
+    // Kept for backwards compatibility if anything else still reads
+    // these older names — same values as totalAmount/balanceAmount.
+    grandTotal: billSummary.totalAmount ?? payment.totalAmount ?? 0,
+    balanceDue: billSummary.balanceAmount ?? payment.balanceAmount ?? 0,
   };
 }
 
