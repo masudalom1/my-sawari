@@ -594,3 +594,51 @@ export const markVehicleAvailable = async (req, res) => {
     });
   }
 };
+
+/* ==========================
+   GET RETURN DETAILS (for Completed tab)
+========================== */
+
+export const getReturnDetails = async (req, res) => {
+  try {
+    const { handoverId } = req.params;
+    const companyId = req.user.company || req.user._id;
+
+    const vehicleReturn = await VehicleReturn.findOne({
+      handover: handoverId,
+      company: companyId,
+    })
+      .populate({
+        path: "vehicle",
+        select: "vehicleName vehicleNumber manufacturer model variant color images",
+      })
+      .populate("receivedBy", "fullName role")
+      .populate("createdBy", "fullName role")
+      .populate({
+        path: "handover",
+        select: "customer trip payment createdAt returnDetails",
+        populate: [
+          { path: "customer", select: "fullName mobileNumber email" },
+        ],
+      });
+
+    if (!vehicleReturn) {
+      return res.status(404).json({
+        success: false,
+        message: "Return details not found for this handover",
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      data: vehicleReturn,
+    });
+  } catch (error) {
+    console.error("GET RETURN DETAILS ERROR:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: error.message || "Internal Server Error",
+    });
+  }
+};
