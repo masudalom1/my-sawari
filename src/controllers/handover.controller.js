@@ -1899,6 +1899,43 @@ export const updateRental = async (req, res) => {
         .slice(-500);
     }
 
+    /* ==========================
+       SYNC LINKED BOOKING
+       -> Booking.toDate/totalDays and Booking.payment mirror the
+          handover's trip + payment fields. Booking has its own
+          pre-save hook (different formula: totalAmount - discount -
+          bookingAmountPaid) so it must be saved too, not just
+          assigned, or its balanceAmount/paymentStatus go stale.
+    ========================== */
+    if (handover.bookingId) {
+      const booking = await Booking.findById(handover.bookingId);
+
+      if (booking) {
+        booking.toDate = handover.trip.dropDateTime;
+        booking.totalDays = handover.trip.numberOfDays;
+
+        // Booking.payment.vehicleRent is the counterpart of
+        // handover.payment.totalFare (base fare + every extension).
+        // pickupCharge/dropCharge originated on Booking in the first
+        // place, so they're left untouched here — only re-read to
+        // confirm handover.payment.billSummary still agrees with them.
+        booking.payment.vehicleRent = handover.payment.totalFare || 0;
+        booking.payment.fastagAmount = handover.payment.fastTagPayableAmount || 0;
+        booking.payment.discountAmount = handover.payment.discountAmount || 0;
+        booking.payment.securityDeposit = handover.payment.securityDeposit || 0;
+
+        booking.payment.totalAmount = Math.max(
+          0,
+          (booking.payment.vehicleRent || 0) +
+            (booking.payment.pickupCharge || 0) +
+            (booking.payment.dropCharge || 0) +
+            (booking.payment.fastagAmount || 0),
+        );
+
+        await booking.save(); // hook recomputes balanceAmount/paymentStatus/totalCollected
+      }
+    }
+
     await handover.save(); // hook computes balanceAmount + paymentStatus from totalAmount
 
     return res.status(200).json({
