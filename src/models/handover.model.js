@@ -1,5 +1,65 @@
 import mongoose from "mongoose";
 
+const extensionBillSchema = new mongoose.Schema(
+  {
+    billNumber: {
+      type: Number,
+      required: true,
+    },
+
+    previousDropDateTime: { type: Date, required: true },
+    newDropDateTime: { type: Date, required: true },
+
+    previousNumberOfDays: { type: Number, required: true },
+    newNumberOfDays: { type: Number, required: true },
+
+    // Positive = extended further, negative = shortened
+    extraDays: { type: Number, required: true },
+
+    // The charge for this specific extension (its own bill line item)
+    extensionAmount: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+
+    // How much of "amountReceivedNow" was collected at the moment
+    // this specific extension was made (for a per-bill receipt view)
+    amountCollected: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+
+    // Snapshot of totalFare right after this bill was applied, so
+    // historic entries always render correctly even if later logic
+    // or fields change
+    totalFareAfterThisBill: {
+      type: Number,
+      required: true,
+      min: 0,
+    },
+
+    reason: {
+      type: String,
+      default: "",
+      trim: true,
+    },
+
+    createdBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      required: true,
+    },
+
+    createdAt: {
+      type: Date,
+      default: Date.now,
+    },
+  },
+  { _id: true },
+);
+
 const handoverSchema = new mongoose.Schema(
   {
     company: {
@@ -339,6 +399,7 @@ const handoverSchema = new mongoose.Schema(
         },
       },
     },
+    extensionBills: [extensionBillSchema],
 
     notes: {
       type: String,

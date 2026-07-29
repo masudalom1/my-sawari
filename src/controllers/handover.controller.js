@@ -1487,50 +1487,110 @@ export const getReceiveCarList = async (req, res) => {
 };
 
 // ACTIVE RENTAL EDIT APIS
+function buildBillSummaryResponse(handover) {
+  const payment = handover.payment || {};
+  const extensionBills = handover.extensionBills || [];
+ 
+  const originalNumberOfDays =
+    extensionBills.length > 0
+      ? extensionBills[0].previousNumberOfDays
+      : handover.trip?.numberOfDays;
+ 
+  const originalDropDateTime =
+    extensionBills.length > 0
+      ? extensionBills[0].previousDropDateTime
+      : handover.trip?.dropDateTime;
+ 
+  return {
+    originalBill: {
+      pickupDateTime: handover.trip?.pickupDateTime,
+      dropDateTime: originalDropDateTime,
+      numberOfDays: originalNumberOfDays,
+      baseFare: payment.baseFare || 0,
+    },
+ 
+    extensionBills: extensionBills.map((bill) => ({
+      billNumber: bill.billNumber,
+      previousDropDateTime: bill.previousDropDateTime,
+      newDropDateTime: bill.newDropDateTime,
+      previousNumberOfDays: bill.previousNumberOfDays,
+      newNumberOfDays: bill.newNumberOfDays,
+      extraDays: bill.extraDays,
+      extensionAmount: bill.extensionAmount,
+      amountCollected: bill.amountCollected,
+      reason: bill.reason,
+      createdAt: bill.createdAt,
+    })),
+ 
+    charges: {
+      baseFare: payment.baseFare || 0,
+      totalExtensionAmount: payment.totalExtensionAmount || 0,
+      totalFare: payment.totalFare || 0,
+      fastTagPayableAmount: payment.fastTagPayableAmount || 0,
+      securityDeposit: payment.securityDeposit || 0,
+      extraCharges: payment.extraCharges || 0,
+      discountAmount: payment.discountAmount || 0,
+    },
+ 
+    grandTotal: payment.totalAmount || 0,
+    totalCollected:
+      (payment.bookingAmountPaid || 0) + (payment.amountReceivedNow || 0),
+    balanceDue: payment.balanceAmount || 0,
+    paymentStatus: payment.paymentStatus || "pending",
+  };
+}
+ 
+/* ============================================================
+   GET /handover/rentals/:id
+============================================================ */
 export const getRentalDetails = async (req, res) => {
   try {
     const { id } = req.params;
-
+ 
     const handover = await Handover.findById(id);
-
+ 
     if (!handover || handover.isDeleted) {
       return res.status(404).json({
         success: false,
         message: "Rental not found",
       });
     }
-
+ 
     return res.status(200).json({
       success: true,
       data: {
         _id: handover._id,
-
+ 
         customerName: handover.customer?.fullName || "",
         customerPhone: handover.customer?.mobileNumber || "",
-
-        vehicleId: handover.vehicle?.vehicleId, // <-- ADD THIS
+ 
+        vehicleId: handover.vehicle?.vehicleId,
         vehicleModel: handover.vehicle?.vehicleName || "",
         plateNumber: handover.vehicle?.vehicleNumber || "",
         vehicleColor: handover.vehicle?.vehicleColor || "",
-
+ 
         pickupDateTime: handover.trip?.pickupDateTime,
         dropDateTime: handover.trip?.dropDateTime,
-
+        numberOfDays: handover.trip?.numberOfDays,
+ 
+        baseFare: handover.payment?.baseFare || 0,
         totalFare: handover.payment?.totalFare || 0,
         fastagCharges: handover.payment?.fastTagPayableAmount || 0,
         securityDeposit: handover.payment?.securityDeposit || 0,
         extraCharges: handover.payment?.extraCharges || 0,
+        discountAmount: handover.payment?.discountAmount || 0,
         bookingAmountPaid: handover.payment?.bookingAmountPaid || 0,
         amountReceivedPreviously: handover.payment?.amountReceivedNow || 0,
         totalAmount: handover.payment?.totalAmount || 0,
         balanceAmount: handover.payment?.balanceAmount || 0,
         paymentMethod: handover.payment?.paymentMethod || "",
         paymentStatus: handover.payment?.paymentStatus || "pending",
+ 
+        billSummary: buildBillSummaryResponse(handover),
       },
     });
   } catch (error) {
     console.error("GET RENTAL DETAILS ERROR:", error);
-
     return res.status(500).json({
       success: false,
       message: error.message || "Failed to fetch rental details",
@@ -1538,199 +1598,237 @@ export const getRentalDetails = async (req, res) => {
   }
 };
 
+export const getBillSummary = async (req, res) => {
+  try {
+    const { id } = req.params;
+ 
+    const handover = await Handover.findById(id);
+ 
+    if (!handover || handover.isDeleted) {
+      return res.status(404).json({
+        success: false,
+        message: "Rental not found",
+      });
+    }
+ 
+    return res.status(200).json({
+      success: true,
+      data: buildBillSummaryResponse(handover),
+    });
+  } catch (error) {
+    console.error("GET BILL SUMMARY ERROR:", error);
+    return res.status(500).json({
+      success: false,
+      message: error.message || "Failed to fetch bill summary",
+    });
+  }
+};
+ 
 export const updateRental = async (req, res) => {
   try {
     const { id } = req.params;
-
+ 
     const {
       vehicleId,
       dropDateTime,
-      totalFare,
+      extensionPrice, // NEW: itemized charge for THIS extension
       fastagCharges,
       securityDeposit,
       extraCharges,
+      discountAmount,
       amountReceivedNow,
+      paymentMethod,
       reasonForChange,
     } = req.body;
-
-    /* ==========================
-       GET ACTIVE RENTAL
-       (NO COMPANY RESTRICTION)
-    ========================== */
-
+ 
     const handover = await Handover.findOne({
       _id: id,
       isDeleted: false,
       handoverStatus: "active",
     });
-
+ 
     if (!handover) {
       return res.status(404).json({
         success: false,
         message: "Active rental not found",
       });
     }
-
+ 
+    // First-ever edit: lock in baseFare from the current totalFare
+    // so every future extension is measured against the true
+    // original booking value, not whatever the last edit left behind.
+    if (!handover.payment.baseFare) {
+      handover.payment.baseFare = handover.payment.totalFare || 0;
+    }
+ 
     /* ==========================
-       CHANGE VEHICLE
+       CHANGE VEHICLE (unchanged from existing logic)
     ========================== */
-
     if (
       vehicleId &&
       handover.vehicle?.vehicleId &&
       vehicleId.toString() !== handover.vehicle.vehicleId.toString()
     ) {
       const oldVehicleId = handover.vehicle.vehicleId;
-
       const oldVehicleName = handover.vehicle.vehicleName;
-
       const oldVehicleNumber = handover.vehicle.vehicleNumber;
-
+ 
       const vehicle = await Vehicle.findById(vehicleId);
-
+ 
       if (!vehicle || vehicle.isDeleted) {
         return res.status(404).json({
           success: false,
           message: "Vehicle not found",
         });
       }
-
+ 
       if (!["available", "rent"].includes(vehicle.status)) {
         return res.status(400).json({
           success: false,
           message: "Vehicle is not available",
         });
       }
-
-      // Old vehicle becomes available
-      await Vehicle.findByIdAndUpdate(oldVehicleId, {
-        status: "available",
-      });
-
-      // New vehicle becomes rented
-      await Vehicle.findByIdAndUpdate(vehicle._id, {
-        status: "rent",
-      });
-
-      // Save vehicle exchange history
+ 
+      await Vehicle.findByIdAndUpdate(oldVehicleId, { status: "available" });
+      await Vehicle.findByIdAndUpdate(vehicle._id, { status: "rent" });
+ 
       handover.vehicleHistory.push({
         oldVehicle: {
           vehicleId: oldVehicleId,
           vehicleName: oldVehicleName,
           vehicleNumber: oldVehicleNumber,
         },
-
         newVehicle: {
           vehicleId: vehicle._id,
           vehicleName: vehicle.vehicleName,
           vehicleNumber: vehicle.vehicleNumber,
         },
-
         changedBy: req.user._id,
-
         changedAt: new Date(),
-
         reason: reasonForChange || "",
       });
-
-      // Update current vehicle
+ 
       handover.vehicle.vehicleId = vehicle._id;
       handover.vehicle.vehicleName = vehicle.vehicleName;
       handover.vehicle.vehicleNumber = vehicle.vehicleNumber;
       handover.vehicle.vehicleColor = vehicle.color || "";
     }
-
+ 
     /* ==========================
-       UPDATE TRIP
+       EXTEND / SHORTEN TRIP
+       -> appends a new entry to the extension ledger
     ========================== */
-
     if (dropDateTime) {
-      handover.trip.dropDateTime = new Date(dropDateTime);
-
-      const pickup = new Date(handover.trip.pickupDateTime);
-      const drop = new Date(dropDateTime);
-
-      const days = Math.ceil((drop - pickup) / (1000 * 60 * 60 * 24));
-
-      handover.trip.numberOfDays = Math.max(1, days);
+      const previousDropDateTime = handover.trip.dropDateTime;
+      const previousNumberOfDays = handover.trip.numberOfDays || 1;
+      const newDrop = new Date(dropDateTime);
+ 
+      const dropChanged =
+        new Date(previousDropDateTime).getTime() !== newDrop.getTime();
+ 
+      if (dropChanged) {
+        const pickup = new Date(handover.trip.pickupDateTime);
+        const newNumberOfDays = Math.max(
+          1,
+          Math.ceil((newDrop - pickup) / (1000 * 60 * 60 * 24)),
+        );
+        const extraDays = newNumberOfDays - previousNumberOfDays;
+        const extensionAmount = Number(extensionPrice) || 0;
+ 
+        handover.trip.dropDateTime = newDrop;
+        handover.trip.numberOfDays = newNumberOfDays;
+ 
+        handover.payment.totalExtensionAmount =
+          (handover.payment.totalExtensionAmount || 0) + extensionAmount;
+ 
+        // totalFare is ALWAYS derived server-side — never trust
+        // whatever the client thinks the running total is
+        handover.payment.totalFare =
+          (handover.payment.baseFare || 0) +
+          handover.payment.totalExtensionAmount;
+ 
+        handover.extensionBills.push({
+          billNumber: handover.extensionBills.length + 1,
+          previousDropDateTime,
+          newDropDateTime: newDrop,
+          previousNumberOfDays,
+          newNumberOfDays,
+          extraDays,
+          extensionAmount,
+          amountCollected: Number(amountReceivedNow) || 0,
+          totalFareAfterThisBill: handover.payment.totalFare,
+          reason: reasonForChange || "",
+          createdBy: req.user._id,
+          createdAt: new Date(),
+        });
+      }
     }
-
+ 
     /* ==========================
-       UPDATE PAYMENT
+       UPDATE OTHER PAYMENT FIELDS
+       (totalAmount / balanceAmount / paymentStatus / billSummary
+       are all recomputed by the pre-save hook — not set here)
     ========================== */
-
-    if (totalFare !== undefined)
-      handover.payment.totalFare = Number(totalFare) || 0;
-
     if (fastagCharges !== undefined)
       handover.payment.fastTagPayableAmount = Number(fastagCharges) || 0;
-
+ 
     if (securityDeposit !== undefined)
       handover.payment.securityDeposit = Number(securityDeposit) || 0;
-
+ 
     if (extraCharges !== undefined)
       handover.payment.extraCharges = Number(extraCharges) || 0;
-
-    handover.payment.totalAmount =
-      (handover.payment.totalFare || 0) +
-      (handover.payment.fastTagPayableAmount || 0) +
-      (handover.payment.securityDeposit || 0) +
-      (handover.payment.extraCharges || 0);
-
+ 
+    if (discountAmount !== undefined)
+      handover.payment.discountAmount = Number(discountAmount) || 0;
+ 
+    if (paymentMethod) handover.payment.paymentMethod = paymentMethod;
+ 
     if (amountReceivedNow !== undefined) {
+      const received = Number(amountReceivedNow) || 0;
       handover.payment.amountReceivedNow =
-        (handover.payment.amountReceivedNow || 0) +
-        (Number(amountReceivedNow) || 0);
+        (handover.payment.amountReceivedNow || 0) + received;
+ 
+      if (paymentMethod === "cash") {
+        handover.payment.paymentBreakdown.cash =
+          (handover.payment.paymentBreakdown.cash || 0) + received;
+      } else if (paymentMethod === "phonepe") {
+        handover.payment.paymentBreakdown.phonePe =
+          (handover.payment.paymentBreakdown.phonePe || 0) + received;
+      } else if (paymentMethod === "razorpay") {
+        handover.payment.paymentBreakdown.razorpay =
+          (handover.payment.paymentBreakdown.razorpay || 0) + received;
+      }
     }
-
-    const totalPaid =
-      (handover.payment.bookingAmountPaid || 0) +
-      (handover.payment.amountReceivedNow || 0);
-
-    handover.payment.balanceAmount = Math.max(
-      0,
-      handover.payment.totalAmount - totalPaid,
-    );
-
-    if (handover.payment.balanceAmount === 0) {
-      handover.payment.paymentStatus = "paid";
-    } else if (totalPaid > 0) {
-      handover.payment.paymentStatus = "partial";
-    } else {
-      handover.payment.paymentStatus = "pending";
-    }
-
+ 
     /* ==========================
-       UPDATE NOTES
+       UPDATE NOTES (unchanged)
     ========================== */
-
     if (reasonForChange?.trim()) {
-      const updateNote = `
-[Rental Updated - ${new Date().toLocaleString()}]
-Reason: ${reasonForChange}
-`;
-
+      const updateNote = `\n[Rental Updated - ${new Date().toLocaleString()}]\nReason: ${reasonForChange}\n`;
       handover.notes = `${handover.notes || ""}\n${updateNote}`
         .trim()
         .slice(-500);
     }
-
-    await handover.save();
-
+ 
+    await handover.save(); // pre-save hook computes totals + billSummary
+ 
     return res.status(200).json({
       success: true,
       message: "Rental updated successfully",
-      data: handover,
+      data: {
+        handover,
+        billSummary: buildBillSummaryResponse(handover),
+      },
     });
   } catch (error) {
     console.error("UPDATE RENTAL ERROR:", error);
-
     return res.status(500).json({
       success: false,
       message: error.message || "Failed to update rental",
     });
   }
 };
+ 
 // hanver get api
 export const getHandovers = async (req, res) => {
   try {
