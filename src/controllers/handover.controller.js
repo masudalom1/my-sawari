@@ -1543,6 +1543,78 @@ function buildBillSummaryResponse(handover) {
 /* ============================================================
    GET /handover/rentals/:id
 ============================================================ */
+function buildBillSummaryResponse(handover) {
+  const payment = handover.payment || {};
+  const extensionBills = handover.extensionBills || [];
+ 
+  const totalExtensionAmount = extensionBills.reduce(
+    (sum, bill) => sum + (bill.extensionAmount || 0),
+    0,
+  );
+ 
+  const baseFare = Math.max(0, (payment.totalFare || 0) - totalExtensionAmount);
+ 
+  const originalNumberOfDays =
+    extensionBills.length > 0
+      ? extensionBills[0].previousNumberOfDays
+      : handover.trip?.numberOfDays;
+ 
+  const originalDropDateTime =
+    extensionBills.length > 0
+      ? extensionBills[0].previousDropDateTime
+      : handover.trip?.dropDateTime;
+ 
+  // "Previous bill total" = what totalFare was right before the CURRENT
+  // in-progress edit — i.e. baseFare + every extension already applied.
+  // If this rental has never been extended, there's no "previous bill"
+  // distinct from the original booking, so this equals baseFare.
+  const previousBillTotal = payment.totalFare || 0;
+ 
+  return {
+    originalBill: {
+      pickupDateTime: handover.trip?.pickupDateTime,
+      dropDateTime: originalDropDateTime,
+      numberOfDays: originalNumberOfDays,
+      baseFare,
+    },
+ 
+    extensionBills: extensionBills.map((bill) => ({
+      billNumber: bill.billNumber,
+      previousDropDateTime: bill.previousDropDateTime,
+      newDropDateTime: bill.newDropDateTime,
+      previousNumberOfDays: bill.previousNumberOfDays,
+      newNumberOfDays: bill.newNumberOfDays,
+      extraDays: bill.extraDays,
+      extensionAmount: bill.extensionAmount,
+      amountCollected: bill.amountCollected,
+      totalFareAfterThisBill: bill.totalFareAfterThisBill,
+      reason: bill.reason,
+      createdAt: bill.createdAt,
+    })),
+ 
+    previousBillTotal,
+ 
+    charges: {
+      baseFare,
+      totalExtensionAmount,
+      totalFare: payment.totalFare || 0,
+      fastTagPayableAmount: payment.fastTagPayableAmount || 0,
+      securityDeposit: payment.securityDeposit || 0,
+      extraCharges: payment.extraCharges || 0,
+      discountAmount: payment.discountAmount || 0,
+    },
+ 
+    grandTotal: payment.totalAmount || 0,
+    totalCollected:
+      (payment.bookingAmountPaid || 0) + (payment.amountReceivedNow || 0),
+    balanceDue: payment.balanceAmount || 0,
+    paymentStatus: payment.paymentStatus || "pending",
+  };
+}
+ 
+/* ============================================================
+   GET /handover/rentals/:id
+============================================================ */
 export const getRentalDetails = async (req, res) => {
   try {
     const { id } = req.params;
@@ -1555,6 +1627,8 @@ export const getRentalDetails = async (req, res) => {
         message: "Rental not found",
       });
     }
+ 
+    const billSummary = buildBillSummaryResponse(handover);
  
     return res.status(200).json({
       success: true,
@@ -1573,7 +1647,8 @@ export const getRentalDetails = async (req, res) => {
         dropDateTime: handover.trip?.dropDateTime,
         numberOfDays: handover.trip?.numberOfDays,
  
-        baseFare: handover.payment?.baseFare || 0,
+        // Derived, not stored — see buildBillSummaryResponse
+        baseFare: billSummary.charges.baseFare,
         totalFare: handover.payment?.totalFare || 0,
         fastagCharges: handover.payment?.fastTagPayableAmount || 0,
         securityDeposit: handover.payment?.securityDeposit || 0,
@@ -1586,7 +1661,7 @@ export const getRentalDetails = async (req, res) => {
         paymentMethod: handover.payment?.paymentMethod || "",
         paymentStatus: handover.payment?.paymentStatus || "pending",
  
-        billSummary: buildBillSummaryResponse(handover),
+        billSummary,
       },
     });
   } catch (error) {
@@ -1597,7 +1672,10 @@ export const getRentalDetails = async (req, res) => {
     });
   }
 };
-
+ 
+/* ============================================================
+   GET /handover/rentals/:id/bill-summary
+============================================================ */
 export const getBillSummary = async (req, res) => {
   try {
     const { id } = req.params;
@@ -1624,6 +1702,9 @@ export const getBillSummary = async (req, res) => {
   }
 };
  
+/* ============================================================
+   PUT /handover/rentals/edit/:id
+============================================================ */
 export const updateRental = async (req, res) => {
   try {
     const { id } = req.params;
@@ -1631,7 +1712,7 @@ export const updateRental = async (req, res) => {
     const {
       vehicleId,
       dropDateTime,
-      extensionPrice, // NEW: itemized charge for THIS extension
+      extensionPrice, // itemized charge for THIS extension
       fastagCharges,
       securityDeposit,
       extraCharges,
@@ -1654,15 +1735,8 @@ export const updateRental = async (req, res) => {
       });
     }
  
-    // First-ever edit: lock in baseFare from the current totalFare
-    // so every future extension is measured against the true
-    // original booking value, not whatever the last edit left behind.
-    if (!handover.payment.baseFare) {
-      handover.payment.baseFare = handover.payment.totalFare || 0;
-    }
- 
     /* ==========================
-       CHANGE VEHICLE (unchanged from existing logic)
+       CHANGE VEHICLE (unchanged)
     ========================== */
     if (
       vehicleId &&
@@ -1716,7 +1790,9 @@ export const updateRental = async (req, res) => {
  
     /* ==========================
        EXTEND / SHORTEN TRIP
-       -> appends a new entry to the extension ledger
+       -> totalFare is bumped by extensionAmount (cumulative,
+          since there's no separate baseFare field) and a new
+          ledger entry is appended
     ========================== */
     if (dropDateTime) {
       const previousDropDateTime = handover.trip.dropDateTime;
@@ -1738,14 +1814,9 @@ export const updateRental = async (req, res) => {
         handover.trip.dropDateTime = newDrop;
         handover.trip.numberOfDays = newNumberOfDays;
  
-        handover.payment.totalExtensionAmount =
-          (handover.payment.totalExtensionAmount || 0) + extensionAmount;
- 
-        // totalFare is ALWAYS derived server-side — never trust
-        // whatever the client thinks the running total is
+        // totalFare is cumulative — bump it by this extension's amount
         handover.payment.totalFare =
-          (handover.payment.baseFare || 0) +
-          handover.payment.totalExtensionAmount;
+          (handover.payment.totalFare || 0) + extensionAmount;
  
         handover.extensionBills.push({
           billNumber: handover.extensionBills.length + 1,
@@ -1766,8 +1837,6 @@ export const updateRental = async (req, res) => {
  
     /* ==========================
        UPDATE OTHER PAYMENT FIELDS
-       (totalAmount / balanceAmount / paymentStatus / billSummary
-       are all recomputed by the pre-save hook — not set here)
     ========================== */
     if (fastagCharges !== undefined)
       handover.payment.fastTagPayableAmount = Number(fastagCharges) || 0;
@@ -1782,6 +1851,18 @@ export const updateRental = async (req, res) => {
       handover.payment.discountAmount = Number(discountAmount) || 0;
  
     if (paymentMethod) handover.payment.paymentMethod = paymentMethod;
+ 
+    // This schema's pre-save hook only derives balanceAmount/paymentStatus
+    // from totalAmount — it does NOT compute totalAmount itself — so the
+    // controller must set it explicitly, every time, from the line items.
+    handover.payment.totalAmount = Math.max(
+      0,
+      (handover.payment.totalFare || 0) +
+        (handover.payment.fastTagPayableAmount || 0) +
+        (handover.payment.securityDeposit || 0) +
+        (handover.payment.extraCharges || 0) -
+        (handover.payment.discountAmount || 0),
+    );
  
     if (amountReceivedNow !== undefined) {
       const received = Number(amountReceivedNow) || 0;
@@ -1800,6 +1881,30 @@ export const updateRental = async (req, res) => {
       }
     }
  
+    // Keep the cached snapshot in sync — this schema's hook doesn't
+    // touch billSummary, so the controller refreshes it explicitly.
+    const totalPaidSoFar =
+      (handover.payment.bookingAmountPaid || 0) +
+      (handover.payment.amountReceivedNow || 0);
+ 
+    handover.payment.billSummary = {
+      totalFare: handover.payment.totalFare || 0,
+      fastTagPayable: handover.payment.fastTagPayableAmount || 0,
+      pickupCharge: handover.payment.billSummary?.pickupCharge || 0,
+      dropCharge: handover.payment.billSummary?.dropCharge || 0,
+      securityDeposit: handover.payment.securityDeposit || 0,
+      extraCharges: handover.payment.extraCharges || 0,
+      discountAmount: handover.payment.discountAmount || 0,
+      totalAmount: handover.payment.totalAmount || 0,
+      bookingAmountPaid: handover.payment.bookingAmountPaid || 0,
+      amountReceivedNow: handover.payment.amountReceivedNow || 0,
+      totalCollected: totalPaidSoFar,
+      balanceAmount: Math.max(
+        0,
+        (handover.payment.totalAmount || 0) - totalPaidSoFar,
+      ),
+    };
+ 
     /* ==========================
        UPDATE NOTES (unchanged)
     ========================== */
@@ -1810,7 +1915,7 @@ export const updateRental = async (req, res) => {
         .slice(-500);
     }
  
-    await handover.save(); // pre-save hook computes totals + billSummary
+    await handover.save(); // hook computes balanceAmount + paymentStatus from totalAmount
  
     return res.status(200).json({
       success: true,
