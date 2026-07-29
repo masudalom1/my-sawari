@@ -2317,7 +2317,7 @@ export const createBookings = async (req, res, next) => {
 export const getBookingDetails = async (req, res, next) => {
   try {
     const { id } = req.params;
- 
+
     const booking = await Booking.findOne({
       _id: id,
       isDeleted: false,
@@ -2338,14 +2338,14 @@ export const getBookingDetails = async (req, res, next) => {
         path: "vehicleReturn",
       })
       .lean();
- 
+
     if (!booking) {
       return res.status(404).json({
         success: false,
         message: "Booking not found.",
       });
     }
- 
+
     return res.status(200).json({
       success: true,
       booking,
@@ -2354,10 +2354,6 @@ export const getBookingDetails = async (req, res, next) => {
     next(error);
   }
 };
- 
-// =========================================================
-// CANCEL BOOKING
-// =========================================================
 
 export const updateBooking = async (req, res, next) => {
   try {
@@ -2390,14 +2386,9 @@ export const updateBooking = async (req, res, next) => {
       dropTime,
       residents,
 
-      totalDays, // FIX: was referenced below but never destructured
+      totalDays,
 
       vehicleId,
-
-      bookingAmount,
-      discountAmount,
-      securityDeposit, // ADDED
-      fastagBalance, // ADDED
 
       pickupDropRequired = false,
       serviceType = "pickup_drop",
@@ -2405,7 +2396,23 @@ export const updateBooking = async (req, res, next) => {
       pickup = {},
       drop = {},
       pickupDropNotes = "",
+
+      // ── FIX: the frontend sends every pricing field nested inside
+      // `payment: {...}` (see BookingDetailsScreen's handleUpdateBooking
+      // payload). The old code destructured `bookingAmount`,
+      // `discountAmount`, `securityDeposit`, `fastagBalance` as flat
+      // top-level fields, which the client never sends at the top level —
+      // they were always undefined, so every price update silently used 0.
+      payment: paymentInput = {},
     } = req.body;
+
+    const {
+      discountAmount: discountAmountInput,
+      securityDeposit: securityDepositInput,
+      bookingAmountPaid: bookingAmountPaidInput,
+      fastagAmount: fastagAmountInput,
+      paymentMethod: paymentMethodInput,
+    } = paymentInput;
 
     // =========================
     // VEHICLE
@@ -2428,10 +2435,6 @@ export const updateBooking = async (req, res, next) => {
     const finalToDate = new Date(toDate);
 
     // =========================
-    // DUPLICATE CHECK
-    // =========================
-
-    // =========================
     // TOTAL DAYS
     // =========================
 
@@ -2445,7 +2448,7 @@ export const updateBooking = async (req, res, next) => {
     }
 
     // =========================
-    // PRICING
+    // PRICING (recomputed server-side — never trust client totals)
     // =========================
 
     const vehicleRent = Number(vehicle.pricePerDay || 0) * finalTotalDays;
@@ -2462,13 +2465,20 @@ export const updateBooking = async (req, res, next) => {
         ? Number(drop.charge || 0)
         : 0;
 
-    const fastagAmount = Number(fastagBalance || 0);
+    const fastagAmount = Number(fastagAmountInput || 0);
 
-    const quotationAmount =
-      vehicleRent + pickupCharge + dropCharge + fastagAmount;
+    const discountAmount = Number(discountAmountInput || 0);
+    const securityDeposit = Number(securityDepositInput || 0);
+    const bookingAmountPaid = Number(bookingAmountPaidInput || 0);
+
+    // Vehicle + Pickup + Drop + FASTag — matches the schema comment on
+    // `payment.totalAmount` and the frontend's `rentalAmount` /
+    // `finalAmount` calculation. Security deposit is tracked separately
+    // (it's refundable, not part of the payable fare).
+    const totalAmount = vehicleRent + pickupCharge + dropCharge + fastagAmount;
 
     // =========================
-    // UPDATE
+    // UPDATE — CUSTOMER / TRIP FIELDS
     // =========================
 
     booking.customerName = customerName?.trim() || "";
@@ -2491,7 +2501,7 @@ export const updateBooking = async (req, res, next) => {
     booking.pickupTime = pickupTime || "09:00 AM";
     booking.dropTime = dropTime || "06:00 PM";
 
-    booking.totalDays = finalTotalDays; // FIX: use the validated/coerced number, not the raw body value
+    booking.totalDays = finalTotalDays;
     booking.residents = Number(residents) || 1;
 
     booking.vehicleId = vehicle._id;
@@ -2499,97 +2509,27 @@ export const updateBooking = async (req, res, next) => {
     booking.vehicleNumber = vehicle.vehicleNumber;
     booking.vehicleColor = vehicle.color;
 
-// =========================
-// PAYMENT
-// =========================
+    // =========================
+    // UPDATE — PAYMENT (only fields that actually exist on the schema;
+    // balanceAmount / totalCollected / paymentStatus are recomputed
+    // automatically by the pre-save hook, so we don't set them here)
+    // =========================
 
-const bookingAmountPaid = Number(bookingAmount) || 0;
-const discount = Number(discountAmount) || 0;
-const security = Number(securityDeposit) || 0;
-const fastTagPayable = Number(fastagBalance) || 0;
+    booking.payment = booking.payment || {};
 
-const extraCharges = Number(req.body.extraCharges || 0);
+    booking.payment.vehicleRent = vehicleRent;
+    booking.payment.pickupCharge = pickupCharge;
+    booking.payment.dropCharge = dropCharge;
+    booking.payment.fastagAmount = fastagAmount;
+    booking.payment.totalAmount = totalAmount;
+    booking.payment.discountAmount = discountAmount;
+    booking.payment.securityDeposit = securityDeposit;
+    booking.payment.bookingAmountPaid = bookingAmountPaid;
+    booking.payment.paymentMethod = paymentMethodInput || "cash";
 
-// Vehicle + Pickup + Drop + Fastag
-const totalFare =
-  vehicleRent +
-  pickupCharge +
-  dropCharge +
-  fastTagPayable;
-
-// Final Amount
-const totalAmount =
-  totalFare +
-  security +
-  extraCharges -
-  discount;
-
-// Update Screen only edits booking advance.
-// Received now remains 0.
-const amountReceivedNow = 0;
-
-const totalCollected =
-  bookingAmountPaid +
-  amountReceivedNow;
-
-const balanceAmount = Math.max(
-  totalAmount - totalCollected,
-  0,
-);
-
-let paymentStatus = "pending";
-
-if (balanceAmount === 0) {
-  paymentStatus = "paid";
-} else if (totalCollected > 0) {
-  paymentStatus = "partial";
-}
-
-booking.quotationAmount = totalFare;
-
-booking.bookingAmount = bookingAmountPaid;
-booking.discountAmount = discount;
-booking.securityDeposit = security;
-booking.fastagBalance = fastTagPayable;
-
-booking.payment = booking.payment || {};
-
-booking.payment.totalFare = totalFare;
-
-booking.payment.fastTagBalance = fastTagPayable;
-
-booking.payment.fastTagPayableAmount = fastTagPayable;
-
-booking.payment.securityDeposit = security;
-
-booking.payment.extraCharges = extraCharges;
-
-booking.payment.discountAmount = discount;
-
-booking.payment.totalAmount = totalAmount;
-
-booking.payment.bookingAmountPaid = bookingAmountPaid;
-
-booking.payment.amountReceivedNow = amountReceivedNow;
-
-booking.payment.balanceAmount = balanceAmount;
-
-booking.payment.paymentStatus = paymentStatus;
-
-booking.payment.billSummary = {
-  totalFare,
-  fastTagPayable,
-  pickupCharge,
-  dropCharge,
-  securityDeposit: security,
-  extraCharges,
-  discountAmount: discount,
-  totalAmount,
-  bookingAmountPaid,
-  amountReceivedNow,
-  totalCollected,
-  balanceAmount,
-};
+    // =========================
+    // UPDATE — PICKUP / DROP SERVICE
+    // =========================
 
     booking.pickupDropRequired = pickupDropRequired;
     booking.serviceType = serviceType;
@@ -2609,6 +2549,11 @@ booking.payment.billSummary = {
     };
 
     booking.pickupDropNotes = pickupDropNotes?.trim() || "";
+
+    // booking.payment.balanceAmount, totalCollected, and paymentStatus are
+    // derived automatically in the schema's pre-save hook from
+    // totalAmount / discountAmount / bookingAmountPaid / securityDeposit —
+    // no need to compute or assign them here.
 
     await booking.save();
 
