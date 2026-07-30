@@ -602,15 +602,17 @@ export const markVehicleAvailable = async (req, res) => {
 export const getReturnDetails = async (req, res) => {
   try {
     const { handoverId } = req.params;
-    const companyId = req.user.company || req.user._id;
+
+    console.log("========== GET RETURN DETAILS ==========");
+    console.log("Requested Handover ID:", handoverId);
 
     const vehicleReturn = await VehicleReturn.findOne({
       handover: handoverId,
-      company: companyId,
     })
       .populate({
         path: "vehicle",
-        select: "vehicleName vehicleNumber manufacturer model variant color images",
+        select:
+          "vehicleName vehicleNumber manufacturer model variant color images",
       })
       .populate("receivedBy", "fullName role")
       .populate("createdBy", "fullName role")
@@ -618,16 +620,23 @@ export const getReturnDetails = async (req, res) => {
         path: "handover",
         select: "customer trip payment createdAt returnDetails",
         populate: [
-          { path: "customer", select: "fullName mobileNumber email" },
+          {
+            path: "customer",
+            select: "fullName mobileNumber email",
+          },
         ],
       });
 
     if (!vehicleReturn) {
+      console.log("Vehicle return not found for handover:", handoverId);
+
       return res.status(404).json({
         success: false,
         message: "Return details not found for this handover",
       });
     }
+
+    console.log("Vehicle Return Found:", vehicleReturn._id);
 
     return res.status(200).json({
       success: true,
