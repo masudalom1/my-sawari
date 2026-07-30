@@ -610,19 +610,51 @@ export const getReturnDetails = async (req, res) => {
       handover: handoverId,
     })
       .populate({
-        path: "vehicle",
+        path: "vehicle", // VehicleReturn.vehicle -> Vehicle
         select:
           "vehicleName vehicleNumber manufacturer model variant color images",
       })
       .populate("receivedBy", "fullName role")
       .populate("createdBy", "fullName role")
+      .populate("company", "fullName role")
       .populate({
-        path: "handover",
-        select: "customer trip payment createdAt returnDetails",
+        path: "handover", // VehicleReturn.handover -> Handover (full doc, no select)
         populate: [
           {
-            path: "customer",
-            select: "fullName mobileNumber email",
+            path: "vehicle.vehicleId", // Handover.vehicle.vehicleId -> Vehicle
+            select:
+              "vehicleName vehicleNumber manufacturer model variant color images",
+          },
+          {
+            path: "createdBy", // who created the handover
+            select: "fullName role",
+          },
+          {
+            path: "company", // owning company
+            select: "fullName role",
+          },
+          {
+            path: "bookingId", // linked booking, if you want it too
+          },
+          {
+            path: "extensionBills.createdBy", // who made each extension
+            select: "fullName role",
+          },
+          {
+            path: "returnDetails.returnedBy",
+            select: "fullName role",
+          },
+          {
+            path: "vehicleHistory.oldVehicle.vehicleId",
+            select: "vehicleName vehicleNumber",
+          },
+          {
+            path: "vehicleHistory.newVehicle.vehicleId",
+            select: "vehicleName vehicleNumber",
+          },
+          {
+            path: "vehicleHistory.changedBy",
+            select: "fullName role",
           },
         ],
       });
