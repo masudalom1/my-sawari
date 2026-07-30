@@ -1818,16 +1818,7 @@ export const updateRental = async (req, res) => {
 
     if (paymentMethod) handover.payment.paymentMethod = paymentMethod;
 
-    // -------------------------------------------------------------
-    // FIX: pickupCharge / dropCharge are real line items (they exist
-    // as fields on payment.billSummary and show up in the actual
-    // bill), but this calculation used to omit them entirely. That
-    // made handover.payment.totalAmount (the field the pre-save hook
-    // uses to derive balanceAmount/paymentStatus) permanently lower
-    // than the totalAmount shown in billSummary, which was computed
-    // elsewhere including these charges. Pull them in here so there
-    // is exactly one totalAmount formula, used everywhere.
-    // -------------------------------------------------------------
+
     const pickupCharge = handover.payment.billSummary?.pickupCharge || 0;
     const dropCharge = handover.payment.billSummary?.dropCharge || 0;
 
@@ -2026,44 +2017,50 @@ export const getHandovers = async (req, res) => {
       })
       .lean();
 
-    const data = handovers.map((item) => ({
-      _id: item._id,
+   const data = handovers.map((item) => ({
+  _id: item._id,
 
-      companyName:
-        item.company?.businessName ||
-        item.company?.companyName ||
-        item.company?.fullName ||
-        "",
+  companyName:
+    item.company?.businessName ||
+    item.company?.companyName ||
+    item.company?.fullName ||
+    "",
 
-      customerName: item.customer?.fullName || "",
-      mobileNumber: item.customer?.mobileNumber || "",
-      destination: item.customer?.destination || "",
+  customerName: item.customer?.fullName || "",
+  mobileNumber: item.customer?.mobileNumber || "",
+  destination: item.customer?.destination || "",
 
-      vehicleName: item.vehicle?.vehicleName || "",
-      vehicleNumber: item.vehicle?.vehicleNumber || "",
-      vehicleColor: item.vehicle?.vehicleColor || "",
+  vehicleName: item.vehicle?.vehicleName || "",
+  vehicleNumber: item.vehicle?.vehicleNumber || "",
+  vehicleColor: item.vehicle?.vehicleColor || "",
 
-      pickupDateTime: item.trip?.pickupDateTime,
-      dropDateTime: item.trip?.dropDateTime,
-      tripType: item.trip?.tripType,
-      numberOfDays: item.trip?.numberOfDays,
+  pickupDateTime: item.trip?.pickupDateTime,
+  dropDateTime: item.trip?.dropDateTime,
+  tripType: item.trip?.tripType,
+  numberOfDays: item.trip?.numberOfDays,
 
-      totalFare: item.payment?.totalFare || 0,
-      totalAmount: item.payment?.totalAmount || 0,
-      balanceAmount: item.payment?.balanceAmount || 0,
-      paymentStatus: item.payment?.paymentStatus || "pending",
+  totalFare: item.payment?.billSummary?.totalFare ?? item.payment?.totalFare ?? 0,
+  totalAmount:
+    item.payment?.billSummary?.totalAmount ?? item.payment?.totalAmount ?? 0,
+  // NEW — balance now reads from the billSummary ledger (falls back to
+  // payment.balanceAmount only for older records saved before
+  // billSummary existed, so nothing breaks for historic data)
+  balanceAmount:
+    item.payment?.billSummary?.balanceAmount ?? item.payment?.balanceAmount ?? 0,
+  totalCollected: item.payment?.billSummary?.totalCollected ?? 0,
+  paymentStatus: item.payment?.paymentStatus || "pending",
 
-      bookingStatus: item.bookingStatus,
-      handoverStatus: item.handoverStatus,
-      hasUploadedImages: item.hasUploadedImages || false,
+  bookingStatus: item.bookingStatus,
+  handoverStatus: item.handoverStatus,
+  hasUploadedImages: item.hasUploadedImages || false,
 
-      notes: item.notes || "",
+  notes: item.notes || "",
 
-      createdBy: item.createdBy?.fullName || "",
+  createdBy: item.createdBy?.fullName || "",
 
-      createdAt: item.createdAt,
-      updatedAt: item.updatedAt,
-    }));
+  createdAt: item.createdAt,
+  updatedAt: item.updatedAt,
+}));
 
     return res.status(200).json({
       success: true,
