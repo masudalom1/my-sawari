@@ -173,7 +173,8 @@ export const receiveVehicle = async (req, res) => {
        SETTLEMENT CALCULATIONS
     ========================== */
 
-    const pendingAmount = Number(handover.payment?.balanceAmount) || 0;
+    const pendingAmount =
+      Number(handover.payment?.billSummary?.balanceAmount) || 0;
 
     const lateFine = Number(lateReturnFine) || 0;
 
