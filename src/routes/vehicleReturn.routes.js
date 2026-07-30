@@ -9,11 +9,7 @@ router.use(protect);
 
 router.post("/receive/:handoverId",vehicleReturnUpload,receiveVehicle);
 router.get("/details/:handoverId", getReturnDetails);
-router.get(
-  "/dashboard",
-  protect,
-  getVehicleReturnsDashboard
-);
+router.get("/dashboard",protect,getVehicleReturnsDashboard);
 
 // menu/service
 router.get("/service",protect,getServiceVehicles);

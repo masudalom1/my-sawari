@@ -645,8 +645,6 @@ export const getReturnDetails = async (req, res) => {
 
 export const getVehicleReturnsDashboard = async (req, res) => {
   try {
-    const companyId = req.user.company || req.user._id;
-
     const getISTDate = (date) =>
       new Date(date).toLocaleDateString("en-CA", {
         timeZone: "Asia/Kolkata",
@@ -659,7 +657,8 @@ export const getVehicleReturnsDashboard = async (req, res) => {
     yesterdayDate.setDate(yesterdayDate.getDate() - 1);
     const yesterday = getISTDate(yesterdayDate);
 
-    const returns = await VehicleReturn.find({ company: companyId })
+    // Fetch ALL vehicle returns (No company filter)
+    const returns = await VehicleReturn.find({})
       .populate({
         path: "vehicle",
         select: "vehicleName vehicleNumber manufacturer model variant color",
@@ -685,10 +684,6 @@ export const getVehicleReturnsDashboard = async (req, res) => {
     const dashboard = returns.map((item) => {
       const returnDate = getISTDate(item.createdAt);
 
-      // Date bucket — ONLY drives Today/Yesterday. Anything older
-      // falls back to "Older", never "All" — "All" is the front-end's
-      // meta-filter, not a real bucket, so it must never collide with
-      // an actual per-item value.
       let tab = "Older";
 
       if (returnDate === today) {
@@ -699,12 +694,20 @@ export const getVehicleReturnsDashboard = async (req, res) => {
         stats.yesterday++;
       }
 
-      // "Due" is independent of date — a return from last week with
-      // an outstanding balance is still Due today. Computed as its
-      // own boolean instead of being crammed into `tab`.
-      const settlementStatus = item.settlementDetails?.status || "pending";
-      const finalBalance = item.settlementDetails?.finalBalance || 0;
-      const pendingAmount = item.settlementDetails?.pendingAmount || 0;
+      const settlementStatus =
+        item.settlementDetails?.status || "pending";
+
+      const finalBalance =
+        item.settlementDetails?.finalBalance || 0;
+
+      const pendingAmount =
+        item.settlementDetails?.pendingAmount || 0;
+
+      const totalBalance =
+        item.settlementDetails?.totalBalanceAmount || 0;
+
+      const amountCollected =
+        item.settlementDetails?.amountCollected || 0;
 
       const isDue =
         finalBalance > 0 ||
@@ -715,15 +718,20 @@ export const getVehicleReturnsDashboard = async (req, res) => {
 
       return {
         _id: item._id,
+        handoverId: item.handover?._id,
 
         tab,
-        isDue, // NEW — the thing the "Due" tab actually filters on
+        isDue,
 
         customerName:
-          item.customerName || item.handover?.customer?.fullName || "",
+          item.customerName ||
+          item.handover?.customer?.fullName ||
+          "",
 
         mobileNumber:
-          item.mobileNumber || item.handover?.customer?.mobileNumber || "",
+          item.mobileNumber ||
+          item.handover?.customer?.mobileNumber ||
+          "",
 
         vehicleName: item.vehicle?.vehicleName || "",
         vehicleNumber: item.vehicle?.vehicleNumber || "",
@@ -732,28 +740,32 @@ export const getVehicleReturnsDashboard = async (req, res) => {
         variant: item.vehicle?.variant || "",
         color: item.vehicle?.color || "",
 
-        fuelLevel: item.fuelLevel,
-        kilometersAtReturn: item.kilometersAtReturn,
+        fuelLevel: item.fuelLevel ?? 0,
+        kilometersAtReturn: item.kilometersAtReturn ?? 0,
 
         returnTime: item.receivingTime,
         scheduledReturnTime: item.scheduledReturnTime,
 
-        timeStatus: item.timeStatus,
-        delayText: item.delayText,
+        timeStatus: item.timeStatus || "On Time",
+        delayText: item.delayText || "",
 
-        hasDamage: item.hasDamage,
-        damageStatus: item.damageCostDetails?.status,
-        repairEstimate: item.damageCostDetails?.repairEstimate || 0,
+        hasDamage: item.hasDamage || false,
+        damageStatus: item.damageCostDetails?.status || "",
+        repairEstimate:
+          item.damageCostDetails?.repairEstimate || 0,
 
-        settlement: item.settlementDetails,
+        settlement: item.settlementDetails || {},
+
         pendingAmount,
-        totalBalance: item.settlementDetails?.totalBalanceAmount || 0,
-        amountCollected: item.settlementDetails?.amountCollected || 0,
+        totalBalance,
+        amountCollected,
         finalBalance,
         settlementStatus,
 
         receivedBy: item.receivedBy?.fullName || "",
+
         createdAt: item.createdAt,
+        updatedAt: item.updatedAt,
       };
     });
 
@@ -763,10 +775,11 @@ export const getVehicleReturnsDashboard = async (req, res) => {
       returns: dashboard,
     });
   } catch (error) {
-    console.error(error);
+    console.error("Vehicle Returns Dashboard Error:", error);
+
     return res.status(500).json({
       success: false,
-      message: error.message,
+      message: error.message || "Failed to fetch dashboard",
     });
   }
 };
