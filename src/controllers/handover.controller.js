@@ -1403,7 +1403,7 @@ export const getReceiveCarList = async (req, res) => {
         isTomorrow,
         remainingMs: diffMs,
       };
-
+  obj.billSummary = obj.payment?.billSummary || {};
       // ==========================
       // CREATED BY
       // ==========================
