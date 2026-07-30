@@ -642,3 +642,131 @@ export const getReturnDetails = async (req, res) => {
     });
   }
 };
+
+export const getVehicleReturnsDashboard = async (req, res) => {
+  try {
+    const companyId = req.user.company || req.user._id;
+
+    const getISTDate = (date) =>
+      new Date(date).toLocaleDateString("en-CA", {
+        timeZone: "Asia/Kolkata",
+      });
+
+    const now = new Date();
+    const today = getISTDate(now);
+
+    const yesterdayDate = new Date(now);
+    yesterdayDate.setDate(yesterdayDate.getDate() - 1);
+    const yesterday = getISTDate(yesterdayDate);
+
+    const returns = await VehicleReturn.find({ company: companyId })
+      .populate({
+        path: "vehicle",
+        select: "vehicleName vehicleNumber manufacturer model variant color",
+      })
+      .populate({
+        path: "handover",
+        select: "customer trip",
+        populate: {
+          path: "customer",
+          select: "fullName mobileNumber",
+        },
+      })
+      .populate("receivedBy", "fullName")
+      .sort({ createdAt: -1 });
+
+    const stats = {
+      total: returns.length,
+      today: 0,
+      yesterday: 0,
+      due: 0,
+    };
+
+    const dashboard = returns.map((item) => {
+      const returnDate = getISTDate(item.createdAt);
+
+      // Date bucket — ONLY drives Today/Yesterday. Anything older
+      // falls back to "Older", never "All" — "All" is the front-end's
+      // meta-filter, not a real bucket, so it must never collide with
+      // an actual per-item value.
+      let tab = "Older";
+
+      if (returnDate === today) {
+        tab = "Today";
+        stats.today++;
+      } else if (returnDate === yesterday) {
+        tab = "Yesterday";
+        stats.yesterday++;
+      }
+
+      // "Due" is independent of date — a return from last week with
+      // an outstanding balance is still Due today. Computed as its
+      // own boolean instead of being crammed into `tab`.
+      const settlementStatus = item.settlementDetails?.status || "pending";
+      const finalBalance = item.settlementDetails?.finalBalance || 0;
+      const pendingAmount = item.settlementDetails?.pendingAmount || 0;
+
+      const isDue =
+        finalBalance > 0 ||
+        pendingAmount > 0 ||
+        ["pending", "partial"].includes(settlementStatus);
+
+      if (isDue) stats.due++;
+
+      return {
+        _id: item._id,
+
+        tab,
+        isDue, // NEW — the thing the "Due" tab actually filters on
+
+        customerName:
+          item.customerName || item.handover?.customer?.fullName || "",
+
+        mobileNumber:
+          item.mobileNumber || item.handover?.customer?.mobileNumber || "",
+
+        vehicleName: item.vehicle?.vehicleName || "",
+        vehicleNumber: item.vehicle?.vehicleNumber || "",
+        manufacturer: item.vehicle?.manufacturer || "",
+        model: item.vehicle?.model || "",
+        variant: item.vehicle?.variant || "",
+        color: item.vehicle?.color || "",
+
+        fuelLevel: item.fuelLevel,
+        kilometersAtReturn: item.kilometersAtReturn,
+
+        returnTime: item.receivingTime,
+        scheduledReturnTime: item.scheduledReturnTime,
+
+        timeStatus: item.timeStatus,
+        delayText: item.delayText,
+
+        hasDamage: item.hasDamage,
+        damageStatus: item.damageCostDetails?.status,
+        repairEstimate: item.damageCostDetails?.repairEstimate || 0,
+
+        settlement: item.settlementDetails,
+        pendingAmount,
+        totalBalance: item.settlementDetails?.totalBalanceAmount || 0,
+        amountCollected: item.settlementDetails?.amountCollected || 0,
+        finalBalance,
+        settlementStatus,
+
+        receivedBy: item.receivedBy?.fullName || "",
+        createdAt: item.createdAt,
+      };
+    });
+
+    return res.status(200).json({
+      success: true,
+      stats,
+      returns: dashboard,
+    });
+  } catch (error) {
+    console.error(error);
+    return res.status(500).json({
+      success: false,
+      message: error.message,
+    });
+  }
+};
