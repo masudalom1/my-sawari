@@ -706,7 +706,8 @@ export const getVehicleReturnsDashboard = async (req, res) => {
       })
       .populate({
         path: "handover",
-        select: "customer trip",
+        // "payment" now included so payment.billSummary comes back too
+        select: "customer trip payment",
         populate: {
           path: "customer",
           select: "fullName mobileNumber",
@@ -735,25 +736,15 @@ export const getVehicleReturnsDashboard = async (req, res) => {
         stats.yesterday++;
       }
 
-      const settlementStatus =
-        item.settlementDetails?.status || "pending";
+      // ---- Balance now comes ONLY from handover.payment.billSummary ----
+      const billSummary = item.handover?.payment?.billSummary || {};
 
-      const finalBalance =
-        item.settlementDetails?.finalBalance || 0;
+      const totalAmount = billSummary.totalAmount || 0;
+      const amountReceivedNow = billSummary.amountReceivedNow || 0;
+      const totalCollected = billSummary.totalCollected || 0;
+      const balanceAmount = billSummary.balanceAmount || 0;
 
-      const pendingAmount =
-        item.settlementDetails?.pendingAmount || 0;
-
-      const totalBalance =
-        item.settlementDetails?.totalBalanceAmount || 0;
-
-      const amountCollected =
-        item.settlementDetails?.amountCollected || 0;
-
-      const isDue =
-        finalBalance > 0 ||
-        pendingAmount > 0 ||
-        ["pending", "partial"].includes(settlementStatus);
+      const isDue = balanceAmount > 0;
 
       if (isDue) stats.due++;
 
@@ -795,13 +786,16 @@ export const getVehicleReturnsDashboard = async (req, res) => {
         repairEstimate:
           item.damageCostDetails?.repairEstimate || 0,
 
-        settlement: item.settlementDetails || {},
-
-        pendingAmount,
-        totalBalance,
-        amountCollected,
-        finalBalance,
-        settlementStatus,
+        // Balance / bill figures — sourced from handover.payment.billSummary
+        billSummary,
+        totalAmount,
+        amountReceivedNow,
+        totalCollected,
+        pendingAmount: balanceAmount,
+        totalBalance: totalAmount,
+        amountCollected: totalCollected || amountReceivedNow,
+        finalBalance: balanceAmount,
+        settlementStatus: balanceAmount > 0 ? "pending" : "paid",
 
         receivedBy: item.receivedBy?.fullName || "",
 
