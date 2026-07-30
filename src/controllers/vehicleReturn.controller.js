@@ -30,7 +30,6 @@ export const receiveVehicle = async (req, res) => {
 
     const files = req.files || {};
 
-
     /* ==========================
        BASIC VALIDATION
     ========================== */
@@ -255,7 +254,6 @@ export const receiveVehicle = async (req, res) => {
     ========================== */
 
     const vehicleReturn = await VehicleReturn.create({
-      
       company: companyId,
 
       createdBy: req.user._id,
@@ -424,6 +422,10 @@ export const receiveVehicle = async (req, res) => {
        UPDATE HANDOVER
     ========================== */
 
+    /* ==========================
+       UPDATE HANDOVER
+    ========================== */
+
     handover.handoverStatus = "returned";
 
     handover.returnDetails = {
@@ -441,6 +443,40 @@ export const receiveVehicle = async (req, res) => {
     } else {
       handover.payment.paymentStatus = "pending";
     }
+
+    // ── Fold the return-time settlement into payment.billSummary too,
+    // since that's the single object every screen (handover details,
+    // vehicle-return details, dashboards) renders the bill from. Without
+    // this, billSummary would keep showing the pre-return numbers even
+    // though fines/damage were added and money was collected just now.
+    const existingBill = handover.payment.billSummary || {};
+
+    // Fines/damage collected during return count as extra charges on
+    // top of whatever was already billed at handover time.
+    const returnTimeExtras = lateFine + kmFine + fuelFine + estimate;
+
+    const updatedExtraCharges =
+      Number(existingBill.extraCharges || 0) + returnTimeExtras;
+
+    const updatedTotalAmount =
+      Number(existingBill.totalAmount || 0) + returnTimeExtras;
+
+    const updatedTotalCollected =
+      Number(existingBill.totalCollected || 0) + collected;
+
+    const updatedAmountReceivedNow =
+      Number(existingBill.amountReceivedNow || 0) + collected;
+
+    handover.payment.billSummary = {
+      ...existingBill,
+      extraCharges: updatedExtraCharges,
+      totalAmount: updatedTotalAmount,
+      amountReceivedNow: updatedAmountReceivedNow,
+      totalCollected: updatedTotalCollected,
+      balanceAmount: finalBalance,
+    };
+
+    handover.markModified("payment.billSummary");
 
     await handover.save();
 
@@ -756,14 +792,10 @@ export const getVehicleReturnsDashboard = async (req, res) => {
         isDue,
 
         customerName:
-          item.customerName ||
-          item.handover?.customer?.fullName ||
-          "",
+          item.customerName || item.handover?.customer?.fullName || "",
 
         mobileNumber:
-          item.mobileNumber ||
-          item.handover?.customer?.mobileNumber ||
-          "",
+          item.mobileNumber || item.handover?.customer?.mobileNumber || "",
 
         vehicleName: item.vehicle?.vehicleName || "",
         vehicleNumber: item.vehicle?.vehicleNumber || "",
@@ -783,8 +815,7 @@ export const getVehicleReturnsDashboard = async (req, res) => {
 
         hasDamage: item.hasDamage || false,
         damageStatus: item.damageCostDetails?.status || "",
-        repairEstimate:
-          item.damageCostDetails?.repairEstimate || 0,
+        repairEstimate: item.damageCostDetails?.repairEstimate || 0,
 
         // Balance / bill figures — sourced from handover.payment.billSummary
         billSummary,
