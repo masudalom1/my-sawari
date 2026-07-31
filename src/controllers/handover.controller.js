@@ -1403,7 +1403,25 @@ export const getReceiveCarList = async (req, res) => {
         isTomorrow,
         remainingMs: diffMs,
       };
-  obj.billSummary = obj.payment?.billSummary || {};
+
+      obj.billSummary = obj.payment?.billSummary || {};
+
+      // ==========================
+      // DROP LOCATION
+      // Tries the dedicated drop object first (mirrors the Booking
+      // schema's `drop.location`), then falls back to a trip-level
+      // field, then to the customer's stated destination, so the card
+      // always has *something* sensible to show instead of "-".
+      // ==========================
+      obj.dropLocation =
+        obj.drop?.location ||
+        obj.trip?.dropLocation ||
+        obj.customer?.destination ||
+        "-";
+
+      obj.dropLandmark = obj.drop?.landmark || "";
+      obj.dropMapLink = obj.drop?.mapLink || "";
+
       // ==========================
       // CREATED BY
       // ==========================
