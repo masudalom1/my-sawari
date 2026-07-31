@@ -1094,6 +1094,10 @@ export const getBookingsDashboard = async (req, res) => {
         path: "createdBy",
         select: "name fullName",
       })
+      .populate({
+        path: "assignedDriver",
+        select: "fullName name mobileNumber",
+      })
       .sort({ createdAt: -1 });
 
     const stats = {
@@ -1192,7 +1196,7 @@ export const getBookingsDashboard = async (req, res) => {
 
         residents: booking.residents,
 
-      // Legacy flat fields kept for backward compatibility with older screens
+        // Legacy flat fields kept for backward compatibility with older screens
         quotationAmount: booking.payment?.totalAmount || 0,
         bookingAmount: booking.payment?.bookingAmountPaid || 0,
         discountAmount: booking.payment?.discountAmount || 0,
@@ -2101,7 +2105,8 @@ export const createBookings = async (req, res, next) => {
     };
 
     if (paymentMethod === "mixed") {
-      const breakdownSum = breakdown.cash + breakdown.phonePe + breakdown.razorpay;
+      const breakdownSum =
+        breakdown.cash + breakdown.phonePe + breakdown.razorpay;
       if (advancePaid > 0 && breakdownSum !== advancePaid) {
         return res.status(400).json({
           success: false,
