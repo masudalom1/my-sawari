@@ -1446,6 +1446,12 @@ export const getReceiveCarList = async (req, res) => {
         booking && booking.drop && typeof booking.drop.mapLink === "string"
           ? booking.drop.mapLink.trim()
           : "";
+          obj.dropCharge =
+  booking &&
+  booking.drop &&
+  typeof booking.drop.charge === "number"
+    ? booking.drop.charge
+    : 0;
 
       // ==========================
       // CREATED BY
