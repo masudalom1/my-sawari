@@ -146,12 +146,12 @@ export const getBookingDetails = async (req, res) => {
       handoverNotes: handover?.notes || "",
 
       handoverInfo: handover
-  ? {
-      fullName: handover.createdBy?.fullName || "",
-      email: handover.createdBy?.email || "",
-      handoverDateTime: handover.createdAt,
-    }
-  : null,
+        ? {
+            fullName: handover.createdBy?.fullName || "",
+            email: handover.createdBy?.email || "",
+            handoverDateTime: handover.createdAt,
+          }
+        : null,
 
       handoverRecord: handover,
     };
@@ -206,7 +206,6 @@ export const getBookingById = async (req, res) => {
   }
 };
 
-
 export const getDrivers = async (req, res) => {
   try {
     const users = await User.find({})
@@ -238,10 +237,10 @@ export const assignDriver = async (req, res) => {
       });
     }
 
-   const booking = await Booking.findOne({
-  _id: id,
-  isDeleted: false,
-});
+    const booking = await Booking.findOne({
+      _id: id,
+      isDeleted: false,
+    });
 
     if (!booking) {
       return res.status(404).json({
@@ -251,7 +250,7 @@ export const assignDriver = async (req, res) => {
     }
 
     const driver = await User.findById(driverId).select(
-      "fullName mobileNumber profileImage role"
+      "fullName mobileNumber profileImage role",
     );
 
     if (!driver) {
@@ -267,7 +266,7 @@ export const assignDriver = async (req, res) => {
 
     await booking.populate(
       "assignedDriver",
-      "fullName mobileNumber profileImage role"
+      "fullName mobileNumber profileImage role",
     );
 
     return res.status(200).json({
@@ -286,7 +285,7 @@ export const assignDriver = async (req, res) => {
 };
 export const assignDriverHandover = async (req, res) => {
   try {
-    const { id: handoverId } = req.params; 
+    const { id: handoverId } = req.params;
     const { driverId } = req.body;
 
     if (
@@ -301,7 +300,7 @@ export const assignDriverHandover = async (req, res) => {
 
     const handover = await Handover.findById(handoverId);
     console.log("Handover ID:", handoverId);
-console.log("Found Handover:", handover?._id);
+    console.log("Found Handover:", handover?._id);
 
     if (!handover) {
       return res.status(404).json({
@@ -311,7 +310,7 @@ console.log("Found Handover:", handover?._id);
     }
 
     const driver = await User.findById(driverId).select(
-      "fullName mobileNumber profileImage role"
+      "fullName mobileNumber profileImage role",
     );
 
     if (!driver) {
@@ -323,17 +322,18 @@ console.log("Found Handover:", handover?._id);
 
     handover.assignedDriver = driver._id;
 
+    console.log("Before Save:", handover.toObject());
+
     await handover.save();
 
-    await handover.populate(
-      "assignedDriver",
-      "fullName mobileNumber profileImage role"
-    );
+    const verify = await Handover.findById(handoverId).lean();
+
+    console.log("After Save:", verify);
 
     return res.status(200).json({
       success: true,
       message: "Driver assigned successfully.",
-      data: handover.assignedDriver,
+      data: verify.assignedDriver,
     });
   } catch (err) {
     console.error("assignDriver:", err);
