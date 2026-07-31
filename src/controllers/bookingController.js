@@ -1,6 +1,7 @@
 import mongoose from "mongoose";
 import Booking from "../models/booking.model.js";
 import Handover from "../models/handover.model.js";
+import User from "../models/user.model.js";
 
 export const getBookingDetails = async (req, res) => {
   try {
@@ -201,6 +202,61 @@ export const getBookingById = async (req, res) => {
     return res.status(500).json({
       success: false,
       message: "Unable to fetch booking.",
+    });
+  }
+};
+export const getDrivers = async (req, res) => {
+  try {
+    const drivers = await User.find({
+      role: "driver",
+      isDeleted: false,
+    })
+      .select("fullName mobileNumber profileImage")
+      .sort({ fullName: 1 });
+
+    res.json({
+      success: true,
+      data: drivers,
+    });
+  } catch (err) {
+    res.status(500).json({
+      success: false,
+      message: err.message,
+    });
+  }
+};
+export const assignDriver = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { driverId } = req.body;
+
+    const booking = await Lead.findById(id);
+
+    if (!booking) {
+      return res.status(404).json({
+        success: false,
+        message: "Booking not found",
+      });
+    }
+
+    booking.assignedDriver = driverId;
+
+    await booking.save();
+
+    await booking.populate(
+      "assignedDriver",
+      "fullName mobileNumber profileImage"
+    );
+
+    return res.json({
+      success: true,
+      message: "Driver assigned successfully.",
+      data: booking.assignedDriver,
+    });
+  } catch (err) {
+    return res.status(500).json({
+      success: false,
+      message: err.message,
     });
   }
 };

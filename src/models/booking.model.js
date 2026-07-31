@@ -267,6 +267,11 @@ const bookingSchema = new mongoose.Schema(
       type: Boolean,
       default: false,
     },
+    assignedDriver: {
+  type: mongoose.Schema.Types.ObjectId,
+  ref: "User",
+  default: null,
+},
 
     serviceType: {
       type: String,
