@@ -1287,7 +1287,15 @@ export const getReceiveCarList = async (req, res) => {
     })
       .populate("vehicle.vehicleId")
       .populate("createdBy", "fullName role email mobileNumber profileImage")
-      .populate("bookingId", "drop pickup destination tripType")
+      .populate({
+        path: "bookingId",
+        select: {
+          tripType: 1,
+          destination: 1,
+          pickup: 1,
+          drop: 1,
+        },
+      })
       .sort({
         "trip.dropDateTime": 1,
         createdAt: -1,
@@ -1415,11 +1423,29 @@ export const getReceiveCarList = async (req, res) => {
       // `customer.destination` if this handover has no linked booking
       // (or the booking has no drop location set).
       // ==========================
-      const linkedBooking = obj.bookingId; // populated Booking doc (or null)
-      obj.dropLocation = linkedBooking?.drop?.location?.trim() || "Office";
+      // ==========================
+      // DROP LOCATION
+      // ==========================
 
-      obj.dropLandmark = linkedBooking?.drop?.landmark || "";
-      obj.dropMapLink = linkedBooking?.drop?.mapLink || "";
+      const booking = obj.bookingId;
+
+      obj.dropLocation =
+        booking &&
+        booking.drop &&
+        typeof booking.drop.location === "string" &&
+        booking.drop.location.trim().length > 0
+          ? booking.drop.location.trim()
+          : "Office";
+
+      obj.dropLandmark =
+        booking && booking.drop && typeof booking.drop.landmark === "string"
+          ? booking.drop.landmark.trim()
+          : "";
+
+      obj.dropMapLink =
+        booking && booking.drop && typeof booking.drop.mapLink === "string"
+          ? booking.drop.mapLink.trim()
+          : "";
 
       // ==========================
       // CREATED BY
