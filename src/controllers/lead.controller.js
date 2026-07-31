@@ -1245,6 +1245,17 @@ export const getBookingsDashboard = async (req, res) => {
         pickup: booking.pickup,
         drop: booking.drop,
 
+        assignedDriver: booking.assignedDriver
+          ? {
+              _id: booking.assignedDriver._id,
+              fullName:
+                booking.assignedDriver.fullName ||
+                booking.assignedDriver.name ||
+                "",
+              mobileNumber: booking.assignedDriver.mobileNumber || "",
+            }
+          : null,
+
         pickupDropNotes: booking.pickupDropNotes,
 
         createdAt: booking.createdAt,
