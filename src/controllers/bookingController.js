@@ -236,9 +236,10 @@ export const assignDriver = async (req, res) => {
       });
     }
 
-    const booking = await Booking.findOne({
-      isDeleted: false,
-    });
+   const booking = await Booking.findOne({
+  _id: id,
+  isDeleted: false,
+});
 
     if (!booking) {
       return res.status(404).json({
