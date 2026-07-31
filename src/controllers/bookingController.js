@@ -237,7 +237,6 @@ export const assignDriver = async (req, res) => {
     }
 
     const booking = await Booking.findOne({
-      lead: id,
       isDeleted: false,
     });
 
