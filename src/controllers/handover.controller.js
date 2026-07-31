@@ -368,10 +368,7 @@ export const getHandoverById = async (req, res) => {
     return res.status(500).json({
       success: false,
       message: "Unable to fetch handover.",
-      error:
-        process.env.NODE_ENV === "development"
-          ? error.message
-          : undefined,
+      error: process.env.NODE_ENV === "development" ? error.message : undefined,
     });
   }
 };
@@ -1127,7 +1124,8 @@ export const getSingleHandover = async (req, res) => {
           bill.fastTagPayable ?? rawPayment.fastTagPayableAmount ?? 0,
         pickupCharge: bill.pickupCharge ?? 0,
         dropCharge: bill.dropCharge ?? 0,
-        securityDeposit: bill.securityDeposit ?? rawPayment.securityDeposit ?? 0,
+        securityDeposit:
+          bill.securityDeposit ?? rawPayment.securityDeposit ?? 0,
         extraCharges: bill.extraCharges ?? rawPayment.extraCharges ?? 0,
         discountAmount: bill.discountAmount ?? rawPayment.discountAmount ?? 0,
         totalAmount: bill.totalAmount ?? rawPayment.totalAmount ?? 0,
@@ -1418,11 +1416,7 @@ export const getReceiveCarList = async (req, res) => {
       // (or the booking has no drop location set).
       // ==========================
       const linkedBooking = obj.bookingId; // populated Booking doc (or null)
-
-      obj.dropLocation =
-        linkedBooking?.drop?.location ||
-        obj.customer?.destination ||
-        "-";
+      obj.dropLocation = linkedBooking?.drop?.location?.trim() || "Office";
 
       obj.dropLandmark = linkedBooking?.drop?.landmark || "";
       obj.dropMapLink = linkedBooking?.drop?.mapLink || "";
@@ -1585,8 +1579,7 @@ function buildBillSummaryResponse(handover) {
       securityDeposit:
         billSummary.securityDeposit ?? payment.securityDeposit ?? 0,
       extraCharges: billSummary.extraCharges ?? payment.extraCharges ?? 0,
-      discountAmount:
-        billSummary.discountAmount ?? payment.discountAmount ?? 0,
+      discountAmount: billSummary.discountAmount ?? payment.discountAmount ?? 0,
     },
 
     // FIX: flat fields matching payment.billSummary's own field names
@@ -1841,7 +1834,6 @@ export const updateRental = async (req, res) => {
 
     if (paymentMethod) handover.payment.paymentMethod = paymentMethod;
 
-
     const pickupCharge = handover.payment.billSummary?.pickupCharge || 0;
     const dropCharge = handover.payment.billSummary?.dropCharge || 0;
 
@@ -1897,10 +1889,7 @@ export const updateRental = async (req, res) => {
       bookingAmountPaid: handover.payment.bookingAmountPaid || 0,
       amountReceivedNow: handover.payment.amountReceivedNow || 0,
       totalCollected: totalPaidSoFar,
-      balanceAmount: Math.max(
-        0,
-        handover.payment.totalAmount - totalPaidSoFar,
-      ),
+      balanceAmount: Math.max(0, handover.payment.totalAmount - totalPaidSoFar),
     };
 
     /* ==========================
@@ -1934,7 +1923,8 @@ export const updateRental = async (req, res) => {
         // place, so they're left untouched here — only re-read to
         // confirm handover.payment.billSummary still agrees with them.
         booking.payment.vehicleRent = handover.payment.totalFare || 0;
-        booking.payment.fastagAmount = handover.payment.fastTagPayableAmount || 0;
+        booking.payment.fastagAmount =
+          handover.payment.fastTagPayableAmount || 0;
         booking.payment.discountAmount = handover.payment.discountAmount || 0;
         booking.payment.securityDeposit = handover.payment.securityDeposit || 0;
 
@@ -1968,7 +1958,7 @@ export const updateRental = async (req, res) => {
     });
   }
 };
- 
+
 // hanver get api
 export const getHandovers = async (req, res) => {
   try {
@@ -2040,50 +2030,55 @@ export const getHandovers = async (req, res) => {
       })
       .lean();
 
-   const data = handovers.map((item) => ({
-  _id: item._id,
+    const data = handovers.map((item) => ({
+      _id: item._id,
 
-  companyName:
-    item.company?.businessName ||
-    item.company?.companyName ||
-    item.company?.fullName ||
-    "",
+      companyName:
+        item.company?.businessName ||
+        item.company?.companyName ||
+        item.company?.fullName ||
+        "",
 
-  customerName: item.customer?.fullName || "",
-  mobileNumber: item.customer?.mobileNumber || "",
-  destination: item.customer?.destination || "",
+      customerName: item.customer?.fullName || "",
+      mobileNumber: item.customer?.mobileNumber || "",
+      destination: item.customer?.destination || "",
 
-  vehicleName: item.vehicle?.vehicleName || "",
-  vehicleNumber: item.vehicle?.vehicleNumber || "",
-  vehicleColor: item.vehicle?.vehicleColor || "",
+      vehicleName: item.vehicle?.vehicleName || "",
+      vehicleNumber: item.vehicle?.vehicleNumber || "",
+      vehicleColor: item.vehicle?.vehicleColor || "",
 
-  pickupDateTime: item.trip?.pickupDateTime,
-  dropDateTime: item.trip?.dropDateTime,
-  tripType: item.trip?.tripType,
-  numberOfDays: item.trip?.numberOfDays,
+      pickupDateTime: item.trip?.pickupDateTime,
+      dropDateTime: item.trip?.dropDateTime,
+      tripType: item.trip?.tripType,
+      numberOfDays: item.trip?.numberOfDays,
 
-  totalFare: item.payment?.billSummary?.totalFare ?? item.payment?.totalFare ?? 0,
-  totalAmount:
-    item.payment?.billSummary?.totalAmount ?? item.payment?.totalAmount ?? 0,
-  // NEW — balance now reads from the billSummary ledger (falls back to
-  // payment.balanceAmount only for older records saved before
-  // billSummary existed, so nothing breaks for historic data)
-  balanceAmount:
-    item.payment?.billSummary?.balanceAmount ?? item.payment?.balanceAmount ?? 0,
-  totalCollected: item.payment?.billSummary?.totalCollected ?? 0,
-  paymentStatus: item.payment?.paymentStatus || "pending",
+      totalFare:
+        item.payment?.billSummary?.totalFare ?? item.payment?.totalFare ?? 0,
+      totalAmount:
+        item.payment?.billSummary?.totalAmount ??
+        item.payment?.totalAmount ??
+        0,
+      // NEW — balance now reads from the billSummary ledger (falls back to
+      // payment.balanceAmount only for older records saved before
+      // billSummary existed, so nothing breaks for historic data)
+      balanceAmount:
+        item.payment?.billSummary?.balanceAmount ??
+        item.payment?.balanceAmount ??
+        0,
+      totalCollected: item.payment?.billSummary?.totalCollected ?? 0,
+      paymentStatus: item.payment?.paymentStatus || "pending",
 
-  bookingStatus: item.bookingStatus,
-  handoverStatus: item.handoverStatus,
-  hasUploadedImages: item.hasUploadedImages || false,
+      bookingStatus: item.bookingStatus,
+      handoverStatus: item.handoverStatus,
+      hasUploadedImages: item.hasUploadedImages || false,
 
-  notes: item.notes || "",
+      notes: item.notes || "",
 
-  createdBy: item.createdBy?.fullName || "",
+      createdBy: item.createdBy?.fullName || "",
 
-  createdAt: item.createdAt,
-  updatedAt: item.updatedAt,
-}));
+      createdAt: item.createdAt,
+      updatedAt: item.updatedAt,
+    }));
 
     return res.status(200).json({
       success: true,
