@@ -1289,6 +1289,7 @@ export const getReceiveCarList = async (req, res) => {
     })
       .populate("vehicle.vehicleId")
       .populate("createdBy", "fullName role email mobileNumber profileImage")
+      .populate("bookingId", "drop pickup destination tripType")
       .sort({
         "trip.dropDateTime": 1,
         createdAt: -1,
@@ -1408,19 +1409,23 @@ export const getReceiveCarList = async (req, res) => {
 
       // ==========================
       // DROP LOCATION
-      // Tries the dedicated drop object first (mirrors the Booking
-      // schema's `drop.location`), then falls back to a trip-level
-      // field, then to the customer's stated destination, so the card
-      // always has *something* sensible to show instead of "-".
+      // Handover itself has no `drop` object — only a general
+      // `customer.destination` string entered at handover time. The
+      // actual structured drop location (with landmark / map link)
+      // lives on the linked Booking document via `handover.bookingId`,
+      // so we read it from there first and only fall back to
+      // `customer.destination` if this handover has no linked booking
+      // (or the booking has no drop location set).
       // ==========================
+      const linkedBooking = obj.bookingId; // populated Booking doc (or null)
+
       obj.dropLocation =
-        obj.drop?.location ||
-        obj.trip?.dropLocation ||
+        linkedBooking?.drop?.location ||
         obj.customer?.destination ||
         "-";
 
-      obj.dropLandmark = obj.drop?.landmark || "";
-      obj.dropMapLink = obj.drop?.mapLink || "";
+      obj.dropLandmark = linkedBooking?.drop?.landmark || "";
+      obj.dropMapLink = linkedBooking?.drop?.mapLink || "";
 
       // ==========================
       // CREATED BY
