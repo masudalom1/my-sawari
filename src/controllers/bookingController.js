@@ -207,12 +207,9 @@ export const getBookingById = async (req, res) => {
 };
 export const getDrivers = async (req, res) => {
   try {
-    const companyId = req.user?.company || req.user?._id;
-
     const drivers = await User.find({
       role: "driver",
       isDeleted: false,
-      ...(companyId ? { company: companyId } : {}),
     })
       .select("fullName mobileNumber profileImage")
       .sort({ fullName: 1 });
@@ -223,6 +220,7 @@ export const getDrivers = async (req, res) => {
     });
   } catch (err) {
     console.error("getDrivers error:", err);
+
     return res.status(500).json({
       success: false,
       message: "Unable to fetch drivers.",
@@ -233,23 +231,24 @@ export const assignDriver = async (req, res) => {
   try {
     const { id } = req.params;
     const { driverId } = req.body;
-    const companyId = req.user?.company || req.user?._id;
 
     if (!mongoose.isValidObjectId(id) || !mongoose.isValidObjectId(driverId)) {
-      return res.status(400).json({ success: false, message: "Invalid id." });
+      return res.status(400).json({
+        success: false,
+        message: "Invalid id.",
+      });
     }
 
-    // `id` here is the Lead id surfaced by the booking list — resolve the
-    // actual Booking document via its `lead` reference rather than assuming
-    // the ids are interchangeable.
     const booking = await Booking.findOne({
       lead: id,
-      ...(companyId ? { company: companyId } : {}),
       isDeleted: false,
     });
 
     if (!booking) {
-      return res.status(404).json({ success: false, message: "Booking not found" });
+      return res.status(404).json({
+        success: false,
+        message: "Booking not found.",
+      });
     }
 
     const driver = await User.findOne({
@@ -257,13 +256,22 @@ export const assignDriver = async (req, res) => {
       role: "driver",
       isDeleted: false,
     });
+
     if (!driver) {
-      return res.status(404).json({ success: false, message: "Driver not found" });
+      return res.status(404).json({
+        success: false,
+        message: "Driver not found.",
+      });
     }
 
     booking.assignedDriver = driverId;
+
     await booking.save();
-    await booking.populate("assignedDriver", "fullName mobileNumber profileImage");
+
+    await booking.populate(
+      "assignedDriver",
+      "fullName mobileNumber profileImage"
+    );
 
     return res.json({
       success: true,
@@ -272,6 +280,10 @@ export const assignDriver = async (req, res) => {
     });
   } catch (err) {
     console.error("assignDriver error:", err);
-    return res.status(500).json({ success: false, message: "Unable to assign driver." });
+
+    return res.status(500).json({
+      success: false,
+      message: "Unable to assign driver.",
+    });
   }
 };
