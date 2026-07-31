@@ -496,6 +496,11 @@ const handoverSchema = new mongoose.Schema(
       type: Boolean,
       default: false,
     },
+    assignedDriver: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      default: null,
+    },
   },
   {
     timestamps: true,

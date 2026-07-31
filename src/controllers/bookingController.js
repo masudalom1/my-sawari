@@ -205,6 +205,8 @@ export const getBookingById = async (req, res) => {
     });
   }
 };
+
+
 export const getDrivers = async (req, res) => {
   try {
     const users = await User.find({})
@@ -275,6 +277,64 @@ export const assignDriver = async (req, res) => {
     });
   } catch (err) {
     console.error("assignDriver error:", err);
+
+    return res.status(500).json({
+      success: false,
+      message: "Unable to assign driver.",
+    });
+  }
+};
+export const assignDriverHandover = async (req, res) => {
+  try {
+    const { id: handoverId } = req.params; 
+    const { driverId } = req.body;
+
+    if (
+      !mongoose.isValidObjectId(handoverId) ||
+      !mongoose.isValidObjectId(driverId)
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid id.",
+      });
+    }
+
+    const handover = await Handover.findById(handoverId);
+
+    if (!handover) {
+      return res.status(404).json({
+        success: false,
+        message: "Handover not found.",
+      });
+    }
+
+    const driver = await User.findById(driverId).select(
+      "fullName mobileNumber profileImage role"
+    );
+
+    if (!driver) {
+      return res.status(404).json({
+        success: false,
+        message: "User not found.",
+      });
+    }
+
+    handover.assignedDriver = driver._id;
+
+    await handover.save();
+
+    await handover.populate(
+      "assignedDriver",
+      "fullName mobileNumber profileImage role"
+    );
+
+    return res.status(200).json({
+      success: true,
+      message: "Driver assigned successfully.",
+      data: handover.assignedDriver,
+    });
+  } catch (err) {
+    console.error("assignDriver:", err);
 
     return res.status(500).json({
       success: false,
