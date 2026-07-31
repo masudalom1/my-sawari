@@ -1287,6 +1287,7 @@ export const getReceiveCarList = async (req, res) => {
     })
       .populate("vehicle.vehicleId")
       .populate("createdBy", "fullName role email mobileNumber profileImage")
+      .populate("assignedDriver", "fullName mobileNumber profileImage role")
       .populate({
         path: "bookingId",
         select: {
