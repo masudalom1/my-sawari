@@ -300,6 +300,8 @@ export const assignDriverHandover = async (req, res) => {
     }
 
     const handover = await Handover.findById(handoverId);
+    console.log("Handover ID:", handoverId);
+console.log("Found Handover:", handover?._id);
 
     if (!handover) {
       return res.status(404).json({
