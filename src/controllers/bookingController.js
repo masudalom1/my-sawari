@@ -207,22 +207,20 @@ export const getBookingById = async (req, res) => {
 };
 export const getDrivers = async (req, res) => {
   try {
-    const drivers = await User.find({
-      isDeleted: false,
-    })
-      .select("fullName mobileNumber profileImage")
+    const users = await User.find({})
+      .select("fullName mobileNumber profileImage role")
       .sort({ fullName: 1 });
 
-    return res.json({
+    return res.status(200).json({
       success: true,
-      data: drivers,
+      data: users,
     });
   } catch (err) {
     console.error("getDrivers error:", err);
 
     return res.status(500).json({
       success: false,
-      message: "Unable to fetch drivers.",
+      message: "Unable to fetch users.",
     });
   }
 };
@@ -250,29 +248,27 @@ export const assignDriver = async (req, res) => {
       });
     }
 
-    const driver = await User.findOne({
-      _id: driverId,
-      role: "driver",
-      isDeleted: false,
-    });
+    const driver = await User.findById(driverId).select(
+      "fullName mobileNumber profileImage role"
+    );
 
     if (!driver) {
       return res.status(404).json({
         success: false,
-        message: "Driver not found.",
+        message: "User not found.",
       });
     }
 
-    booking.assignedDriver = driverId;
+    booking.assignedDriver = driver._id;
 
     await booking.save();
 
     await booking.populate(
       "assignedDriver",
-      "fullName mobileNumber profileImage"
+      "fullName mobileNumber profileImage role"
     );
 
-    return res.json({
+    return res.status(200).json({
       success: true,
       message: "Driver assigned successfully.",
       data: booking.assignedDriver,
