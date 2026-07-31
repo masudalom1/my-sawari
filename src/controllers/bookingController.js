@@ -208,7 +208,6 @@ export const getBookingById = async (req, res) => {
 export const getDrivers = async (req, res) => {
   try {
     const drivers = await User.find({
-      role: "driver",
       isDeleted: false,
     })
       .select("fullName mobileNumber profileImage")
