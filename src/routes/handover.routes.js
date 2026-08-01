@@ -6,6 +6,7 @@ import {
   createDraftHandover,
   createHandover,
   deleteHandover,
+  discardHandoverDraft,
   getActiveHandovers,
   getAllHandovers,
   getHandoverById,
@@ -44,6 +45,7 @@ router.put("/rentals/edit/:id",protect,updateRental);
 
 //handover api 
 router.get("/list", protect, getHandovers);
+router.patch("/discard/:id", discardHandoverDraft);
 // no use
 router.get("/all", getAllHandovers);
 router.get("single/:id", getSingleHandover);

@@ -2269,3 +2269,44 @@ export const deleteHandover = async (req, res, next) => {
     next(error);
   }
 };
+
+export const discardHandoverDraft = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const handover = await Handover.findOne({ _id: id, isDeleted: false });
+
+    if (!handover) {
+      return res.status(404).json({
+        success: false,
+        message: "Handover not found.",
+      });
+    }
+
+    if (handover.bookingStatus !== "draft") {
+      return res.status(400).json({
+        success: false,
+        message: "Only draft handovers can be discarded.",
+      });
+    }
+
+    handover.bookingStatus = "cancelled";
+    handover.isDeleted = true;
+
+    await handover.save();
+
+    return res.status(200).json({
+      success: true,
+      message: "Draft discarded successfully.",
+      data: { _id: handover._id, bookingStatus: handover.bookingStatus },
+    });
+  } catch (error) {
+    console.error("Discard Handover Draft Error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Unable to discard draft.",
+      error: process.env.NODE_ENV === "development" ? error.message : undefined,
+    });
+  }
+};
