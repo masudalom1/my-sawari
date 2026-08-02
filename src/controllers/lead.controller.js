@@ -1102,10 +1102,11 @@ export const getBookingsDashboard = async (req, res) => {
 
     const stats = {
       totalBookings: bookings.length,
+      pendingHandover: 0,
       todayPickup: 0,
       tomorrowPickup: 0,
+      upcoming: 0,
       activeRentals: 0,
-      pendingHandover: 0,
       completed: 0,
       cancelled: 0,
     };
@@ -1122,11 +1123,6 @@ export const getBookingsDashboard = async (req, res) => {
       } else if (booking.status === "cancelled") {
         status = "Cancelled";
         stats.cancelled++;
-      } else if (
-        booking.status === "confirmed" ||
-        booking.status === "handover_pending"
-      ) {
-        stats.pendingHandover++;
       }
 
       // ==========================
@@ -1141,24 +1137,33 @@ export const getBookingsDashboard = async (req, res) => {
       }
 
       // ==========================
-      // TODAY / TOMORROW PICKUP
+      // PENDING (overdue, not handed over) / TODAY / TOMORROW / FUTURE
       // DATE ONLY (TIME IGNORED)
       // ==========================
-      if (
-        booking.fromDate &&
+      const isOpenBooking =
         booking.status !== "completed" &&
         booking.status !== "cancelled" &&
         booking.status !== "active" &&
-        booking.status !== "vehicle_handover"
-      ) {
+        booking.status !== "vehicle_handover";
+
+      if (booking.fromDate && isOpenBooking) {
         const pickupDate = getISTDateString(booking.fromDate);
 
-        if (pickupDate === today) {
+        if (pickupDate < today) {
+          // Yesterday or earlier — pickup date has passed with no handover
+          status = "Pending Handover";
+          stats.pendingHandover++;
+        } else if (pickupDate === today) {
           status = "Today's Pickup";
           stats.todayPickup++;
+          stats.upcoming++;
         } else if (pickupDate === tomorrow) {
           status = "Tomorrow's Pickup";
           stats.tomorrowPickup++;
+          stats.upcoming++;
+        } else {
+          // Future date beyond tomorrow — stays "Booking Confirmed"
+          stats.upcoming++;
         }
       }
 
