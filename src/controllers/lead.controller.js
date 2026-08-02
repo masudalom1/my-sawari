@@ -2610,7 +2610,6 @@ export const cancelBooking = async (req, res, next) => {
       });
     }
 
-    // Prevent cancelling active/completed bookings
     if (booking.status === "active") {
       return res.status(400).json({
         success: false,
@@ -2626,16 +2625,26 @@ export const cancelBooking = async (req, res, next) => {
       });
     }
 
+    if (booking.status === "cancelled") {
+      return res.status(400).json({
+        success: false,
+        message: "Booking is already cancelled.",
+      });
+    }
+
     booking.status = "cancelled";
-    booking.isDeleted = true;
-    booking.deletedAt = new Date();
-    booking.deletedBy = req.user._id;
+    // isDeleted stays false — a cancelled booking is a real, visible
+    // outcome, not a deleted record. Keep it queryable for the
+    // Cancelled tab, history, and reporting.
+    booking.cancelledAt = new Date();
+    booking.cancelledBy = req.user._id;
 
     await booking.save();
 
     return res.status(200).json({
       success: true,
       message: "Booking cancelled successfully.",
+      booking,
     });
   } catch (error) {
     next(error);
