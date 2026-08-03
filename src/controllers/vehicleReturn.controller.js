@@ -798,6 +798,11 @@ export const getVehicleReturnsDashboard = async (req, res) => {
         mobileNumber:
           item.mobileNumber || item.handover?.customer?.mobileNumber || "",
 
+        // Vehicle name shown on the dashboard is the specific vehicle's
+        // own name (Vehicle.vehicleName, required on the schema) — NOT
+        // the manufacturer/brand. manufacturer/model/variant are still
+        // sent through in case the frontend needs a fallback or wants
+        // to show fuller vehicle detail elsewhere.
         vehicleName: item.vehicle?.vehicleName || "",
         vehicleNumber: item.vehicle?.vehicleNumber || "",
         manufacturer: item.vehicle?.manufacturer || "",
