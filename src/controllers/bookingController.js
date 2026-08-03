@@ -28,6 +28,7 @@ export const getBookingDetails = async (req, res) => {
           { path: "vehicleHistory.oldVehicle.vehicleId" },
           { path: "vehicleHistory.newVehicle.vehicleId" },
           { path: "returnDetails.returnedBy", select: "name email" },
+          { path: "extensionBills.createdBy", select: "fullName email" }, // NEW
         ],
       })
       .lean();
@@ -115,6 +116,9 @@ export const getBookingDetails = async (req, res) => {
               ),
           }
         : null;
+    const extensionHistory = (handover?.extensionBills || [])
+      .slice()
+      .sort((a, b) => (a.billNumber || 0) - (b.billNumber || 0));
 
     const data = {
       ...booking,
@@ -152,7 +156,7 @@ export const getBookingDetails = async (req, res) => {
             handoverDateTime: handover.createdAt,
           }
         : null,
-
+      extensionHistory,
       handoverRecord: handover,
     };
 
