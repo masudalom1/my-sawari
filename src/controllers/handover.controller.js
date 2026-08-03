@@ -349,6 +349,7 @@ export const getHandoverById = async (req, res) => {
     const handover = await Handover.findById(id)
       .populate("createdBy", "fullName email mobileNumber role")
       .populate("vehicle.vehicleId")
+      .populate("extensionBills.createdBy", "fullName email")
       .lean();
 
     if (!handover || handover.isDeleted) {
@@ -357,6 +358,80 @@ export const getHandoverById = async (req, res) => {
         message: "Handover not found",
       });
     }
+
+    const payment = handover.payment || {};
+    const billSummary = payment.billSummary || {};
+
+    const extensionBills = [...(handover.extensionBills || [])].sort(
+      (a, b) => a.billNumber - b.billNumber,
+    );
+
+    const totalExtensionAmount = extensionBills.reduce(
+      (sum, bill) => sum + (bill.extensionAmount || 0),
+      0,
+    );
+
+    const totalExtensionCollected = extensionBills.reduce(
+      (sum, bill) => sum + (bill.amountCollected || 0),
+      0,
+    );
+
+    const extensionHistory = extensionBills.map((bill) => ({
+      _id: bill._id,
+
+      billNumber: bill.billNumber,
+
+      previousDropDateTime: bill.previousDropDateTime,
+      newDropDateTime: bill.newDropDateTime,
+
+      previousNumberOfDays: bill.previousNumberOfDays,
+      newNumberOfDays: bill.newNumberOfDays,
+
+      extraDays: bill.extraDays,
+
+      extensionAmount: bill.extensionAmount,
+
+      amountCollected: bill.amountCollected,
+
+      remainingAmount: Math.max(
+        (bill.extensionAmount || 0) - (bill.amountCollected || 0),
+        0,
+      ),
+
+      totalFareAfterThisBill: bill.totalFareAfterThisBill,
+
+      reason: bill.reason,
+
+      createdBy: bill.createdBy,
+
+      createdAt: bill.createdAt,
+    }));
+
+    const latestExtension =
+      extensionHistory.length > 0
+        ? extensionHistory[extensionHistory.length - 1]
+        : null;
+
+    handover.payment.billSummary = {
+      ...billSummary,
+
+      extensionSummary: {
+        totalExtensions: extensionHistory.length,
+
+        totalExtensionAmount,
+
+        totalExtensionCollected,
+
+        totalOutstanding: Math.max(
+          totalExtensionAmount - totalExtensionCollected,
+          0,
+        ),
+
+        latestExtension,
+
+        history: extensionHistory,
+      },
+    };
 
     return res.status(200).json({
       success: true,
@@ -368,7 +443,10 @@ export const getHandoverById = async (req, res) => {
     return res.status(500).json({
       success: false,
       message: "Unable to fetch handover.",
-      error: process.env.NODE_ENV === "development" ? error.message : undefined,
+      error:
+        process.env.NODE_ENV === "development"
+          ? error.message
+          : undefined,
     });
   }
 };
