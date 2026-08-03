@@ -1414,20 +1414,6 @@ export const getReceiveCarList = async (req, res) => {
 
       obj.billSummary = obj.payment?.billSummary || {};
 
-      // ==========================
-      // DROP LOCATION
-      // Handover itself has no `drop` object — only a general
-      // `customer.destination` string entered at handover time. The
-      // actual structured drop location (with landmark / map link)
-      // lives on the linked Booking document via `handover.bookingId`,
-      // so we read it from there first and only fall back to
-      // `customer.destination` if this handover has no linked booking
-      // (or the booking has no drop location set).
-      // ==========================
-      // ==========================
-      // DROP LOCATION
-      // ==========================
-
       const booking = obj.bookingId;
 
       obj.dropLocation =
@@ -1540,17 +1526,14 @@ function buildBillSummaryResponse(handover) {
   const payment = handover.payment || {};
   const extensionBills = handover.extensionBills || [];
 
-  // FIX: payment.billSummary is the single snapshot updateRental
-  // maintains (it has pickupCharge, dropCharge, totalAmount,
-  // balanceAmount, totalCollected — all correctly computed there).
-  // Read from it instead of recomputing separate numbers under
-  // different names here, which is what caused pickupCharge/
-  // dropCharge to go missing entirely from this response, and
-  // totalAmount/balanceAmount to be renamed to grandTotal/balanceDue
-  // (fields the frontend never asked for, so they always read as 0).
   const billSummary = payment.billSummary || {};
 
-  const totalExtensionAmount = extensionBills.reduce(
+  // ever made, regardless of how Mongo returns/stores the array.
+  const sortedExtensionBills = [...extensionBills].sort(
+    (a, b) => (a.billNumber || 0) - (b.billNumber || 0),
+  );
+
+  const totalExtensionAmount = sortedExtensionBills.reduce(
     (sum, bill) => sum + (bill.extensionAmount || 0),
     0,
   );
@@ -1558,13 +1541,13 @@ function buildBillSummaryResponse(handover) {
   const baseFare = Math.max(0, (payment.totalFare || 0) - totalExtensionAmount);
 
   const originalNumberOfDays =
-    extensionBills.length > 0
-      ? extensionBills[0].previousNumberOfDays
+    sortedExtensionBills.length > 0
+      ? sortedExtensionBills[0].previousNumberOfDays
       : handover.trip?.numberOfDays;
 
   const originalDropDateTime =
-    extensionBills.length > 0
-      ? extensionBills[0].previousDropDateTime
+    sortedExtensionBills.length > 0
+      ? sortedExtensionBills[0].previousDropDateTime
       : handover.trip?.dropDateTime;
 
   // "Previous bill total" = what totalFare was right before the CURRENT
@@ -1581,7 +1564,9 @@ function buildBillSummaryResponse(handover) {
       baseFare,
     },
 
-    extensionBills: extensionBills.map((bill) => ({
+    // Sorted oldest -> newest so the collapsible history list in the
+    // UI always displays extensions in the order they actually happened.
+    extensionBills: sortedExtensionBills.map((bill) => ({
       billNumber: bill.billNumber,
       previousDropDateTime: bill.previousDropDateTime,
       newDropDateTime: bill.newDropDateTime,
@@ -1679,6 +1664,14 @@ export const getRentalDetails = async (req, res) => {
         balanceAmount: handover.payment?.balanceAmount || 0,
         paymentMethod: handover.payment?.paymentMethod || "",
         paymentStatus: handover.payment?.paymentStatus || "pending",
+
+        // FIX: flat fallback fields, matching what EditRentalScreen.js
+        // reads via `data.billSummary?.pickupCharge ?? data.pickupCharge`.
+        // Kept in sync with billSummary.pickupCharge/dropCharge so this
+        // fallback path is never silently stale if billSummary's shape
+        // changes later.
+        pickupCharge: billSummary.pickupCharge,
+        dropCharge: billSummary.dropCharge,
 
         billSummary,
       },
