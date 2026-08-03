@@ -1092,7 +1092,10 @@ export const getSingleHandover = async (req, res) => {
     })
       .populate("createdBy", "fullName email mobileNumber role")
       .populate("vehicle.vehicleId")
-      .populate("returnDetails.returnedBy", "fullName email mobileNumber role");
+      .populate("returnDetails.returnedBy", "fullName email mobileNumber role")
+      // NEW: populate the creator of each extension bill so the frontend
+      // can show "extended by <name>" without a second lookup.
+      .populate("extensionBills.createdBy", "fullName email mobileNumber role");
 
     if (!handover) {
       return res.status(404).json({
@@ -1139,6 +1142,51 @@ export const getSingleHandover = async (req, res) => {
             (rawPayment.amountReceivedNow || 0),
         balanceAmount: bill.balanceAmount ?? rawPayment.balanceAmount ?? 0,
       },
+    };
+
+    // NEW: shape extensionBills for the client — newest first, with the
+    // populated creator trimmed down to just what the UI needs, and a
+    // rollup summary so the screen doesn't have to reduce() on its own.
+    const extensionBills = (handover.extensionBills || [])
+      .map((extBill) => ({
+        _id: extBill._id,
+        billNumber: extBill.billNumber,
+        previousDropDateTime: extBill.previousDropDateTime,
+        newDropDateTime: extBill.newDropDateTime,
+        previousNumberOfDays: extBill.previousNumberOfDays,
+        newNumberOfDays: extBill.newNumberOfDays,
+        extraDays: extBill.extraDays,
+        extensionAmount: extBill.extensionAmount || 0,
+        amountCollected: extBill.amountCollected || 0,
+        totalFareAfterThisBill: extBill.totalFareAfterThisBill || 0,
+        reason: extBill.reason || "",
+        createdBy: extBill.createdBy
+          ? {
+              _id: extBill.createdBy._id,
+              fullName: extBill.createdBy.fullName,
+              role: extBill.createdBy.role,
+            }
+          : null,
+        createdAt: extBill.createdAt,
+      }))
+      .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+
+    data.extensionBills = extensionBills;
+
+    data.extensionSummary = {
+      totalExtensions: extensionBills.length,
+      totalExtensionAmount: extensionBills.reduce(
+        (sum, b) => sum + (b.extensionAmount || 0),
+        0,
+      ),
+      totalAmountCollected: extensionBills.reduce(
+        (sum, b) => sum + (b.amountCollected || 0),
+        0,
+      ),
+      totalExtraDays: extensionBills.reduce(
+        (sum, b) => sum + (b.extraDays || 0),
+        0,
+      ),
     };
 
     data.gallery = {
