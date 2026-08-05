@@ -9,6 +9,7 @@ import {
   updateVehicleStatus,
   getAvailableVehicles,
   getAll,
+  createMaintenance,
 } from "../controllers/vehicle.controller.js";
 
 import protect from "../middlewares/auth.middleware.js";
@@ -25,6 +26,13 @@ router.get("/all", getAllVehicles);
 // Showing Available car in handover screen
 router.get("/available", protect, getAvailableVehicles);
 router.get("/getAll", protect, getAll);
+
+// Maintenance 
+router.post("/create", createMaintenance);
+ 
+
+
+
 
 // NOT IN USED
 router.get("/:id", getSingleVehicle);
