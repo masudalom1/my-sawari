@@ -28,7 +28,7 @@ router.get("/available", protect, getAvailableVehicles);
 router.get("/getAll", protect, getAll);
 
 // Maintenance 
-router.post("/create", createMaintenance);
+router.post("/create-maintenance", createMaintenance);
  
 
 
