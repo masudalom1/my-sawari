@@ -141,7 +141,8 @@ export const getAvailableVehicles = async (req, res, next) => {
       status: "available",
       isDeleted: false,
     })
-      .select(`
+      .select(
+        `
         _id
         vehicleName
         vehicleNumber
@@ -155,7 +156,8 @@ export const getAvailableVehicles = async (req, res, next) => {
         fuelType
         pricePerDay
         status
-      `)
+      `,
+      )
       .sort({ vehicleName: 1 })
       .lean();
 
@@ -182,7 +184,8 @@ export const getAll = async (req, res, next) => {
     const vehicles = await Vehicle.find({
       isDeleted: false,
     })
-      .select(`
+      .select(
+        `
         _id
         vehicleName
         vehicleNumber
@@ -196,7 +199,8 @@ export const getAll = async (req, res, next) => {
         fuelType
         pricePerDay
         status
-      `)
+      `,
+      )
       .sort({ vehicleName: 1 })
       .lean();
 
@@ -219,11 +223,7 @@ export const getAll = async (req, res, next) => {
   }
 };
 
-export const getSingleVehicle = async (
-  req,
-  res,
-  next
-) => {
+export const getSingleVehicle = async (req, res, next) => {
   try {
     const vehicle = await Vehicle.findOne({
       _id: req.params.id,
@@ -285,7 +285,8 @@ export const deleteVehicle = async (req, res, next) => {
     if (req.user.role !== "SUPER_ADMIN") {
       return res.status(403).json({
         success: false,
-        message: "Only Super Admin can delete vehicles. Please contact your administrator.",
+        message:
+          "Only Super Admin can delete vehicles. Please contact your administrator.",
       });
     }
 
@@ -341,9 +342,6 @@ export const updateVehicleStatus = async (req, res, next) => {
     next(error);
   }
 };
-
-
-
 
 export const createMaintenance = async (req, res, next) => {
   try {
@@ -415,8 +413,7 @@ export const createMaintenance = async (req, res, next) => {
 
     const partsCost = Number(costs?.partsCost) || 0;
     const labourCost = Number(costs?.labourCost) || 0;
-    const totalCost =
-      Number(costs?.totalCost) || (partsCost + labourCost);
+    const totalCost = Number(costs?.totalCost) || partsCost + labourCost;
 
     /* ===============================
        CREATE MAINTENANCE
@@ -445,9 +442,7 @@ export const createMaintenance = async (req, res, next) => {
       },
 
       odometer:
-        odometer !== "" && odometer !== undefined
-          ? Number(odometer)
-          : null,
+        odometer !== "" && odometer !== undefined ? Number(odometer) : null,
 
       expectedCompletionDate,
 
