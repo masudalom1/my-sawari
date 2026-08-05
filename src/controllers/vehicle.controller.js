@@ -1,5 +1,6 @@
+import mongoose from "mongoose";
 import Vehicle from "../models/vehicle.model.js";
-import Maintenance from "../models/Maintenance.js";
+import Maintenance from "../models/maintenance.js";
 
 // add vehicle screen
 export const createVehicle = async (req, res, next) => {
