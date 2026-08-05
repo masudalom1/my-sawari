@@ -12,7 +12,7 @@ const vehicleImageSchema = new mongoose.Schema(
       default: null,
     },
   },
-  { _id: false }
+  { _id: false },
 );
 
 const vehicleSchema = new mongoose.Schema(
@@ -61,7 +61,7 @@ const vehicleSchema = new mongoose.Schema(
       trim: true,
       default: "",
     },
-       pricePerDay: {
+    pricePerDay: {
       type: Number,
       default: 0,
       min: 0,
@@ -154,38 +154,50 @@ const vehicleSchema = new mongoose.Schema(
     },
 
     maintenance: {
-  required: {
-    type: Boolean,
-    default: false,
-  },
+      required: {
+        type: Boolean,
+        default: false,
+      },
+      currentMaintenance: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "Maintenance",
+        default: null,
+      },
 
-  reason: {
-    type: String,
-    default: "",
-    trim: true,
-  },
+      maintenanceHistory: [
+        {
+          type: mongoose.Schema.Types.ObjectId,
+          ref: "Maintenance",
+        },
+      ],
 
-  estimatedDays: {
-    type: Number,
-    default: 0,
-  },
+      reason: {
+        type: String,
+        default: "",
+        trim: true,
+      },
 
-  estimatedCompletionDate: {
-    type: Date,
-    default: null,
-  },
+      estimatedDays: {
+        type: Number,
+        default: 0,
+      },
 
-  markedBy: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: "User",
-    default: null,
-  },
+      estimatedCompletionDate: {
+        type: Date,
+        default: null,
+      },
 
-  markedAt: {
-    type: Date,
-    default: null,
-  },
-},
+      markedBy: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "User",
+        default: null,
+      },
+
+      markedAt: {
+        type: Date,
+        default: null,
+      },
+    },
 
     isDeleted: {
       type: Boolean,
@@ -195,7 +207,7 @@ const vehicleSchema = new mongoose.Schema(
   },
   {
     timestamps: true,
-  }
+  },
 );
 
 vehicleSchema.index({

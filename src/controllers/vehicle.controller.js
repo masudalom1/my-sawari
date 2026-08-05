@@ -345,7 +345,11 @@ export const updateVehicleStatus = async (req, res, next) => {
 
 
 export const createMaintenance = async (req, res, next) => {
+  const session = await mongoose.startSession();
+
   try {
+    session.startTransaction();
+
     const {
       vehicle,
       maintenanceType,
@@ -359,15 +363,21 @@ export const createMaintenance = async (req, res, next) => {
       additionalNotes,
     } = req.body;
 
-    // --- Required-field validation, mirroring the app's validateForm() ---
+    /* ===============================
+       VALIDATION
+    =============================== */
+
     const missing = [];
+
     if (!vehicle) missing.push("vehicle");
     if (!maintenanceType) missing.push("maintenanceType");
-    if (!title || !title.toString().trim()) missing.push("title");
-    if (!description || !description.toString().trim()) missing.push("description");
-    if (!garage?.name || !garage.name.toString().trim()) missing.push("garage.name");
+    if (!title?.trim()) missing.push("title");
+    if (!description?.trim()) missing.push("description");
+    if (!garage?.name?.trim()) missing.push("garage.name");
 
-    if (missing.length > 0) {
+    if (missing.length) {
+      await session.abortTransaction();
+
       return res.status(400).json({
         success: false,
         message: `Missing required field(s): ${missing.join(", ")}`,
@@ -375,6 +385,8 @@ export const createMaintenance = async (req, res, next) => {
     }
 
     if (!mongoose.Types.ObjectId.isValid(vehicle)) {
+      await session.abortTransaction();
+
       return res.status(400).json({
         success: false,
         message: "Invalid vehicle id",
@@ -382,67 +394,119 @@ export const createMaintenance = async (req, res, next) => {
     }
 
     if (!["Major", "Minor"].includes(maintenanceType)) {
+      await session.abortTransaction();
+
       return res.status(400).json({
         success: false,
-        message: "maintenanceType must be 'Major' or 'Minor'",
+        message: "Maintenance type must be Major or Minor",
       });
     }
+
+    /* ===============================
+       FIND VEHICLE
+    =============================== */
 
     const existingVehicle = await Vehicle.findOne({
       _id: vehicle,
       isDeleted: false,
-    });
+    }).session(session);
 
     if (!existingVehicle) {
+      await session.abortTransaction();
+
       return res.status(404).json({
         success: false,
         message: "Vehicle not found",
       });
     }
 
+    /* ===============================
+       COST CALCULATION
+    =============================== */
+
     const partsCost = Number(costs?.partsCost) || 0;
     const labourCost = Number(costs?.labourCost) || 0;
-    const totalCost = Number(costs?.totalCost) || partsCost + labourCost;
 
-    const maintenance = await Maintenance.create({
-      vehicle,
-      maintenanceType,
-      title: title.toString().trim(),
-      description: description.toString().trim(),
-      garage: {
-        name: garage.name.toString().trim(),
-        contact: garage.contact ? garage.contact.toString().trim() : "",
-        address: garage.address ? garage.address.toString().trim() : "",
-        gstin: garage.gstin ? garage.gstin.toString().trim() : "",
-      },
-      costs: { partsCost, labourCost, totalCost },
-      odometer: odometer !== undefined && odometer !== "" ? Number(odometer) : undefined,
-      expectedCompletionDate,
-      images: Array.isArray(images) ? images : [],
-      additionalNotes: additionalNotes ? additionalNotes.toString().trim() : "",
-      createdBy: req.user?._id,
-    });
+    const totalCost =
+      Number(costs?.totalCost) || partsCost + labourCost;
 
-    // Major maintenance takes the vehicle out of the booking pool;
-    // minor maintenance keeps it bookable. Matches the notice shown
-    // in the app's live summary card.
-    existingVehicle.status = maintenanceType === "Major" ? "in_service" : "available";
-    await existingVehicle.save();
+    /* ===============================
+       CREATE MAINTENANCE
+    =============================== */
+
+    const maintenance = await Maintenance.create(
+      [
+        {
+          vehicle: existingVehicle._id,
+
+          maintenanceType,
+
+          title: title.trim(),
+
+          description: description.trim(),
+
+          garage: {
+            name: garage.name.trim(),
+            contact: garage.contact?.trim() || "",
+            address: garage.address?.trim() || "",
+            gstin: garage.gstin?.trim() || "",
+          },
+
+          costs: {
+            partsCost,
+            labourCost,
+            totalCost,
+          },
+
+          odometer:
+            odometer !== "" && odometer !== undefined
+              ? Number(odometer)
+              : null,
+
+          expectedCompletionDate,
+
+          images: Array.isArray(images) ? images : [],
+
+          additionalNotes: additionalNotes?.trim() || "",
+
+          createdBy: req.user._id,
+        },
+      ],
+      { session }
+    );
+
+    /* ===============================
+       UPDATE VEHICLE
+    =============================== */
+
+    existingVehicle.currentMaintenance = maintenance[0]._id;
+
+    existingVehicle.maintenanceHistory.push(
+      maintenance[0]._id
+    );
+
+    existingVehicle.status =
+      maintenanceType === "Major"
+        ? "service"
+        : "available";
+
+    await existingVehicle.save({ session });
+
+    /* ===============================
+       COMMIT
+    =============================== */
+
+    await session.commitTransaction();
 
     return res.status(201).json({
       success: true,
-      message: "Maintenance request created successfully",
-      data: maintenance,
+      message: "Maintenance created successfully",
+      data: maintenance[0],
     });
   } catch (error) {
-    if (error?.name === "ValidationError") {
-      return res.status(400).json({
-        success: false,
-        message: Object.values(error.errors)
-          .map((e) => e.message)
-          .join(", "),
-      });
-    }
+    await session.abortTransaction();
     next(error);
+  } finally {
+    session.endSession();
   }
 };
