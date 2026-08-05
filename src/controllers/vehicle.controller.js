@@ -344,7 +344,11 @@ export const updateVehicleStatus = async (req, res, next) => {
 };
 
 export const createMaintenance = async (req, res, next) => {
+  const session = await mongoose.startSession();
+
   try {
+    session.startTransaction();
+
     const {
       vehicle,
       maintenanceType,
@@ -371,6 +375,8 @@ export const createMaintenance = async (req, res, next) => {
     if (!garage?.name?.trim()) missing.push("garage.name");
 
     if (missing.length) {
+      await session.abortTransaction();
+
       return res.status(400).json({
         success: false,
         message: `Missing required field(s): ${missing.join(", ")}`,
@@ -378,6 +384,8 @@ export const createMaintenance = async (req, res, next) => {
     }
 
     if (!mongoose.Types.ObjectId.isValid(vehicle)) {
+      await session.abortTransaction();
+
       return res.status(400).json({
         success: false,
         message: "Invalid vehicle id",
@@ -385,6 +393,8 @@ export const createMaintenance = async (req, res, next) => {
     }
 
     if (!["Major", "Minor"].includes(maintenanceType)) {
+      await session.abortTransaction();
+
       return res.status(400).json({
         success: false,
         message: "Maintenance type must be Major or Minor",
@@ -392,15 +402,17 @@ export const createMaintenance = async (req, res, next) => {
     }
 
     /* ===============================
-       CHECK VEHICLE EXISTS
+       FIND VEHICLE
     =============================== */
 
     const existingVehicle = await Vehicle.findOne({
       _id: vehicle,
       isDeleted: false,
-    });
+    }).session(session);
 
     if (!existingVehicle) {
+      await session.abortTransaction();
+
       return res.status(404).json({
         success: false,
         message: "Vehicle not found",
@@ -413,52 +425,80 @@ export const createMaintenance = async (req, res, next) => {
 
     const partsCost = Number(costs?.partsCost) || 0;
     const labourCost = Number(costs?.labourCost) || 0;
+
     const totalCost = Number(costs?.totalCost) || partsCost + labourCost;
 
     /* ===============================
        CREATE MAINTENANCE
     =============================== */
 
-    const maintenance = await Maintenance.create({
-      vehicle: existingVehicle._id,
+    const maintenance = await Maintenance.create(
+      [
+        {
+          vehicle: existingVehicle._id,
 
-      maintenanceType,
+          maintenanceType,
 
-      title: title.trim(),
+          title: title.trim(),
 
-      description: description.trim(),
+          description: description.trim(),
 
-      garage: {
-        name: garage.name.trim(),
-        contact: garage.contact?.trim() || "",
-        address: garage.address?.trim() || "",
-        gstin: garage.gstin?.trim() || "",
-      },
+          garage: {
+            name: garage.name.trim(),
+            contact: garage.contact?.trim() || "",
+            address: garage.address?.trim() || "",
+            gstin: garage.gstin?.trim() || "",
+          },
 
-      costs: {
-        partsCost,
-        labourCost,
-        totalCost,
-      },
+          costs: {
+            partsCost,
+            labourCost,
+            totalCost,
+          },
 
-      odometer:
-        odometer !== "" && odometer !== undefined ? Number(odometer) : null,
+          odometer:
+            odometer !== "" && odometer !== undefined ? Number(odometer) : null,
 
-      expectedCompletionDate,
+          expectedCompletionDate,
 
-      images: Array.isArray(images) ? images : [],
+          images: Array.isArray(images) ? images : [],
 
-      additionalNotes: additionalNotes?.trim() || "",
+          additionalNotes: additionalNotes?.trim() || "",
 
-      createdBy: req.user._id,
-    });
+          createdBy: req.user._id,
+        },
+      ],
+      { session },
+    );
+
+    /* ===============================
+       UPDATE VEHICLE
+    =============================== */
+
+    existingVehicle.currentMaintenance = maintenance[0]._id;
+
+    existingVehicle.maintenanceHistory.push(maintenance[0]._id);
+
+    existingVehicle.status =
+      maintenanceType === "Major" ? "service" : "available";
+
+    await existingVehicle.save({ session });
+
+    /* ===============================
+       COMMIT
+    =============================== */
+
+    await session.commitTransaction();
 
     return res.status(201).json({
       success: true,
       message: "Maintenance created successfully",
-      data: maintenance,
+      data: maintenance[0],
     });
   } catch (error) {
+    await session.abortTransaction();
     next(error);
+  } finally {
+    session.endSession();
   }
 };
