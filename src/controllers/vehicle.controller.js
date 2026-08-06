@@ -496,41 +496,45 @@ export const createMaintenance = async (req, res, next) => {
       createdBy: req.user._id,
     });
 
-     try {
-      const updatedVehicle = await Vehicle.findByIdAndUpdate(
-        existingVehicle._id,
-        {
-          $set: {
-            status: "service",
-            "maintenance.required": true,
-            "maintenance.currentMaintenance": maintenance._id,
-            "maintenance.reason": title.trim(),
-            "maintenance.estimatedDays": Number(estimatedDays) || 0,
-            "maintenance.estimatedCompletionDate":
-              expectedCompletionDate || null,
-            "maintenance.markedBy": req.user._id,
-            "maintenance.markedAt": new Date(),
-          },
-          $push: {
-            "maintenance.maintenanceHistory": maintenance._id,
-          },
-        },
-        { new: true },
-      );
+    /* ===============================
+       VEHICLE STATUS UPDATE - TEMPORARILY DISABLED
+    =============================== */
 
-      if (!updatedVehicle) {
-        // Rollback maintenance record if vehicle update somehow failed
-        await Maintenance.findByIdAndDelete(maintenance._id);
-        return res.status(500).json({
-          success: false,
-          message: "Failed to update vehicle status",
-        });
-      }
-    } catch (vehicleUpdateError) {
-      // Rollback maintenance record on error
-      await Maintenance.findByIdAndDelete(maintenance._id);
-      throw vehicleUpdateError;
-    }
+    // try {
+    //   const updatedVehicle = await Vehicle.findByIdAndUpdate(
+    //     existingVehicle._id,
+    //     {
+    //       $set: {
+    //         status: "service",
+    //         "maintenance.required": true,
+    //         "maintenance.currentMaintenance": maintenance._id,
+    //         "maintenance.reason": title.trim(),
+    //         "maintenance.estimatedDays": Number(estimatedDays) || 0,
+    //         "maintenance.estimatedCompletionDate":
+    //           expectedCompletionDate || null,
+    //         "maintenance.markedBy": req.user._id,
+    //         "maintenance.markedAt": new Date(),
+    //       },
+    //       $push: {
+    //         "maintenance.maintenanceHistory": maintenance._id,
+    //       },
+    //     },
+    //     { new: true },
+    //   );
+
+    //   if (!updatedVehicle) {
+    //     // Rollback maintenance record if vehicle update somehow failed
+    //     await Maintenance.findByIdAndDelete(maintenance._id);
+    //     return res.status(500).json({
+    //       success: false,
+    //       message: "Failed to update vehicle status",
+    //     });
+    //   }
+    // } catch (vehicleUpdateError) {
+    //   // Rollback maintenance record on error
+    //   await Maintenance.findByIdAndDelete(maintenance._id);
+    //   throw vehicleUpdateError;
+    // }
 
     return res.status(201).json({
       success: true,
@@ -729,53 +733,53 @@ export const updateMaintenanceStatus = async (req, res, next) => {
     await maintenance.save();
 
     /* ===============================
-       COMPLETED -> RESET VEHICLE TO "available"
+       COMPLETED -> RESET VEHICLE TO "available" - TEMPORARILY DISABLED
     =============================== */
 
-    if (status === "Completed") {
-      try {
-        const updatedVehicle = await Vehicle.findByIdAndUpdate(
-          maintenance.vehicle,
-          {
-            $set: {
-              status: "available",
-              "maintenance.required": false,
-              "maintenance.currentMaintenance": null,
-              "maintenance.reason": "",
-              "maintenance.estimatedDays": 0,
-              "maintenance.estimatedCompletionDate": null,
-              "maintenance.markedBy": null,
-              "maintenance.markedAt": null,
-            },
-          },
-          { new: true },
-        );
+    // if (status === "Completed") {
+    //   try {
+    //     const updatedVehicle = await Vehicle.findByIdAndUpdate(
+    //       maintenance.vehicle,
+    //       {
+    //         $set: {
+    //           status: "available",
+    //           "maintenance.required": false,
+    //           "maintenance.currentMaintenance": null,
+    //           "maintenance.reason": "",
+    //           "maintenance.estimatedDays": 0,
+    //           "maintenance.estimatedCompletionDate": null,
+    //           "maintenance.markedBy": null,
+    //           "maintenance.markedAt": null,
+    //         },
+    //       },
+    //       { new: true },
+    //     );
 
-        if (!updatedVehicle) {
-          // Roll back the status change if the vehicle couldn't be updated,
-          // so the maintenance record and vehicle stay in sync.
-          maintenance.status = previousStatus;
-          maintenance.completedDate = null;
-          maintenance.completionProof = undefined;
-          maintenance.statusHistory.pop();
-          await maintenance.save();
+    //     if (!updatedVehicle) {
+    //       // Roll back the status change if the vehicle couldn't be updated,
+    //       // so the maintenance record and vehicle stay in sync.
+    //       maintenance.status = previousStatus;
+    //       maintenance.completedDate = null;
+    //       maintenance.completionProof = undefined;
+    //       maintenance.statusHistory.pop();
+    //       await maintenance.save();
 
-          return res.status(500).json({
-            success: false,
-            message:
-              "Maintenance was updated but the linked vehicle could not be found to reset its status",
-          });
-        }
-      } catch (vehicleUpdateError) {
-        // Roll back the status change on error too
-        maintenance.status = previousStatus;
-        maintenance.completedDate = null;
-        maintenance.completionProof = undefined;
-        maintenance.statusHistory.pop();
-        await maintenance.save();
-        throw vehicleUpdateError;
-      }
-    }
+    //       return res.status(500).json({
+    //         success: false,
+    //         message:
+    //           "Maintenance was updated but the linked vehicle could not be found to reset its status",
+    //       });
+    //     }
+    //   } catch (vehicleUpdateError) {
+    //     // Roll back the status change on error too
+    //     maintenance.status = previousStatus;
+    //     maintenance.completedDate = null;
+    //     maintenance.completionProof = undefined;
+    //     maintenance.statusHistory.pop();
+    //     await maintenance.save();
+    //     throw vehicleUpdateError;
+    //   }
+    // }
 
     const populated = await Maintenance.findById(maintenance._id)
       .populate({
