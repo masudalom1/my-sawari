@@ -13,10 +13,12 @@ import {
   getMaintenances,
   getMaintenanceById,
   updateMaintenanceStatus,
+  uploadMaintenanceImage,
 } from "../controllers/vehicle.controller.js";
 
 import protect from "../middlewares/auth.middleware.js";
 import vehicleUpload from "../middlewares/vehicleUpload.js";
+
 const router = express.Router();
 
 router.use(protect);
@@ -32,6 +34,7 @@ router.get("/getAll", protect, getAll);
 
 // Maintenance 
 router.post("/create-maintenance", createMaintenance);
+router.post("/upload-maintenance-image",protect,upload.single("image"),uploadMaintenanceImage,);
 router.get("/list-maintenance", protect, getMaintenances);
 router.get("/maintenance/:id", protect, getMaintenanceById);
 router.patch("/maintenance/:id/status", protect, updateMaintenanceStatus);

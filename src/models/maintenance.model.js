@@ -108,10 +108,7 @@ const maintenanceSchema = new Schema(
       },
     },
 
-    images: {
-      type: [String],
-      default: [],
-    },
+  images: [{ type: String }],
 
     additionalNotes: {
       type: String,

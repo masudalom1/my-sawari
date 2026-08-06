@@ -1,4 +1,6 @@
 import mongoose from "mongoose";
+import fs from "fs/promises";
+import cloudinary from "../config/cloudinary.js";
 import Vehicle from "../models/vehicle.model.js";
 import Maintenance from "../models/maintenance.model.js";
 
@@ -344,6 +346,42 @@ export const updateVehicleStatus = async (req, res, next) => {
 };
 
 // maintenance controller
+export const uploadMaintenanceImage = async (req, res, next) => {
+  const localPath = req.file?.path;
+
+  try {
+    if (!req.file) {
+      return res.status(400).json({
+        success: false,
+        message: "No image file provided",
+      });
+    }
+
+    const result = await cloudinary.uploader.upload(localPath, {
+      folder: "fleet/maintenance",
+      resource_type: "image",
+      transformation: [{ quality: "auto", fetch_format: "auto" }],
+    });
+
+    await fs.unlink(localPath).catch(() => {});
+
+    return res.status(200).json({
+      success: true,
+      message: "Image uploaded successfully",
+      url: result.secure_url,
+      publicId: result.public_id,
+    });
+  } catch (error) {
+    if (localPath) {
+      await fs.unlink(localPath).catch(() => {});
+    }
+    console.log("Cloudinary upload error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to upload image. Please try again.",
+    });
+  }
+};
 export const createMaintenance = async (req, res, next) => {
   try {
     const {
