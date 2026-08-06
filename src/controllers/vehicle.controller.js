@@ -466,3 +466,90 @@ export const createMaintenance = async (req, res, next) => {
     next(error);
   }
 };
+
+export const getMaintenances = async (req, res, next) => {
+  try {
+    const {
+      status,
+      maintenanceType,
+      vehicle,
+      search,
+      page = 1,
+      limit = 20,
+    } = req.query;
+
+    const filter = {
+      isDeleted: false,
+    };
+
+    if (status) {
+      filter.status = status;
+    }
+
+    if (maintenanceType) {
+      filter.maintenanceType = maintenanceType;
+    }
+
+    if (vehicle && mongoose.Types.ObjectId.isValid(vehicle)) {
+      filter.vehicle = vehicle;
+    }
+
+    let query = Maintenance.find(filter)
+      .populate({
+        path: "vehicle",
+        select: `
+          vehicleName
+          vehicleNumber
+          manufacturer
+          model
+          variant
+          vehicleType
+          fuelType
+          transmission
+          seatingCapacity
+          images
+          status
+        `,
+      })
+      .populate({
+        path: "createdBy",
+        select: "name fullName email",
+      })
+      .sort({
+        createdAt: -1,
+      });
+
+    const maintenances = await query.lean();
+
+    let data = maintenances;
+
+    if (search) {
+      const keyword = search.toLowerCase();
+
+      data = maintenances.filter((item) => {
+        return (
+          item.title?.toLowerCase().includes(keyword) ||
+          item.description?.toLowerCase().includes(keyword) ||
+          item.garage?.name?.toLowerCase().includes(keyword) ||
+          item.vehicle?.vehicleName?.toLowerCase().includes(keyword) ||
+          item.vehicle?.vehicleNumber?.toLowerCase().includes(keyword)
+        );
+      });
+    }
+
+    const start = (Number(page) - 1) * Number(limit);
+    const end = start + Number(limit);
+
+    const result = data.slice(start, end);
+
+    return res.status(200).json({
+      success: true,
+      total: data.length,
+      page: Number(page),
+      limit: Number(limit),
+      data: result,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
