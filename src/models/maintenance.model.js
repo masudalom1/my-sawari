@@ -91,6 +91,23 @@ const maintenanceSchema = new Schema(
       default: null,
     },
 
+    // Proof of completion — captured when status moves to "Completed"
+    completionProof: {
+      billImage: {
+        type: String,
+        default: "",
+      },
+      cardImage: {
+        type: String,
+        default: "",
+      },
+      note: {
+        type: String,
+        trim: true,
+        default: "",
+      },
+    },
+
     images: {
       type: [String],
       default: [],

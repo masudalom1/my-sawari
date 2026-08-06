@@ -35,7 +35,6 @@ router.post("/create-maintenance", createMaintenance);
 router.get("/list-maintenance", protect, getMaintenances);
 router.get("/maintenance/:id", protect, getMaintenanceById);
 router.patch("/maintenance/:id/status", protect, updateMaintenanceStatus);
- 
 
 
 

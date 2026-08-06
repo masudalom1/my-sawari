@@ -574,13 +574,12 @@ export const getMaintenanceById = async (req, res, next) => {
   }
 };
 
-
 const VALID_STATUSES = ["Scheduled", "In Progress", "Completed", "Cancelled"];
 
 export const updateMaintenanceStatus = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const { status, note } = req.body;
+    const { status, note, billImage, cardImage } = req.body;
 
     if (!mongoose.Types.ObjectId.isValid(id)) {
       return res.status(400).json({
@@ -594,6 +593,17 @@ export const updateMaintenanceStatus = async (req, res, next) => {
         success: false,
         message: `Status must be one of: ${VALID_STATUSES.join(", ")}`,
       });
+    }
+
+    // Completing a job requires proof — bill and card photos, plus a note
+    if (status === "Completed") {
+      if (!billImage || !cardImage) {
+        return res.status(400).json({
+          success: false,
+          message:
+            "Bill photo and card photo are required to mark maintenance as completed",
+        });
+      }
     }
 
     const maintenance = await Maintenance.findOne({
@@ -623,6 +633,11 @@ export const updateMaintenanceStatus = async (req, res, next) => {
     // clear it if moved back out of Completed
     if (status === "Completed") {
       maintenance.completedDate = new Date();
+      maintenance.completionProof = {
+        billImage,
+        cardImage,
+        note: note || "",
+      };
     } else if (maintenance.completedDate) {
       maintenance.completedDate = null;
     }
