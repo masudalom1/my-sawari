@@ -654,7 +654,6 @@ export const getMaintenanceById = async (req, res, next) => {
 };
 
 const VALID_STATUSES = ["Scheduled", "In Progress", "Completed", "Cancelled"];
-
 export const updateMaintenanceStatus = async (req, res, next) => {
   try {
     const { id } = req.params;
