@@ -702,6 +702,8 @@ export const updateMaintenanceStatus = async (req, res, next) => {
       });
     }
 
+    const previousStatus = maintenance.status;
+
     maintenance.status = status;
 
     // Auto-set completedDate when moving into Completed,
@@ -725,6 +727,55 @@ export const updateMaintenanceStatus = async (req, res, next) => {
     });
 
     await maintenance.save();
+
+    /* ===============================
+       COMPLETED -> RESET VEHICLE TO "available"
+    =============================== */
+
+    if (status === "Completed") {
+      try {
+        const updatedVehicle = await Vehicle.findByIdAndUpdate(
+          maintenance.vehicle,
+          {
+            $set: {
+              status: "available",
+              "maintenance.required": false,
+              "maintenance.currentMaintenance": null,
+              "maintenance.reason": "",
+              "maintenance.estimatedDays": 0,
+              "maintenance.estimatedCompletionDate": null,
+              "maintenance.markedBy": null,
+              "maintenance.markedAt": null,
+            },
+          },
+          { new: true },
+        );
+
+        if (!updatedVehicle) {
+          // Roll back the status change if the vehicle couldn't be updated,
+          // so the maintenance record and vehicle stay in sync.
+          maintenance.status = previousStatus;
+          maintenance.completedDate = null;
+          maintenance.completionProof = undefined;
+          maintenance.statusHistory.pop();
+          await maintenance.save();
+
+          return res.status(500).json({
+            success: false,
+            message:
+              "Maintenance was updated but the linked vehicle could not be found to reset its status",
+          });
+        }
+      } catch (vehicleUpdateError) {
+        // Roll back the status change on error too
+        maintenance.status = previousStatus;
+        maintenance.completedDate = null;
+        maintenance.completionProof = undefined;
+        maintenance.statusHistory.pop();
+        await maintenance.save();
+        throw vehicleUpdateError;
+      }
+    }
 
     const populated = await Maintenance.findById(maintenance._id)
       .populate({
