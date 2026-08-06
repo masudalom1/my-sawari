@@ -573,3 +573,85 @@ export const getMaintenanceById = async (req, res, next) => {
     next(error);
   }
 };
+
+
+const VALID_STATUSES = ["Scheduled", "In Progress", "Completed", "Cancelled"];
+
+export const updateMaintenanceStatus = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const { status, note } = req.body;
+
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid maintenance id",
+      });
+    }
+
+    if (!status || !VALID_STATUSES.includes(status)) {
+      return res.status(400).json({
+        success: false,
+        message: `Status must be one of: ${VALID_STATUSES.join(", ")}`,
+      });
+    }
+
+    const maintenance = await Maintenance.findOne({
+      _id: id,
+      isDeleted: false,
+    });
+
+    if (!maintenance) {
+      return res.status(404).json({
+        success: false,
+        message: "Maintenance record not found",
+      });
+    }
+
+    // No-op if status hasn't actually changed
+    if (maintenance.status === status) {
+      return res.status(200).json({
+        success: true,
+        message: "Status unchanged",
+        data: maintenance,
+      });
+    }
+
+    maintenance.status = status;
+
+    // Auto-set completedDate when moving into Completed,
+    // clear it if moved back out of Completed
+    if (status === "Completed") {
+      maintenance.completedDate = new Date();
+    } else if (maintenance.completedDate) {
+      maintenance.completedDate = null;
+    }
+
+    maintenance.statusHistory.push({
+      status,
+      changedBy: req.user?._id,
+      note: note || "",
+      changedAt: new Date(),
+    });
+
+    await maintenance.save();
+
+    const populated = await Maintenance.findById(maintenance._id)
+      .populate({
+        path: "vehicle",
+        select:
+          "vehicleName vehicleNumber manufacturer model variant vehicleType fuelType transmission seatingCapacity images status",
+      })
+      .populate({ path: "createdBy", select: "name fullName email" })
+      .populate({ path: "statusHistory.changedBy", select: "name fullName" })
+      .lean();
+
+    return res.status(200).json({
+      success: true,
+      message: "Status updated successfully",
+      data: populated,
+    });
+  } catch (error) {
+    next(error);
+  }
+};

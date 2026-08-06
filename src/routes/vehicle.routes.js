@@ -12,6 +12,7 @@ import {
   createMaintenance,
   getMaintenances,
   getMaintenanceById,
+  updateMaintenanceStatus,
 } from "../controllers/vehicle.controller.js";
 
 import protect from "../middlewares/auth.middleware.js";
@@ -33,6 +34,7 @@ router.get("/getAll", protect, getAll);
 router.post("/create-maintenance", createMaintenance);
 router.get("/list-maintenance", protect, getMaintenances);
 router.get("/maintenance/:id", protect, getMaintenanceById);
+router.patch("/maintenance/:id/status", protect, updateMaintenanceStatus);
  
 
 

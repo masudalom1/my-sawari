@@ -85,6 +85,12 @@ const maintenanceSchema = new Schema(
       default: "",
     },
 
+    // Set automatically when status transitions to "Completed"
+    completedDate: {
+      type: Date,
+      default: null,
+    },
+
     images: {
       type: [String],
       default: [],
@@ -98,13 +104,35 @@ const maintenanceSchema = new Schema(
 
     status: {
       type: String,
-      enum: [
-        "Scheduled",
-        "In Progress",
-        "Completed",
-        "Cancelled",
-      ],
+      enum: ["Scheduled", "In Progress", "Completed", "Cancelled"],
       default: "Scheduled",
+    },
+
+    // Lightweight audit trail of status changes
+    statusHistory: {
+      type: [
+        {
+          status: {
+            type: String,
+            enum: ["Scheduled", "In Progress", "Completed", "Cancelled"],
+            required: true,
+          },
+          changedBy: {
+            type: Schema.Types.ObjectId,
+            ref: "User",
+          },
+          note: {
+            type: String,
+            trim: true,
+            default: "",
+          },
+          changedAt: {
+            type: Date,
+            default: Date.now,
+          },
+        },
+      ],
+      default: [],
     },
 
     createdBy: {
@@ -130,7 +158,4 @@ maintenanceSchema.index({
   createdAt: -1,
 });
 
-export default mongoose.model(
-  "Maintenance",
-  maintenanceSchema
-);
+export default mongoose.model("Maintenance", maintenanceSchema);
