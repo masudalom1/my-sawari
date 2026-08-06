@@ -495,6 +495,42 @@ export const createMaintenance = async (req, res, next) => {
       createdBy: req.user._id,
     });
 
+     try {
+      const updatedVehicle = await Vehicle.findByIdAndUpdate(
+        existingVehicle._id,
+        {
+          $set: {
+            status: "service",
+            "maintenance.required": true,
+            "maintenance.currentMaintenance": maintenance._id,
+            "maintenance.reason": title.trim(),
+            "maintenance.estimatedDays": Number(estimatedDays) || 0,
+            "maintenance.estimatedCompletionDate":
+              expectedCompletionDate || null,
+            "maintenance.markedBy": req.user._id,
+            "maintenance.markedAt": new Date(),
+          },
+          $push: {
+            "maintenance.maintenanceHistory": maintenance._id,
+          },
+        },
+        { new: true },
+      );
+
+      if (!updatedVehicle) {
+        // Rollback maintenance record if vehicle update somehow failed
+        await Maintenance.findByIdAndDelete(maintenance._id);
+        return res.status(500).json({
+          success: false,
+          message: "Failed to update vehicle status",
+        });
+      }
+    } catch (vehicleUpdateError) {
+      // Rollback maintenance record on error
+      await Maintenance.findByIdAndDelete(maintenance._id);
+      throw vehicleUpdateError;
+    }
+
     return res.status(201).json({
       success: true,
       message: "Maintenance created successfully",
