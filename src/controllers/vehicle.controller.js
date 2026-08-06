@@ -553,3 +553,23 @@ export const getMaintenances = async (req, res, next) => {
     next(error);
   }
 };
+
+export const getMaintenanceById = async (req, res, next) => {
+  try {
+    const item = await Maintenance.findOne({
+      _id: req.params.id,
+      isDeleted: false,
+    })
+      .populate({ path: "vehicle", select: "vehicleName vehicleNumber images" })
+      .populate({ path: "createdBy", select: "name fullName email" })
+      .lean();
+
+    if (!item) {
+      return res.status(404).json({ success: false, message: "Not found" });
+    }
+
+    return res.status(200).json({ success: true, data: item });
+  } catch (error) {
+    next(error);
+  }
+};

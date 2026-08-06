@@ -11,6 +11,7 @@ import {
   getAll,
   createMaintenance,
   getMaintenances,
+  getMaintenanceById,
 } from "../controllers/vehicle.controller.js";
 
 import protect from "../middlewares/auth.middleware.js";
@@ -31,6 +32,7 @@ router.get("/getAll", protect, getAll);
 // Maintenance 
 router.post("/create-maintenance", createMaintenance);
 router.get("/list-maintenance", protect, getMaintenances);
+router.get("/maintenance/:id", protect, getMaintenanceById);
  
 
 
