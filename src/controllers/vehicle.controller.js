@@ -395,6 +395,7 @@ export const createMaintenance = async (req, res, next) => {
       expectedCompletionDate,
       images,
       additionalNotes,
+      estimatedDays,
     } = req.body;
 
     /* ===============================
