@@ -96,7 +96,7 @@ export const getAllVehicles = async (req, res, next) => {
     // endpoint was never really paginating, just quietly capping itself.
     // A real page size lets the list start rendering fast regardless of
     // fleet size, with more loaded on scroll.
-    const limit = Math.min(Math.max(Number(req.query.limit) || 20, 1), 100);
+    const limit = Math.min(Math.max(Number(req.query.limit) || 200, 1), 100);
     const skip = (page - 1) * limit;
 
     const filters = { isDeleted: false };
