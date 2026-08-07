@@ -640,72 +640,42 @@ export const getReturnDetails = async (req, res) => {
   try {
     const { handoverId } = req.params;
 
-    console.log("========== GET RETURN DETAILS ==========");
-    console.log("Requested Handover ID:", handoverId);
-
-    const vehicleReturn = await VehicleReturn.findOne({
-      handover: handoverId,
-    })
+    const vehicleReturn = await VehicleReturn.findOne({ handover: handoverId })
+      // Vehicle info block on screen — exactly the fields InfoRow renders,
+      // plus `images` (used by "Vehicle Catalog Photos").
       .populate({
-        path: "vehicle", // VehicleReturn.vehicle -> Vehicle
-        select:
-          "vehicleName vehicleNumber manufacturer model variant color images",
+        path: "vehicle",
+        select: "vehicleName vehicleNumber manufacturer model variant color images",
       })
+      // "Received By" row.
       .populate("receivedBy", "fullName role")
-      .populate("createdBy", "fullName role")
-      .populate("company", "fullName role")
+      // Handover: trimmed to just the three things the screen reads —
+      // customer (for the Customer Information card), payment.billSummary
+      // (for the Bill Details card), and createdAt (for the Timeline's
+      // "Booking Created" entry). Everything else that used to be
+      // populated here (bookingId, extensionBills, vehicleHistory,
+      // returnDetails, handover.vehicle.vehicleId, company) isn't
+      // referenced anywhere in the detail screen — populating them was
+      // pure wasted work on every request.
       .populate({
-        path: "handover", // VehicleReturn.handover -> Handover (full doc, no select)
-        populate: [
-          {
-            path: "vehicle.vehicleId", // Handover.vehicle.vehicleId -> Vehicle
-            select:
-              "vehicleName vehicleNumber manufacturer model variant color images",
-          },
-          {
-            path: "createdBy", // who created the handover
-            select: "fullName role",
-          },
-          {
-            path: "company", // owning company
-            select: "fullName role",
-          },
-          {
-            path: "bookingId", // linked booking, if you want it too
-          },
-          {
-            path: "extensionBills.createdBy", // who made each extension
-            select: "fullName role",
-          },
-          {
-            path: "returnDetails.returnedBy",
-            select: "fullName role",
-          },
-          {
-            path: "vehicleHistory.oldVehicle.vehicleId",
-            select: "vehicleName vehicleNumber",
-          },
-          {
-            path: "vehicleHistory.newVehicle.vehicleId",
-            select: "vehicleName vehicleNumber",
-          },
-          {
-            path: "vehicleHistory.changedBy",
-            select: "fullName role",
-          },
-        ],
-      });
+        path: "handover",
+        select: "customer payment.billSummary createdAt",
+        populate: {
+          path: "customer",
+          select: "fullName mobileNumber",
+        },
+      })
+      // .lean() — this response is read-only JSON going straight to the
+      // client, so there's no need to pay for a full hydrated Mongoose
+      // document with change-tracking, virtuals, etc.
+      .lean();
 
     if (!vehicleReturn) {
-      console.log("Vehicle return not found for handover:", handoverId);
-
       return res.status(404).json({
         success: false,
         message: "Return details not found for this handover",
       });
     }
-
-    console.log("Vehicle Return Found:", vehicleReturn._id);
 
     return res.status(200).json({
       success: true,
