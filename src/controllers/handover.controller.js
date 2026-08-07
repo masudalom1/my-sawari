@@ -1138,28 +1138,57 @@ export const saveHandoverImages = async (req, res) => {
 // active rental screen
 export const getActiveHandovers = async (req, res) => {
   try {
-    const activeHandovers = await Handover.find({
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 10;
+    const skip = (page - 1) * limit;
+    const search = (req.query.search || "").trim();
+
+    const filter = {
       handoverStatus: "active",
       isDeleted: false,
-    })
-      .populate("vehicle.vehicleId")
-      .populate("createdBy", "fullName")
-      .sort({ createdAt: -1 });
+    };
+
+    // Optional: server-side search so you're not shipping the whole
+    // collection just to filter it on-device
+    if (search) {
+      filter.$or = [
+        { "customer.fullName": { $regex: search, $options: "i" } },
+        { "vehicle.vehicleName": { $regex: search, $options: "i" } },
+        { "vehicle.vehicleNumber": { $regex: search, $options: "i" } },
+      ];
+    }
+
+    const [activeHandovers, total] = await Promise.all([
+      Handover.find(filter)
+        .select(
+          "customer vehicle trip payment images handoverStatus createdAt"
+        ) // only the fields the UI actually renders
+        .populate("vehicle.vehicleId", "vehicleName vehicleNumber") // not the whole vehicle doc
+        .populate("createdBy", "fullName")
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .lean(), // skip Mongoose document hydration — big win on large result sets
+      Handover.countDocuments(filter),
+    ]);
 
     return res.status(200).json({
       success: true,
       count: activeHandovers.length,
+      total,
+      page,
+      hasMore: skip + activeHandovers.length < total,
       data: activeHandovers,
     });
   } catch (error) {
     console.log("ACTIVE HANDOVER ERROR:", error);
-
     return res.status(500).json({
       success: false,
       message: error.message || "Failed to fetch active handovers",
     });
   }
 };
+
 export const getSingleHandover = async (req, res) => {
   try {
     const { id } = req.params;
