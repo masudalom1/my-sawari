@@ -91,44 +91,74 @@ export const createVehicle = async (req, res, next) => {
 // manage vehicle page
 export const getAllVehicles = async (req, res, next) => {
   try {
-    const page = Number(req.query.page) || 1;
-    const limit = Number(req.query.limit) || 1000;
+    const page = Math.max(Number(req.query.page) || 1, 1);
+    // Default limit brought down from 1000 to 20 — 1000 meant this
+    // endpoint was never really paginating, just quietly capping itself.
+    // A real page size lets the list start rendering fast regardless of
+    // fleet size, with more loaded on scroll.
+    const limit = Math.min(Math.max(Number(req.query.limit) || 20, 1), 100);
     const skip = (page - 1) * limit;
 
-    const filters = {
-      isDeleted: false,
-    };
+    const filters = { isDeleted: false };
 
-    if (req.query.status) {
+    if (req.query.status && req.query.status !== "All") {
       filters.status = req.query.status;
     }
 
-    const vehicles = await Vehicle.find(filters)
-      .sort({ createdAt: -1 })
-      .skip(skip)
-      .limit(limit);
+    // Search now happens in the query, not by downloading every vehicle
+    // and running .filter() in the app. Escaped so special regex
+    // characters in a plate number ("MH-12...") can't break the match.
+    if (req.query.search) {
+      const term = req.query.search.trim();
+      if (term) {
+        const escaped = term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        const regex = new RegExp(escaped, "i");
+        filters.$or = [{ vehicleName: regex }, { vehicleNumber: regex }];
+      }
+    }
 
-    const total = await Vehicle.countDocuments(filters);
+    const [vehicles, total, stats] = await Promise.all([
+      Vehicle.find(filters)
+        // Only the fields the fleet-list card actually renders, plus
+        // just the FIRST image (the list only ever shows one cover
+        // photo per card) instead of the full images array.
+        .select({
+          vehicleName: 1,
+          vehicleNumber: 1,
+          fuelType: 1,
+          transmission: 1,
+          seatingCapacity: 1,
+          status: 1,
+          registrationDate: 1,
+          pricePerDay: 1,
+          images: { $slice: 1 },
+          createdAt: 1,
+        })
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .lean(),
 
-    const stats = await Vehicle.aggregate([
-      {
-        $match: {
-          isDeleted: false,
-        },
-      },
-      {
-        $group: {
-          _id: "$status",
-          count: { $sum: 1 },
-        },
-      },
+      // Count respects the same filters, so pagination math (hasMore /
+      // pages) is correct for whatever search/status the user has active.
+      Vehicle.countDocuments(filters),
+
+      // Stat cards are intentionally fleet-WIDE and unfiltered — they
+      // always reflect the whole fleet regardless of which tab/search
+      // is active, matching what the four cards at the top mean to show.
+      Vehicle.aggregate([
+        { $match: { isDeleted: false } },
+        { $group: { _id: "$status", count: { $sum: 1 } } },
+      ]),
     ]);
 
     res.status(200).json({
       success: true,
       total,
       page,
+      limit,
       pages: Math.ceil(total / limit),
+      hasMore: page * limit < total,
       stats,
       data: vehicles,
     });
