@@ -723,108 +723,106 @@ export const getReturnDetails = async (req, res) => {
 
 export const getVehicleReturnsDashboard = async (req, res) => {
   try {
+    const page = Math.max(parseInt(req.query.page, 10) || 1, 1);
+    const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 15, 1), 50);
+    const tab = req.query.tab || "All"; // "All" | "Today" | "Yesterday" | "Due"
+ 
     const getISTDate = (date) =>
-      new Date(date).toLocaleDateString("en-CA", {
-        timeZone: "Asia/Kolkata",
-      });
-
+      new Date(date).toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" });
+ 
     const now = new Date();
     const today = getISTDate(now);
-
     const yesterdayDate = new Date(now);
     yesterdayDate.setDate(yesterdayDate.getDate() - 1);
     const yesterday = getISTDate(yesterdayDate);
-
-    // Fetch ALL vehicle returns (No company filter)
-    const returns = await VehicleReturn.find({})
+ 
+    // Real Date boundaries (not stringified comparisons) so Mongo can use
+    // the createdAt index for a range match instead of loading every
+    // document into Node just to compare dates in JS.
+    const istStart = (dateStr) => new Date(`${dateStr}T00:00:00+05:30`);
+    const todayStart = istStart(today);
+    const yesterdayStart = istStart(yesterday);
+    const tomorrowStart = new Date(todayStart.getTime() + 86400000);
+ 
+    // Build the filter for the tab that's actually being viewed — we only
+    // ever query the slice the user is looking at, never the whole table.
+    const match = {};
+    if (tab === "Today") match.createdAt = { $gte: todayStart, $lt: tomorrowStart };
+    else if (tab === "Yesterday") match.createdAt = { $gte: yesterdayStart, $lt: todayStart };
+    else if (tab === "Due") match.isDue = true;
+ 
+    // ---- Stats: pure indexed counts, no document bodies fetched at all ----
+    // These run in parallel and stay fast at any collection size because
+    // they only touch indexes, never actual row data.
+    const [total, todayCount, yesterdayCount, dueCount] = await Promise.all([
+      VehicleReturn.countDocuments({}),
+      VehicleReturn.countDocuments({ createdAt: { $gte: todayStart, $lt: tomorrowStart } }),
+      VehicleReturn.countDocuments({ createdAt: { $gte: yesterdayStart, $lt: todayStart } }),
+      VehicleReturn.countDocuments({ isDue: true }),
+    ]);
+    const stats = { total, today: todayCount, yesterday: yesterdayCount, due: dueCount };
+ 
+    // ---- Page of cards: only the fields the list card actually renders ----
+    // .lean() skips building full Mongoose documents (notably faster for
+    // read-only responses), and trimmed .select()/populate keeps the
+    // payload small so the response serializes and transfers quickly.
+    const rows = await VehicleReturn.find(match)
+      .select(
+        "vehicle handover receivedBy fuelLevel kilometersAtReturn receivingTime " +
+          "scheduledReturnTime timeStatus delayText hasDamage damageCostDetails " +
+          "customerName mobileNumber balanceAmount isDue createdAt updatedAt",
+      )
       .populate({
         path: "vehicle",
         select: "vehicleName vehicleNumber manufacturer model variant color",
       })
       .populate({
         path: "handover",
-        // "payment" now included so payment.billSummary comes back too
-        select: "customer trip payment",
-        populate: {
-          path: "customer",
-          select: "fullName mobileNumber",
-        },
+        select:
+          "customer payment.billSummary.totalAmount payment.billSummary.amountReceivedNow payment.billSummary.totalCollected",
+        populate: { path: "customer", select: "fullName mobileNumber" },
       })
       .populate("receivedBy", "fullName")
-      .sort({ createdAt: -1 });
-
-    const stats = {
-      total: returns.length,
-      today: 0,
-      yesterday: 0,
-      due: 0,
-    };
-
-    const dashboard = returns.map((item) => {
+      .sort({ createdAt: -1 })
+      .skip((page - 1) * limit)
+      .limit(limit)
+      .lean();
+ 
+    const dashboard = rows.map((item) => {
       const returnDate = getISTDate(item.createdAt);
-
-      let tab = "Older";
-
-      if (returnDate === today) {
-        tab = "Today";
-        stats.today++;
-      } else if (returnDate === yesterday) {
-        tab = "Yesterday";
-        stats.yesterday++;
-      }
-
-      // ---- Balance now comes ONLY from handover.payment.billSummary ----
+      let itemTab = "Older";
+      if (returnDate === today) itemTab = "Today";
+      else if (returnDate === yesterday) itemTab = "Yesterday";
+ 
       const billSummary = item.handover?.payment?.billSummary || {};
-
       const totalAmount = billSummary.totalAmount || 0;
       const amountReceivedNow = billSummary.amountReceivedNow || 0;
       const totalCollected = billSummary.totalCollected || 0;
-      const balanceAmount = billSummary.balanceAmount || 0;
-
-      const isDue = balanceAmount > 0;
-
-      if (isDue) stats.due++;
-
+      const balanceAmount = item.balanceAmount || 0;
+      const isDue = !!item.isDue;
+ 
       return {
         _id: item._id,
         handoverId: item.handover?._id,
-
-        tab,
+        tab: itemTab,
         isDue,
-
-        customerName:
-          item.customerName || item.handover?.customer?.fullName || "",
-
-        mobileNumber:
-          item.mobileNumber || item.handover?.customer?.mobileNumber || "",
-
-        // Vehicle name shown on the dashboard is the specific vehicle's
-        // own name (Vehicle.vehicleName, required on the schema) — NOT
-        // the manufacturer/brand. manufacturer/model/variant are still
-        // sent through in case the frontend needs a fallback or wants
-        // to show fuller vehicle detail elsewhere.
+        customerName: item.customerName || item.handover?.customer?.fullName || "",
+        mobileNumber: item.mobileNumber || item.handover?.customer?.mobileNumber || "",
         vehicleName: item.vehicle?.vehicleName || "",
         vehicleNumber: item.vehicle?.vehicleNumber || "",
         manufacturer: item.vehicle?.manufacturer || "",
         model: item.vehicle?.model || "",
         variant: item.vehicle?.variant || "",
         color: item.vehicle?.color || "",
-
         fuelLevel: item.fuelLevel ?? 0,
         kilometersAtReturn: item.kilometersAtReturn ?? 0,
-
         returnTime: item.receivingTime,
         scheduledReturnTime: item.scheduledReturnTime,
-
         timeStatus: item.timeStatus || "On Time",
         delayText: item.delayText || "",
-
         hasDamage: item.hasDamage || false,
         damageStatus: item.damageCostDetails?.status || "",
         repairEstimate: item.damageCostDetails?.repairEstimate || 0,
-
-        // Balance / bill figures — sourced from handover.payment.billSummary
-        billSummary,
         totalAmount,
         amountReceivedNow,
         totalCollected,
@@ -833,22 +831,22 @@ export const getVehicleReturnsDashboard = async (req, res) => {
         amountCollected: totalCollected || amountReceivedNow,
         finalBalance: balanceAmount,
         settlementStatus: balanceAmount > 0 ? "pending" : "paid",
-
         receivedBy: item.receivedBy?.fullName || "",
-
         createdAt: item.createdAt,
         updatedAt: item.updatedAt,
       };
     });
-
+ 
     return res.status(200).json({
       success: true,
       stats,
+      page,
+      limit,
+      hasMore: page * limit < (tab === "Due" ? dueCount : tab === "Today" ? todayCount : tab === "Yesterday" ? yesterdayCount : total),
       returns: dashboard,
     });
   } catch (error) {
     console.error("Vehicle Returns Dashboard Error:", error);
-
     return res.status(500).json({
       success: false,
       message: error.message || "Failed to fetch dashboard",
