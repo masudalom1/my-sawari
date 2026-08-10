@@ -162,6 +162,18 @@ const handoverSchema = new mongoose.Schema(
         min: 0,
         default: 0,
       },
+      spareAvailable: {
+        type: Boolean,
+        required: true,
+        default: false,
+      },
+
+      // NEW
+      toolkitAvailable: {
+        type: Boolean,
+        required: true,
+        default: false,
+      },
     },
 
     vehicleHistory: [

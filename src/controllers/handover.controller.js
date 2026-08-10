@@ -443,10 +443,7 @@ export const getHandoverById = async (req, res) => {
     return res.status(500).json({
       success: false,
       message: "Unable to fetch handover.",
-      error:
-        process.env.NODE_ENV === "development"
-          ? error.message
-          : undefined,
+      error: process.env.NODE_ENV === "development" ? error.message : undefined,
     });
   }
 };
@@ -673,6 +670,8 @@ export const createHandover = async (req, res, next) => {
         vehicleNumber: selectedVehicle.vehicleNumber,
         vehicleColor: selectedVehicle.color || "",
         handoverKm: Number(vehicle?.handoverKm) || 0,
+        spareAvailable: vehicle?.spareAvailable === true,
+        toolkitAvailable: vehicle?.toolkitAvailable === true,
       },
 
       trip: {
