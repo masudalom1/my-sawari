@@ -98,7 +98,6 @@ export const getAllVehicles = async (req, res, next) => {
     // fleet size, with more loaded on scroll.
     const limit = Math.min(Math.max(Number(req.query.limit) || 200, 1), 100);
     const skip = (page - 1) * limit;
-
     const filters = { isDeleted: false };
 
     if (req.query.status && req.query.status !== "All") {
@@ -483,8 +482,7 @@ export const createMaintenance = async (req, res, next) => {
 
     const partsCost = Number(costs?.partsCost) || 0;
     const labourCost = Number(costs?.labourCost) || 0;
-    const totalCost =
-      Number(costs?.totalCost) || (partsCost + labourCost);
+    const totalCost = Number(costs?.totalCost) || partsCost + labourCost;
 
     /* ===============================
        CREATE MAINTENANCE
@@ -513,9 +511,7 @@ export const createMaintenance = async (req, res, next) => {
       },
 
       odometer:
-        odometer !== "" && odometer !== undefined
-          ? Number(odometer)
-          : null,
+        odometer !== "" && odometer !== undefined ? Number(odometer) : null,
 
       expectedCompletionDate,
 

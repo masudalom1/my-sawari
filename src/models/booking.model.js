@@ -268,10 +268,10 @@ const bookingSchema = new mongoose.Schema(
       default: false,
     },
     assignedDriver: {
-  type: mongoose.Schema.Types.ObjectId,
-  ref: "User",
-  default: null,
-},
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      default: null,
+    },
 
     serviceType: {
       type: String,

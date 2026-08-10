@@ -1,6 +1,7 @@
 import Handover from "../models/handover.model.js";
 import Vehicle from "../models/vehicle.model.js";
 import VehicleReturn from "../models/vehicleReturn.model.js";
+import Booking from "../models/booking.model.js";
 
 export const receiveVehicle = async (req, res) => {
   try {
@@ -481,6 +482,18 @@ export const receiveVehicle = async (req, res) => {
 
     await handover.save();
 
+    if (handover.bookingId) {
+      await Booking.findByIdAndUpdate(
+        handover.bookingId,
+        {
+          $set: {
+            status: "completed",
+          },
+        },
+        { new: true },
+      );
+    }
+
     /* ==========================
        RESPONSE
     ========================== */
@@ -645,7 +658,8 @@ export const getReturnDetails = async (req, res) => {
       // plus `images` (used by "Vehicle Catalog Photos").
       .populate({
         path: "vehicle",
-        select: "vehicleName vehicleNumber manufacturer model variant color images",
+        select:
+          "vehicleName vehicleNumber manufacturer model variant color images",
       })
       // "Received By" row.
       .populate("receivedBy", "fullName role")
@@ -694,18 +708,21 @@ export const getReturnDetails = async (req, res) => {
 export const getVehicleReturnsDashboard = async (req, res) => {
   try {
     const page = Math.max(parseInt(req.query.page, 10) || 1, 1);
-    const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 15, 1), 50);
+    const limit = Math.min(
+      Math.max(parseInt(req.query.limit, 10) || 15, 1),
+      50,
+    );
     const tab = req.query.tab || "All"; // "All" | "Today" | "Yesterday" | "Due"
- 
+
     const getISTDate = (date) =>
       new Date(date).toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" });
- 
+
     const now = new Date();
     const today = getISTDate(now);
     const yesterdayDate = new Date(now);
     yesterdayDate.setDate(yesterdayDate.getDate() - 1);
     const yesterday = getISTDate(yesterdayDate);
- 
+
     // Real Date boundaries (not stringified comparisons) so Mongo can use
     // the createdAt index for a range match instead of loading every
     // document into Node just to compare dates in JS.
@@ -713,25 +730,36 @@ export const getVehicleReturnsDashboard = async (req, res) => {
     const todayStart = istStart(today);
     const yesterdayStart = istStart(yesterday);
     const tomorrowStart = new Date(todayStart.getTime() + 86400000);
- 
+
     // Build the filter for the tab that's actually being viewed — we only
     // ever query the slice the user is looking at, never the whole table.
     const match = {};
-    if (tab === "Today") match.createdAt = { $gte: todayStart, $lt: tomorrowStart };
-    else if (tab === "Yesterday") match.createdAt = { $gte: yesterdayStart, $lt: todayStart };
+    if (tab === "Today")
+      match.createdAt = { $gte: todayStart, $lt: tomorrowStart };
+    else if (tab === "Yesterday")
+      match.createdAt = { $gte: yesterdayStart, $lt: todayStart };
     else if (tab === "Due") match.isDue = true;
- 
+
     // ---- Stats: pure indexed counts, no document bodies fetched at all ----
     // These run in parallel and stay fast at any collection size because
     // they only touch indexes, never actual row data.
     const [total, todayCount, yesterdayCount, dueCount] = await Promise.all([
       VehicleReturn.countDocuments({}),
-      VehicleReturn.countDocuments({ createdAt: { $gte: todayStart, $lt: tomorrowStart } }),
-      VehicleReturn.countDocuments({ createdAt: { $gte: yesterdayStart, $lt: todayStart } }),
+      VehicleReturn.countDocuments({
+        createdAt: { $gte: todayStart, $lt: tomorrowStart },
+      }),
+      VehicleReturn.countDocuments({
+        createdAt: { $gte: yesterdayStart, $lt: todayStart },
+      }),
       VehicleReturn.countDocuments({ isDue: true }),
     ]);
-    const stats = { total, today: todayCount, yesterday: yesterdayCount, due: dueCount };
- 
+    const stats = {
+      total,
+      today: todayCount,
+      yesterday: yesterdayCount,
+      due: dueCount,
+    };
+
     // ---- Page of cards: only the fields the list card actually renders ----
     // .lean() skips building full Mongoose documents (notably faster for
     // read-only responses), and trimmed .select()/populate keeps the
@@ -757,27 +785,29 @@ export const getVehicleReturnsDashboard = async (req, res) => {
       .skip((page - 1) * limit)
       .limit(limit)
       .lean();
- 
+
     const dashboard = rows.map((item) => {
       const returnDate = getISTDate(item.createdAt);
       let itemTab = "Older";
       if (returnDate === today) itemTab = "Today";
       else if (returnDate === yesterday) itemTab = "Yesterday";
- 
+
       const billSummary = item.handover?.payment?.billSummary || {};
       const totalAmount = billSummary.totalAmount || 0;
       const amountReceivedNow = billSummary.amountReceivedNow || 0;
       const totalCollected = billSummary.totalCollected || 0;
       const balanceAmount = item.balanceAmount || 0;
       const isDue = !!item.isDue;
- 
+
       return {
         _id: item._id,
         handoverId: item.handover?._id,
         tab: itemTab,
         isDue,
-        customerName: item.customerName || item.handover?.customer?.fullName || "",
-        mobileNumber: item.mobileNumber || item.handover?.customer?.mobileNumber || "",
+        customerName:
+          item.customerName || item.handover?.customer?.fullName || "",
+        mobileNumber:
+          item.mobileNumber || item.handover?.customer?.mobileNumber || "",
         vehicleName: item.vehicle?.vehicleName || "",
         vehicleNumber: item.vehicle?.vehicleNumber || "",
         manufacturer: item.vehicle?.manufacturer || "",
@@ -806,13 +836,21 @@ export const getVehicleReturnsDashboard = async (req, res) => {
         updatedAt: item.updatedAt,
       };
     });
- 
+
     return res.status(200).json({
       success: true,
       stats,
       page,
       limit,
-      hasMore: page * limit < (tab === "Due" ? dueCount : tab === "Today" ? todayCount : tab === "Yesterday" ? yesterdayCount : total),
+      hasMore:
+        page * limit <
+        (tab === "Due"
+          ? dueCount
+          : tab === "Today"
+            ? todayCount
+            : tab === "Yesterday"
+              ? yesterdayCount
+              : total),
       returns: dashboard,
     });
   } catch (error) {
