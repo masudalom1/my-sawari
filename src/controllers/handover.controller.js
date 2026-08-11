@@ -1403,76 +1403,47 @@ export const getSingleHandover = async (req, res) => {
 export const getReceiveCarList = async (req, res) => {
   try {
     /* ==========================
-       QUERY PARAMS (all optional, backward compatible)
-       - page / limit  : paginate at the DB level instead of shipping
-                          the entire collection to the client every time
-       - completedDays : cap how far back completed returns are pulled,
-                          so this endpoint doesn't get slower forever as
-                          history accumulates. Defaults to 90 days.
+       GET ALL HANDOVERS
     ========================== */
-    const page = Math.max(parseInt(req.query.page, 10) || 1, 1);
-    const limit = Math.min(
-      Math.max(parseInt(req.query.limit, 10) || 100, 1),
-      200,
-    );
-    const completedDays = Math.max(
-      parseInt(req.query.completedDays, 10) || 90,
-      1,
-    );
 
-    const completedSince = new Date();
-    completedSince.setDate(completedSince.getDate() - completedDays);
+    const handovers = await Handover.find({
+      isDeleted: false,
+      "vehicle.vehicleId": { $exists: true },
+      handoverStatus: { $ne: "cancelled" },
+    })
+      .populate("vehicle.vehicleId")
+      .populate("createdBy", "fullName role email mobileNumber profileImage")
+      .populate("assignedDriver", "fullName mobileNumber profileImage role")
+      .populate({
+        path: "bookingId",
+        select: {
+          tripType: 1,
+          destination: 1,
+          pickup: 1,
+          drop: 1,
+        },
+      })
+      .sort({
+        "trip.dropDateTime": 1,
+        createdAt: -1,
+      });
 
     /* ==========================
-       GET HANDOVERS + COMPLETED RETURNS IN PARALLEL
-       (these two queries don't depend on each other — no reason to
-       await them one after another)
-
-       .lean() is critical here: without it, Mongoose builds full
-       hydrated documents (with getters/setters/methods) for every
-       row, which is the single biggest cost on large collections.
-       .lean() returns plain JS objects directly, which is exactly
-       what we need since we only read/transform the data below.
+       GET COMPLETED RETURNS
     ========================== */
-    const [handovers, vehicleReturns] = await Promise.all([
-      Handover.find({
-        isDeleted: false,
-        "vehicle.vehicleId": { $exists: true },
-        handoverStatus: { $ne: "cancelled" },
-      })
-        .populate({
-          path: "vehicle.vehicleId",
-          select: "vehicleName vehicleNumber images",
-        })
-        .populate("createdBy", "fullName role email mobileNumber profileImage")
-        .populate("assignedDriver", "fullName mobileNumber profileImage role")
-        .populate({
-          path: "bookingId",
-          select: {
-            tripType: 1,
-            destination: 1,
-            pickup: 1,
-            drop: 1,
-          },
-        })
-        .sort({
-          "trip.dropDateTime": 1,
-          createdAt: -1,
-        })
-        .skip((page - 1) * limit)
-        .limit(limit)
-        .lean(),
 
-      VehicleReturn.find({
-        returnStatus: "completed",
-        receivingTime: { $gte: completedSince },
-      })
-        .populate("receivedBy", "fullName role email mobileNumber")
-        .select(
-          "handover returnStatus receivedBy receivingTime scheduledReturnTime timeStatus delayText settlementDetails",
-        )
-        .lean(),
-    ]);
+    const vehicleReturns = await VehicleReturn.find({
+      returnStatus: "completed",
+    }).populate("receivedBy", "fullName role email mobileNumber").select(`
+        handover
+        returnStatus
+        receivedBy
+        receivingTime
+        scheduledReturnTime
+        timeStatus
+        delayText
+        settlementDetails
+      `);
 
     /* ==========================
        CREATE LOOKUP MAP
@@ -1484,11 +1455,11 @@ export const getReceiveCarList = async (req, res) => {
 
     /* ==========================
        MERGE DATA
-       (handovers are already plain objects thanks to .lean(), so no
-       .toObject() call needed here)
     ========================== */
 
-    const finalData = handovers.map((obj) => {
+    const finalData = handovers.map((handover) => {
+      const obj = handover.toObject();
+
       const now = new Date();
       const dropDateTime = new Date(obj.trip.dropDateTime);
 
@@ -1597,14 +1568,14 @@ export const getReceiveCarList = async (req, res) => {
       // CREATED BY
       // ==========================
 
-      obj.createdByUser = obj.createdBy
+      obj.createdByUser = handover.createdBy
         ? {
-            _id: obj.createdBy._id,
-            fullName: obj.createdBy.fullName,
-            role: obj.createdBy.role,
-            email: obj.createdBy.email,
-            mobileNumber: obj.createdBy.mobileNumber,
-            profileImage: obj.createdBy.profileImage,
+            _id: handover.createdBy._id,
+            fullName: handover.createdBy.fullName,
+            role: handover.createdBy.role,
+            email: handover.createdBy.email,
+            mobileNumber: handover.createdBy.mobileNumber,
+            profileImage: handover.createdBy.profileImage,
           }
         : null;
 
@@ -1612,7 +1583,7 @@ export const getReceiveCarList = async (req, res) => {
       // RETURN DETAILS
       // ==========================
 
-      const returnData = completedMap.get(obj._id.toString());
+      const returnData = completedMap.get(handover._id.toString());
 
       if (returnData) {
         obj.returnStatus = "completed";
@@ -1663,9 +1634,6 @@ export const getReceiveCarList = async (req, res) => {
       count: finalData.length,
       activeCount,
       completedCount,
-      page,
-      limit,
-      hasMore: finalData.length === limit,
       data: finalData,
     });
   } catch (error) {
