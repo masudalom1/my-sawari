@@ -2140,6 +2140,19 @@ export const createBookings = async (req, res, next) => {
         .json({ success: false, message: "Invalid total days." });
     }
 
+    const finalFromDate = new Date(fromDate);
+    const finalToDate = new Date(toDate);
+
+    if (
+      isNaN(finalFromDate.getTime()) ||
+      isNaN(finalToDate.getTime()) ||
+      finalFromDate >= finalToDate
+    ) {
+      return res
+        .status(400)
+        .json({ success: false, message: "Invalid trip date range." });
+    }
+
     // NEW: validate payment method / mixed breakdown
     const VALID_PAYMENT_METHODS = ["cash", "phonepe", "razorpay", "mixed"];
     if (!VALID_PAYMENT_METHODS.includes(paymentMethod)) {
@@ -2180,24 +2193,6 @@ export const createBookings = async (req, res, next) => {
         .json({ success: false, message: "Vehicle not found." });
     }
 
-    const finalFromDate = new Date(fromDate);
-    const finalToDate = new Date(toDate);
-
-    const existingBooking = await Booking.findOne({
-      vehicleId,
-      fromDate: finalFromDate,
-      toDate: finalToDate,
-      isDeleted: false,
-      status: { $nin: ["cancelled", "completed"] },
-    });
-    if (existingBooking) {
-      return res.status(400).json({
-        success: false,
-        message:
-          "A booking already exists for this vehicle during the selected trip.",
-      });
-    }
-
     // ========================= PRICING =========================
     const vehicleRent = Number(vehicle.pricePerDay || 0) * finalTotalDays;
     const pickupCharge =
@@ -2222,6 +2217,43 @@ export const createBookings = async (req, res, next) => {
 
     // ========================= TRANSACTION: Lead (existing or new) -> Booking -> link =========================
     session.startTransaction();
+
+    // ---------------------------------------------------------------
+    // OVERLAP CHECK (fixed)
+    // ---------------------------------------------------------------
+    // The old version only rejected a new booking if fromDate AND toDate
+    // matched an existing booking EXACTLY — so a request for 12–13 Aug
+    // against an existing 11–14 Aug booking sailed straight through and
+    // double-booked the same vehicle.
+    //
+    // Two ranges [existingFrom, existingTo] and [newFrom, newTo] overlap
+    // whenever:   existingFrom < newTo  AND  newFrom < existingTo
+    //
+    // Using strict "<" (not "<=") means a booking that starts the exact
+    // instant another one ends is NOT considered a conflict — i.e. a
+    // same-day handover (drop at 8am, next pickup at 8am) is allowed.
+    // Switch to "<=" on both sides if same-day handoffs should also be
+    // blocked for your business rules.
+    //
+    // Running this inside the transaction (with .session(session)) means
+    // it reads a consistent snapshot alongside the write that follows,
+    // closing most of the race-condition window a plain pre-transaction
+    // read would leave open.
+    const existingBooking = await Booking.findOne({
+      vehicleId,
+      isDeleted: false,
+      status: { $nin: ["cancelled", "completed"] },
+      fromDate: { $lt: finalToDate },
+      toDate: { $gt: finalFromDate },
+    }).session(session);
+
+    if (existingBooking) {
+      await session.abortTransaction();
+      return res.status(409).json({
+        success: false,
+        message: `This vehicle is already booked from ${existingBooking.fromDate.toDateString()} to ${existingBooking.toDate.toDateString()}, which overlaps with the selected dates.`,
+      });
+    }
 
     const companyId = req.user.company || req.user._id;
 
@@ -2364,6 +2396,23 @@ export const createBookings = async (req, res, next) => {
     });
   } catch (error) {
     if (session.inTransaction()) await session.abortTransaction();
+
+    // MongoDB replica-set transactions raise a WriteConflict (code 112) or
+    // similar TransientTransactionError label when two concurrent requests
+    // touch overlapping data — this is the last line of defense against
+    // the race window described above. Surface it as a normal conflict
+    // instead of a generic 500.
+    if (
+      error?.code === 112 ||
+      error?.errorLabels?.includes("TransientTransactionError")
+    ) {
+      return res.status(409).json({
+        success: false,
+        message:
+          "This vehicle was just booked by someone else for overlapping dates. Please refresh and try again.",
+      });
+    }
+
     next(error);
   } finally {
     session.endSession();
