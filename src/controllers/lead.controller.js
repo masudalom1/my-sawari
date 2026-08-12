@@ -1064,14 +1064,14 @@ export const getBookingsDashboard = async (req, res) => {
       new Date(date).toLocaleDateString("en-CA", {
         timeZone: "Asia/Kolkata",
       }); // YYYY-MM-DD
- 
+
     const now = new Date();
     const today = getISTDateString(now);
- 
+
     const tomorrowDate = new Date(now);
     tomorrowDate.setDate(tomorrowDate.getDate() + 1);
     const tomorrow = getISTDateString(tomorrowDate);
- 
+
     const bookings = await Booking.find({ isDeleted: false })
       // Only pull the fields the dashboard card / list actually renders.
       // Trims payload size and avoids hydrating fields (long text notes,
@@ -1107,6 +1107,7 @@ export const getBookingsDashboard = async (req, res) => {
           "pickup",
           "drop",
           "assignedDriver",
+          "createdBy",
           "pickupDropNotes",
           "createdAt",
         ].join(" "),
@@ -1137,7 +1138,7 @@ export const getBookingsDashboard = async (req, res) => {
       // tracking) — for a read-only dashboard list this is a large, free win,
       // especially as the collection grows.
       .lean();
- 
+
     const stats = {
       totalBookings: bookings.length,
       pendingHandover: 0,
@@ -1148,10 +1149,10 @@ export const getBookingsDashboard = async (req, res) => {
       completed: 0,
       cancelled: 0,
     };
- 
+
     const dashboard = bookings.map((booking) => {
       let status = "Booking Confirmed";
- 
+
       // ==========================
       // COMPLETED / CANCELLED
       // ==========================
@@ -1162,7 +1163,7 @@ export const getBookingsDashboard = async (req, res) => {
         status = "Cancelled";
         stats.cancelled++;
       }
- 
+
       // ==========================
       // ACTIVE RENTAL
       // ==========================
@@ -1173,7 +1174,7 @@ export const getBookingsDashboard = async (req, res) => {
         status = "Active Rental";
         stats.activeRentals++;
       }
- 
+
       // ==========================
       // PENDING (overdue, not handed over) / TODAY / TOMORROW / FUTURE
       // DATE ONLY (TIME IGNORED)
@@ -1183,10 +1184,10 @@ export const getBookingsDashboard = async (req, res) => {
         booking.status !== "cancelled" &&
         booking.status !== "active" &&
         booking.status !== "vehicle_handover";
- 
+
       if (booking.fromDate && isOpenBooking) {
         const pickupDate = getISTDateString(booking.fromDate);
- 
+
         if (pickupDate < today) {
           status = "Pending Handover";
           stats.pendingHandover++;
@@ -1202,89 +1203,89 @@ export const getBookingsDashboard = async (req, res) => {
           stats.upcoming++;
         }
       }
- 
+
       return {
         _id: booking._id,
         bookingId: booking._id,
         bookingCode: booking.bookingCode,
- 
+
         leadId: booking.lead?.leadId || "",
- 
+
         customerName: booking.customerName,
         mobileNumber: booking.mobileNumber,
         alternateMobileNumber: booking.alternateMobileNumber,
- 
+
         occupation: booking.occupation,
- 
+
         destination: booking.destination,
- 
+
         aadhaarNumber: booking.aadhaarNumber,
         drivingLicenseNumber: booking.drivingLicenseNumber,
- 
+
         tripType: booking.tripType,
- 
+
         pickupDate: booking.fromDate,
         dropDate: booking.toDate,
- 
+
         fromDate: booking.fromDate,
         toDate: booking.toDate,
- 
+
         pickupTime: booking.pickupTime,
         dropTime: booking.dropTime,
- 
+
         tripDays: booking.totalDays,
         totalDays: booking.totalDays,
- 
+
         residents: booking.residents,
- 
+
         quotationAmount: booking.payment?.totalAmount || 0,
         bookingAmount: booking.payment?.bookingAmountPaid || 0,
         discountAmount: booking.payment?.discountAmount || 0,
         fastagBalance: booking.payment?.fastagAmount || 0,
         securityDeposit: booking.payment?.securityDeposit || 0,
         payment: booking.payment || null,
- 
+
         vehicleId: booking.vehicleId?._id || null,
- 
+
         vehicleName: booking.vehicleId?.vehicleName || booking.vehicleName,
- 
+
         vehicleNumber:
           booking.vehicleId?.vehicleNumber || booking.vehicleNumber,
- 
+
         vehicleColor: booking.vehicleId?.color || booking.vehicleColor,
- 
+
         vehicleType: booking.lead?.vehicleType || "",
- 
+
         priority: booking.lead?.priority || "medium",
- 
+
         source: booking.lead?.source || "",
- 
+
         leadOwner:
           booking.lead?.leadOwner?.fullName ||
           booking.lead?.leadOwner?.name ||
           booking.createdBy?.fullName ||
           booking.createdBy?.name ||
           "",
- 
+
         bookingConfirmedAt:
           booking.lead?.bookingConfirmedAt || booking.createdAt,
- 
+
         status,
- 
+
         bookingStatus: booking.status,
- 
+
         handoverCompleted: booking.status !== "confirmed",
- 
+
         handover: booking.handover,
- 
+
         vehicleReturn: booking.vehicleReturn,
- 
+
         pickupDropRequired: booking.pickupDropRequired,
         serviceType: booking.serviceType,
- 
+
         pickup: booking.pickup,
         drop: booking.drop,
- 
+
         assignedDriver: booking.assignedDriver
           ? {
               _id: booking.assignedDriver._id,
@@ -1295,13 +1296,19 @@ export const getBookingsDashboard = async (req, res) => {
               mobileNumber: booking.assignedDriver.mobileNumber || "",
             }
           : null,
- 
+
         pickupDropNotes: booking.pickupDropNotes,
- 
+        createdBy: booking.createdBy
+          ? {
+              _id: booking.createdBy._id,
+              name: booking.createdBy.fullName || booking.createdBy.name || "",
+            }
+          : null,
+
         createdAt: booking.createdAt,
       };
     });
- 
+
     return res.status(200).json({
       success: true,
       stats,
@@ -1311,7 +1318,7 @@ export const getBookingsDashboard = async (req, res) => {
     console.error("===== BOOKING DASHBOARD ERROR =====");
     console.error(error);
     console.error(error.stack);
- 
+
     return res.status(500).json({
       success: false,
       message: "Unable to fetch bookings.",
