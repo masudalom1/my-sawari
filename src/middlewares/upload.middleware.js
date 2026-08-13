@@ -8,30 +8,21 @@ import { randomUUID } from "crypto";
 ================================== */
 
 const imageFileFilter = (req, file, cb) => {
-  const allowedTypes = [
-    "image/jpeg",
-    "image/jpg",
-    "image/png",
-    "image/webp",
-  ];
+  const allowedTypes = ["image/jpeg", "image/jpg", "image/png", "image/webp"];
 
   if (allowedTypes.includes(file.mimetype)) {
     return cb(null, true);
   }
 
   return cb(
-    new Error(
-      "Only JPG, JPEG, PNG and WEBP image files are allowed"
-    ),
-    false
+    new Error("Only JPG, JPEG, PNG and WEBP image files are allowed"),
+    false,
   );
 };
 
 /* ==================================
    CLOUDINARY STORAGE
 ================================== */
-
-
 
 const imageStorage = new CloudinaryStorage({
   cloudinary,
@@ -102,41 +93,39 @@ export const handoverUpload = upload.fields([
    VEHICLE RETURN UPLOAD
 ================================== */
 
-export const vehicleReturnUpload =
-  upload.fields([
-    {
-      name: "vehicleFront",
-      maxCount: 1,
-    },
-    {
-      name: "vehicleRear",
-      maxCount: 1,
-    },
-    {
-      name: "vehicleLeft",
-      maxCount: 1,
-    },
-    {
-      name: "vehicleRight",
-      maxCount: 1,
-    },
+export const vehicleReturnUpload = upload.fields([
+  {
+    name: "vehicleFront",
+    maxCount: 1,
+  },
+  {
+    name: "vehicleRear",
+    maxCount: 1,
+  },
+  {
+    name: "vehicleLeft",
+    maxCount: 1,
+  },
+  {
+    name: "vehicleRight",
+    maxCount: 1,
+  },
 
-    {
-      name: "damageImages",
-      maxCount: 20,
-    },
-  ]);
+  {
+    name: "damageImages",
+    maxCount: 20,
+  },
+  {
+    name: "additionalImages",
+    maxCount: 20,
+  },
+]);
 
 /* ==================================
    MULTER ERROR HANDLER
 ================================== */
 
-export const multerErrorHandler = (
-  err,
-  req,
-  res,
-  next
-) => {
+export const multerErrorHandler = (err, req, res, next) => {
   if (err instanceof multer.MulterError) {
     return res.status(400).json({
       success: false,
@@ -154,4 +143,4 @@ export const multerErrorHandler = (
   next();
 };
 
-export const singleImageUpload = upload.single("image")
+export const singleImageUpload = upload.single("image");

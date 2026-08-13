@@ -144,6 +144,15 @@ export const receiveVehicle = async (req, res) => {
       });
     }
 
+    /* ==========================
+       ADDITIONAL IMAGES (optional)
+       No validation — user may
+       upload zero, one, or many.
+    ========================== */
+
+    const additionalImages =
+      files.additionalImages?.map((file) => file.path) || [];
+
     const maintenanceRequired =
       needsMaintenance === true ||
       needsMaintenance === "true" ||
@@ -322,6 +331,12 @@ export const receiveVehicle = async (req, res) => {
       damageImages,
 
       /* ======================
+     ADDITIONAL IMAGES (optional)
+  ====================== */
+
+      additionalImages,
+
+      /* ======================
      DAMAGE DETAILS
   ====================== */
 
@@ -419,10 +434,6 @@ export const receiveVehicle = async (req, res) => {
     }
 
     await vehicle.save();
-
-    /* ==========================
-       UPDATE HANDOVER
-    ========================== */
 
     /* ==========================
        UPDATE HANDOVER

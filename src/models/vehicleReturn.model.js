@@ -285,6 +285,10 @@ const vehicleReturnSchema = new mongoose.Schema(
       type: [String],
       default: [],
     },
+    additionalImages: {
+      type: [String],
+      default: [],
+    },
 
     /* ======================
        DAMAGE DETAILS
