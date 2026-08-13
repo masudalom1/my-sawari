@@ -4,7 +4,6 @@ import Vehicle from "../models/vehicle.model.js";
 import { sendBookingConfirmation } from "../services/wati.service.js";
 import VehicleReturn from "../models/vehicleReturn.model.js";
 import Booking from "../models/booking.model.js";
-
 // ==========================================
 // Draft contoller
 // ==========================================
@@ -1032,6 +1031,7 @@ export const saveHandoverImages = async (req, res) => {
       });
     }
 
+    // These MUST be present for the handover to be considered complete
     const REQUIRED_IMAGES = [
       "customerPhoto",
       "customerProfileImage",
@@ -1044,15 +1044,41 @@ export const saveHandoverImages = async (req, res) => {
       "vehicleRight",
     ];
 
+    // Saved if provided, but don't affect completion/progress calculation
+    const OPTIONAL_IMAGES = ["drivingLicenseFront", "drivingLicenseBack"];
+
     const update = {};
 
     REQUIRED_IMAGES.forEach((key) => {
       const value = req.body[key];
-
       if (typeof value === "string" && value.trim() !== "") {
         update[`images.${key}`] = value.trim();
       }
     });
+
+    OPTIONAL_IMAGES.forEach((key) => {
+      const value = req.body[key];
+      if (typeof value === "string" && value.trim() !== "") {
+        update[`images.${key}`] = value.trim();
+      }
+    });
+
+    // Optional close-up damage photos (array of Cloudinary URLs)
+    let damageImages = req.body.damageImages;
+
+    if (typeof damageImages === "string") {
+      try {
+        damageImages = JSON.parse(damageImages);
+      } catch {
+        damageImages = damageImages ? [damageImages] : [];
+      }
+    }
+
+    if (Array.isArray(damageImages)) {
+      update["images.damageImages"] = damageImages
+        .filter((url) => typeof url === "string" && url.trim() !== "")
+        .map((url) => url.trim());
+    }
 
     const handover = await Handover.findByIdAndUpdate(
       handoverId,

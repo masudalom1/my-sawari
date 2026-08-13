@@ -445,6 +445,16 @@ const handoverSchema = new mongoose.Schema(
         default: "",
       },
 
+      drivingLicenseFront: {
+        type: String,
+        default: "",
+      },
+
+      drivingLicenseBack: {
+        type: String,
+        default: "",
+      },
+
       vehicleFront: {
         type: String,
         default: "",
@@ -463,6 +473,11 @@ const handoverSchema = new mongoose.Schema(
       vehicleRight: {
         type: String,
         default: "",
+      },
+
+      damageImages: {
+        type: [String],
+        default: [],
       },
     },
     hasUploadedImages: {
