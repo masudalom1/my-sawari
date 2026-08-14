@@ -765,42 +765,6 @@ export const createHandover = async (req, res, next) => {
     // ==========================
     // CREATE PAYMENT HISTORY
     // ==========================
-    if (Number(payment?.amountReceivedNow) > 0) {
-      await PaymentHistory.create({
-        company: req.user.company || req.user._id,
-
-        bookingId,
-
-        handoverId: handover._id,
-
-        customer: {
-          fullName: customer.fullName,
-          mobileNumber: customer.mobileNumber,
-        },
-
-        vehicle: {
-          vehicleId: selectedVehicle._id,
-          vehicleName: selectedVehicle.vehicleName,
-          vehicleNumber: selectedVehicle.vehicleNumber,
-        },
-
-        amount: Number(payment.amountReceivedNow),
-
-        paymentMethod: payment?.paymentMethod || "cash",
-
-        paymentBreakdown: {
-          cash: Number(payment?.paymentBreakdown?.cash) || 0,
-          phonePe: Number(payment?.paymentBreakdown?.phonePe) || 0,
-          razorpay: Number(payment?.paymentBreakdown?.razorpay) || 0,
-        },
-
-        type: "handover",
-
-        note: "Payment collected during vehicle handover",
-
-        createdBy: req.user._id,
-      });
-    }
 
     // ==========================
     // UPDATE VEHICLE STATUS
