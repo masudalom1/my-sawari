@@ -18,6 +18,7 @@ import vehicleReturnRoutes from "./routes/vehicleReturn.routes.js";
 import customerRoutes from "./routes/customer.routes.js";
 import leadRoutes from "./routes/lead.routes.js";
 import bookingRoutes from "./routes/bookingRoutes.js";
+import paymentHistoryRoutes from "./routes/paymentHistory.routes.js"
 
 dotenv.config();
 
@@ -129,6 +130,7 @@ app.use("/api/v1/vehicle-return", vehicleReturnRoutes);
 app.use("/api/v1/customers", customerRoutes);
 app.use("/api/v1/leads", leadRoutes);
 app.use("/api/v1/bookings", bookingRoutes);
+app.use("/api/v1/bookings", paymentHistoryRoutes);
 
 
 // 404
