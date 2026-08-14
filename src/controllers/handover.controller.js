@@ -4,6 +4,7 @@ import Vehicle from "../models/vehicle.model.js";
 import { sendBookingConfirmation } from "../services/wati.service.js";
 import VehicleReturn from "../models/vehicleReturn.model.js";
 import Booking from "../models/booking.model.js";
+import PaymentHistory from "../models/paymentHistory.model.js";
 // ==========================================
 // Draft contoller
 // ==========================================
