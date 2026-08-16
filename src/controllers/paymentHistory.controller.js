@@ -1,13 +1,8 @@
 import PaymentHistory from "../models/paymentHistory.model.js";
 
-
 const getPaymentHistory = async (req, res, next) => {
   try {
-    const companyId = req.user.company || req.user._id;
-
-    const payments = await PaymentHistory.find({
-      company: companyId,
-    })
+    const payments = await PaymentHistory.find({})
       .populate("createdBy", "name fullName email")
       .sort({ createdAt: -1 })
       .lean();
