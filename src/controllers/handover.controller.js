@@ -112,7 +112,6 @@ export const createDraftHandover = async (req, res) => {
     });
   }
 };
-
 export const updateDraftHandover = async (req, res) => {
   try {
     const { id } = req.params;
@@ -447,7 +446,6 @@ export const getHandoverById = async (req, res) => {
     });
   }
 };
-
 export const completeDraftHandover = async (req, res) => {
   try {
     const { id } = req.params;
@@ -765,6 +763,53 @@ export const createHandover = async (req, res, next) => {
     // ==========================
     // CREATE PAYMENT HISTORY
     // ==========================
+    // Only record money actually received during handover.
+    // bookingAmountPaid is NOT recorded here because it may
+    // have been collected previously during booking.
+    if (Number(payment?.amountReceivedNow) > 0) {
+      try {
+        await PaymentHistory.create({
+          company: req.user.company || req.user._id,
+
+          bookingId,
+
+          handoverId: handover._id,
+
+          customer: {
+            fullName: customer.fullName,
+            mobileNumber: customer.mobileNumber,
+          },
+
+          vehicle: {
+            vehicleId: selectedVehicle._id,
+            vehicleName: selectedVehicle.vehicleName,
+            vehicleNumber: selectedVehicle.vehicleNumber,
+          },
+
+          amount: Number(payment.amountReceivedNow),
+
+          paymentMethod: payment?.paymentMethod || "cash",
+
+          paymentBreakdown: {
+            cash: Number(payment?.paymentBreakdown?.cash) || 0,
+            phonePe: Number(payment?.paymentBreakdown?.phonePe) || 0,
+            razorpay: Number(payment?.paymentBreakdown?.razorpay) || 0,
+          },
+
+          type: "handover",
+
+          note: "Payment received during vehicle handover",
+
+          createdBy: req.user._id,
+        });
+      } catch (paymentHistoryError) {
+        // Do NOT break the handover flow if payment history fails.
+        console.error(
+          "Payment History Creation Error:",
+          paymentHistoryError?.message || paymentHistoryError,
+        );
+      }
+    }
 
     // ==========================
     // UPDATE VEHICLE STATUS
