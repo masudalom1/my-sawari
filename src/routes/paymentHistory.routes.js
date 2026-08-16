@@ -4,6 +4,6 @@ import getPaymentHistory from "../controllers/paymentHistory.controller.js";
 
 const router = express.Router();
 
-router.get("/:bookingId/payments", protect, getPaymentHistory);
+router.get("/payments", protect, getPaymentHistory);
 
 export default router;
