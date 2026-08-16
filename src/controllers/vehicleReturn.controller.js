@@ -2,6 +2,7 @@ import Handover from "../models/handover.model.js";
 import Vehicle from "../models/vehicle.model.js";
 import VehicleReturn from "../models/vehicleReturn.model.js";
 import Booking from "../models/booking.model.js";
+import PaymentHistory from "../models/paymentHistory.model.js";
 
 export const receiveVehicle = async (req, res) => {
   try {
@@ -388,6 +389,73 @@ export const receiveVehicle = async (req, res) => {
 
       returnStatus: "completed",
     });
+
+    // ==========================
+    // CREATE PAYMENT HISTORY
+    // ==========================
+    // Record only the amount actually collected
+    // during vehicle receiving/settlement.
+    //
+    // IMPORTANT:
+    // The pending handover amount is NOT recorded again.
+    // Only `amountCollected` belongs to this receive transaction.
+
+    if (collected > 0) {
+      try {
+        await PaymentHistory.create({
+          company: companyId,
+
+          bookingId: handover.bookingId,
+
+          handoverId: handover._id,
+
+          customer: {
+            fullName: handover.customer?.fullName || "",
+            mobileNumber: handover.customer?.mobileNumber || "",
+          },
+
+          vehicle: {
+            vehicleId: vehicle._id,
+            vehicleName: vehicle.vehicleName || "",
+            vehicleNumber: vehicle.vehicleNumber || "",
+          },
+
+          amount: collected,
+
+          paymentMethod: (() => {
+            const mode = String(paymentMode || "cash").toLowerCase();
+
+            const paymentMethodMap = {
+              cash: "cash",
+              phonepe: "phonepe",
+              razorpay: "razorpay",
+              mixed: "mixed",
+            };
+
+            return paymentMethodMap[mode] || "cash";
+          })(),
+
+          paymentBreakdown: {
+            cash: Number(req.body?.paymentBreakdown?.cash) || 0,
+            phonePe: Number(req.body?.paymentBreakdown?.phonePe) || 0,
+            razorpay: Number(req.body?.paymentBreakdown?.razorpay) || 0,
+          },
+
+          type: "receive",
+
+          note:
+            balanceReason?.trim() || "Payment received during vehicle return",
+
+          createdBy: req.user._id,
+        });
+      } catch (paymentHistoryError) {
+        // Payment history must NEVER break vehicle receiving.
+        console.error(
+          "Receive Payment History Creation Error:",
+          paymentHistoryError?.message || paymentHistoryError,
+        );
+      }
+    }
 
     /* ==========================
        UPDATE VEHICLE

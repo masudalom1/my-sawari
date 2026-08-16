@@ -2168,6 +2168,63 @@ export const updateRental = async (req, res) => {
 
     await handover.save(); // hook computes balanceAmount + paymentStatus from totalAmount
 
+    // ==========================
+    // CREATE PAYMENT HISTORY
+    // ==========================
+    // Record only the NEW payment received in this update.
+    // Existing rental/payment logic remains untouched.
+
+    if (Number(amountReceivedNow) > 0) {
+      try {
+        await PaymentHistory.create({
+          company: handover.company,
+
+          bookingId: handover.bookingId,
+
+          handoverId: handover._id,
+
+          customer: {
+            fullName: handover.customer?.fullName || "",
+            mobileNumber: handover.customer?.mobileNumber || "",
+          },
+
+          vehicle: {
+            vehicleId: handover.vehicle?.vehicleId || null,
+            vehicleName: handover.vehicle?.vehicleName || "",
+            vehicleNumber: handover.vehicle?.vehicleNumber || "",
+          },
+
+          amount: Number(amountReceivedNow),
+
+          paymentMethod: paymentMethod || "cash",
+
+          paymentBreakdown: {
+            cash: paymentMethod === "cash" ? Number(amountReceivedNow) : 0,
+
+            phonePe:
+              paymentMethod === "phonepe" ? Number(amountReceivedNow) : 0,
+
+            razorpay:
+              paymentMethod === "razorpay" ? Number(amountReceivedNow) : 0,
+          },
+
+          type: "extension",
+
+          note: reasonForChange?.trim()
+            ? `Rental payment - ${reasonForChange.trim()}`
+            : "Payment received during rental update",
+
+          createdBy: req.user._id,
+        });
+      } catch (paymentHistoryError) {
+        // Payment history failure must never break rental update.
+        console.error(
+          "Payment History Creation Error:",
+          paymentHistoryError?.message || paymentHistoryError,
+        );
+      }
+    }
+
     return res.status(200).json({
       success: true,
       message: "Rental updated successfully",
