@@ -130,7 +130,7 @@ app.use("/api/v1/vehicle-return", vehicleReturnRoutes);
 app.use("/api/v1/customers", customerRoutes);
 app.use("/api/v1/leads", leadRoutes);
 app.use("/api/v1/bookings", bookingRoutes);
-app.use("/api/v1/bookings", paymentHistoryRoutes);
+app.use("/api/v1/payments", paymentHistoryRoutes);
 
 
 // 404
