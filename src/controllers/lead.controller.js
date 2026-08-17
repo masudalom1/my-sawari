@@ -1576,53 +1576,53 @@ export const createLeadBooking = async (req, res, next) => {
     });
 
     // ==========================
-// CREATE PAYMENT HISTORY
-// ==========================
-// Record booking advance payment separately.
-// Payment history failure must NOT break booking creation.
+    // CREATE PAYMENT HISTORY
+    // ==========================
+    // Record booking advance payment separately.
+    // Payment history failure must NOT break booking creation.
 
-if (Number(advancePaid) > 0) {
-  try {
-    await PaymentHistory.create({
-      company: companyId,
+    if (Number(advancePaid) > 0) {
+      try {
+        await PaymentHistory.create({
+          company: companyId,
 
-      bookingId: booking._id,
+          bookingId: booking._id,
 
-      customer: {
-        fullName: customerName.trim(),
-        mobileNumber: mobileNumber.trim(),
-      },
+          customer: {
+            fullName: customerName.trim(),
+            mobileNumber: mobileNumber.trim(),
+          },
 
-      vehicle: {
-        vehicleId: selectedVehicle._id,
-        vehicleName: selectedVehicle.vehicleName,
-        vehicleNumber: selectedVehicle.vehicleNumber,
-      },
+          vehicle: {
+            vehicleId: selectedVehicle._id,
+            vehicleName: selectedVehicle.vehicleName,
+            vehicleNumber: selectedVehicle.vehicleNumber,
+          },
 
-      amount: advancePaid,
+          amount: advancePaid,
 
-      paymentMethod: paymentMethod,
+          paymentMethod: paymentMethod,
 
-      paymentBreakdown: {
-        cash: Number(breakdown.cash) || 0,
-        phonePe: Number(breakdown.phonePe) || 0,
-        razorpay: Number(breakdown.razorpay) || 0,
-      },
+          paymentBreakdown: {
+            cash: Number(breakdown.cash) || 0,
+            phonePe: Number(breakdown.phonePe) || 0,
+            razorpay: Number(breakdown.razorpay) || 0,
+          },
 
-      type: "booking",
+          type: "booking",
 
-      note: "Booking advance payment",
+          note: "Booking advance payment",
 
-      createdBy: req.user._id,
-    });
-  } catch (paymentHistoryError) {
-    // Do NOT break booking creation if payment history fails.
-    console.error(
-      "Payment History Creation Error:",
-      paymentHistoryError?.message || paymentHistoryError,
-    );
-  }
-}
+          createdBy: req.user._id,
+        });
+      } catch (paymentHistoryError) {
+        // Do NOT break booking creation if payment history fails.
+        console.error(
+          "Payment History Creation Error:",
+          paymentHistoryError?.message || paymentHistoryError,
+        );
+      }
+    }
 
     await booking.populate([
       {
@@ -2430,14 +2430,14 @@ export const createBookings = async (req, res, next) => {
           },
 
           vehicle: {
-            vehicleId: selectedVehicle._id,
-            vehicleName: selectedVehicle.vehicleName,
-            vehicleNumber: selectedVehicle.vehicleNumber,
+            vehicleId: vehicle._id,
+            vehicleName: vehicle.vehicleName,
+            vehicleNumber: vehicle.vehicleNumber,
           },
 
           amount: advancePaid,
 
-          paymentMethod: paymentMethod,
+          paymentMethod,
 
           paymentBreakdown: {
             cash: Number(breakdown.cash) || 0,
@@ -2452,11 +2452,7 @@ export const createBookings = async (req, res, next) => {
           createdBy: req.user._id,
         });
       } catch (paymentHistoryError) {
-        // Do NOT break booking creation if payment history fails.
-        console.error(
-          "Payment History Creation Error:",
-          paymentHistoryError?.message || paymentHistoryError,
-        );
+        console.error("Payment History Creation Error:", paymentHistoryError);
       }
     }
 
