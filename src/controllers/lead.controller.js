@@ -2362,42 +2362,6 @@ export const createBookings = async (req, res, next) => {
       { session },
     );
 
-    if (Number(bookingAmountPaid) > 0) {
-      await PaymentHistory.create({
-        company: req.user.company || req.user._id,
-
-        bookingId: booking._id,
-
-        handoverId: null,
-
-        customer: {
-          fullName: booking.customer?.fullName || booking.name || "",
-          mobileNumber: booking.customer?.mobileNumber || booking.phone || "",
-        },
-
-        vehicle: {
-          vehicleId: booking.vehicle?.vehicleId || null,
-          vehicleName: booking.vehicle?.vehicleName || "",
-          vehicleNumber: booking.vehicle?.vehicleNumber || "",
-        },
-
-        amount: Number(bookingAmountPaid),
-
-        paymentMethod: paymentMethod || "cash",
-
-        paymentBreakdown: {
-          cash: Number(paymentBreakdown?.cash) || 0,
-          phonePe: Number(paymentBreakdown?.phonePe) || 0,
-          razorpay: Number(paymentBreakdown?.razorpay) || 0,
-        },
-
-        type: "booking",
-
-        note: "Booking payment",
-
-        createdBy: req.user._id,
-      });
-    }
 
     lead.bookingId = booking._id;
     lead.bookingConfirmedAt = new Date();
