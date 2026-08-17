@@ -3,6 +3,7 @@ import Lead from "../models/lead.model.js";
 import LeadHistory from "../models/leadHistory.model.js";
 import Booking from "../models/booking.model.js";
 import Vehicle from "../models/vehicle.model.js";
+import paymentHistoryModel from "../models/paymentHistory.model.js";
 
 export const createLead = async (req, res) => {
   try {
