@@ -1575,6 +1575,55 @@ export const createLeadBooking = async (req, res, next) => {
       status: "confirmed",
     });
 
+    // ==========================
+// CREATE PAYMENT HISTORY
+// ==========================
+// Record booking advance payment separately.
+// Payment history failure must NOT break booking creation.
+
+if (Number(advancePaid) > 0) {
+  try {
+    await PaymentHistory.create({
+      company: companyId,
+
+      bookingId: booking._id,
+
+      customer: {
+        fullName: customerName.trim(),
+        mobileNumber: mobileNumber.trim(),
+      },
+
+      vehicle: {
+        vehicleId: selectedVehicle._id,
+        vehicleName: selectedVehicle.vehicleName,
+        vehicleNumber: selectedVehicle.vehicleNumber,
+      },
+
+      amount: advancePaid,
+
+      paymentMethod: paymentMethod,
+
+      paymentBreakdown: {
+        cash: Number(breakdown.cash) || 0,
+        phonePe: Number(breakdown.phonePe) || 0,
+        razorpay: Number(breakdown.razorpay) || 0,
+      },
+
+      type: "booking",
+
+      note: "Booking advance payment",
+
+      createdBy: req.user._id,
+    });
+  } catch (paymentHistoryError) {
+    // Do NOT break booking creation if payment history fails.
+    console.error(
+      "Payment History Creation Error:",
+      paymentHistoryError?.message || paymentHistoryError,
+    );
+  }
+}
+
     await booking.populate([
       {
         path: "vehicleId",
@@ -2362,6 +2411,54 @@ export const createBookings = async (req, res, next) => {
       { session },
     );
 
+    // ==========================
+    // CREATE PAYMENT HISTORY
+    // ==========================
+    // Record booking advance payment separately.
+    // Payment history failure must NOT break booking creation.
+
+    if (Number(advancePaid) > 0) {
+      try {
+        await PaymentHistory.create({
+          company: companyId,
+
+          bookingId: booking._id,
+
+          customer: {
+            fullName: customerName.trim(),
+            mobileNumber: mobileNumber.trim(),
+          },
+
+          vehicle: {
+            vehicleId: selectedVehicle._id,
+            vehicleName: selectedVehicle.vehicleName,
+            vehicleNumber: selectedVehicle.vehicleNumber,
+          },
+
+          amount: advancePaid,
+
+          paymentMethod: paymentMethod,
+
+          paymentBreakdown: {
+            cash: Number(breakdown.cash) || 0,
+            phonePe: Number(breakdown.phonePe) || 0,
+            razorpay: Number(breakdown.razorpay) || 0,
+          },
+
+          type: "booking",
+
+          note: "Booking advance payment",
+
+          createdBy: req.user._id,
+        });
+      } catch (paymentHistoryError) {
+        // Do NOT break booking creation if payment history fails.
+        console.error(
+          "Payment History Creation Error:",
+          paymentHistoryError?.message || paymentHistoryError,
+        );
+      }
+    }
 
     lead.bookingId = booking._id;
     lead.bookingConfirmedAt = new Date();
