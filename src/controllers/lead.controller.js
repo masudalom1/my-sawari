@@ -2225,27 +2225,6 @@ export const createBookings = async (req, res, next) => {
     // ========================= TRANSACTION: Lead (existing or new) -> Booking -> link =========================
     session.startTransaction();
 
-    // ---------------------------------------------------------------
-    // OVERLAP CHECK (fixed)
-    // ---------------------------------------------------------------
-    // The old version only rejected a new booking if fromDate AND toDate
-    // matched an existing booking EXACTLY — so a request for 12–13 Aug
-    // against an existing 11–14 Aug booking sailed straight through and
-    // double-booked the same vehicle.
-    //
-    // Two ranges [existingFrom, existingTo] and [newFrom, newTo] overlap
-    // whenever:   existingFrom < newTo  AND  newFrom < existingTo
-    //
-    // Using strict "<" (not "<=") means a booking that starts the exact
-    // instant another one ends is NOT considered a conflict — i.e. a
-    // same-day handover (drop at 8am, next pickup at 8am) is allowed.
-    // Switch to "<=" on both sides if same-day handoffs should also be
-    // blocked for your business rules.
-    //
-    // Running this inside the transaction (with .session(session)) means
-    // it reads a consistent snapshot alongside the write that follows,
-    // closing most of the race-condition window a plain pre-transaction
-    // read would leave open.
     const existingBooking = await Booking.findOne({
       vehicleId,
       isDeleted: false,
@@ -2382,6 +2361,43 @@ export const createBookings = async (req, res, next) => {
       ],
       { session },
     );
+
+    if (Number(bookingAmountPaid) > 0) {
+      await PaymentHistory.create({
+        company: req.user.company || req.user._id,
+
+        bookingId: booking._id,
+
+        handoverId: null,
+
+        customer: {
+          fullName: booking.customer?.fullName || booking.name || "",
+          mobileNumber: booking.customer?.mobileNumber || booking.phone || "",
+        },
+
+        vehicle: {
+          vehicleId: booking.vehicle?.vehicleId || null,
+          vehicleName: booking.vehicle?.vehicleName || "",
+          vehicleNumber: booking.vehicle?.vehicleNumber || "",
+        },
+
+        amount: Number(bookingAmountPaid),
+
+        paymentMethod: paymentMethod || "cash",
+
+        paymentBreakdown: {
+          cash: Number(paymentBreakdown?.cash) || 0,
+          phonePe: Number(paymentBreakdown?.phonePe) || 0,
+          razorpay: Number(paymentBreakdown?.razorpay) || 0,
+        },
+
+        type: "booking",
+
+        note: "Booking payment",
+
+        createdBy: req.user._id,
+      });
+    }
 
     lead.bookingId = booking._id;
     lead.bookingConfirmedAt = new Date();
