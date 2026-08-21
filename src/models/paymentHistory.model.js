@@ -1,5 +1,36 @@
 import mongoose from "mongoose";
 
+const collectionEntrySchema = new mongoose.Schema(
+  {
+    collectedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      required: true,
+    },
+
+    collectedByName: {
+      type: String,
+      default: "",
+    },
+
+    amount: {
+      type: Number,
+      required: true,
+      min: 0,
+    },
+
+    note: {
+      type: String,
+      default: "",
+    },
+  },
+  {
+    // `collectedAt` instead of the default `createdAt` — reads
+    // naturally when this sub-doc is serialized to the frontend.
+    timestamps: { createdAt: "collectedAt", updatedAt: false },
+  },
+);
+
 const paymentHistorySchema = new mongoose.Schema(
   {
     company: {
@@ -112,6 +143,35 @@ const paymentHistorySchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
       required: true,
+    },
+
+    isCollected: {
+      type: Boolean,
+      default: false,
+      index: true,
+    },
+
+    collectedAmount: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+
+    lastCollectedAt: {
+      type: Date,
+      default: null,
+    },
+
+    lastCollectedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      default: null,
+    },
+
+    // Full audit trail — every collect action, by whoever performed it.
+    collectionHistory: {
+      type: [collectionEntrySchema],
+      default: [],
     },
   },
   {
