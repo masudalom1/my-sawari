@@ -129,12 +129,15 @@ export const collectCashPayment = async (req, res, next) => {
 export const getPaymentHistory = async (req, res, next) => {
   try {
     const page = Math.max(1, parseInt(req.query.page, 10) || 1);
-    const limit = Math.min(50, Math.max(1, parseInt(req.query.limit, 10) || 12));
+    const limit = Math.min(
+      50,
+      Math.max(1, parseInt(req.query.limit, 10) || 12),
+    );
     const skip = (page - 1) * limit;
- 
+
     const startOfToday = new Date();
     startOfToday.setHours(0, 0, 0, 0);
- 
+
     const endOfToday = new Date();
     endOfToday.setHours(23, 59, 59, 999);
     const listQuery = PaymentHistory.find({})
@@ -143,7 +146,7 @@ export const getPaymentHistory = async (req, res, next) => {
       .skip(skip)
       .limit(limit)
       .lean();
- 
+
     const summaryPromise =
       page === 1
         ? PaymentHistory.aggregate([
@@ -198,12 +201,12 @@ export const getPaymentHistory = async (req, res, next) => {
             },
           ])
         : Promise.resolve(null);
- 
+
     const [payments, summaryResult] = await Promise.all([
       listQuery,
       summaryPromise,
     ]);
- 
+
     const todaySummary =
       page === 1
         ? {
@@ -212,13 +215,13 @@ export const getPaymentHistory = async (req, res, next) => {
             phonePe: summaryResult?.[0]?.phonePe || 0,
           }
         : undefined;
- 
+
     return res.status(200).json({
       success: true,
       data: payments,
       page,
       limit,
-      hasMore: payments.length === limit, 
+      hasMore: payments.length === limit,
       ...(todaySummary ? { todaySummary } : {}),
     });
   } catch (error) {
@@ -227,4 +230,152 @@ export const getPaymentHistory = async (req, res, next) => {
   }
 };
 
+export const getCashCollectionPayments = async (req, res, next) => {
+  try {
+    const page = Math.max(
+      1,
+      parseInt(req.query.page, 10) || 1
+    );
 
+    const limit = Math.min(
+      50,
+      Math.max(
+        1,
+        parseInt(req.query.limit, 10) || 12
+      )
+    );
+
+    const skip = (page - 1) * limit;
+
+    /*
+     * Get only CASH and MIXED payments.
+     *
+     * We intentionally don't use:
+     *
+     * isCollected: false
+     *
+     * because old payment records may not have
+     * isCollected properly stored.
+     *
+     * Instead, we calculate the actual remaining
+     * cash amount below.
+     */
+    const payments = await PaymentHistory.find({
+      paymentMethod: {
+        $in: ["cash", "mixed"],
+      },
+    })
+      .populate(
+        "createdBy",
+        "name fullName email username"
+      )
+      .sort({
+        createdAt: -1,
+      })
+      .lean();
+
+    /*
+     * Calculate remaining cash for every payment.
+     */
+    const pendingPayments = payments
+      .map((payment) => {
+        const method = String(
+          payment.paymentMethod || ""
+        ).toLowerCase();
+
+        /*
+         * CASH:
+         * Entire payment amount is collectible.
+         *
+         * MIXED:
+         * Only the cash portion is collectible.
+         */
+        const collectibleAmount =
+          method === "mixed"
+            ? Number(
+                payment.paymentBreakdown?.cash
+              ) || 0
+            : Number(payment.amount) || 0;
+
+        const collectedAmount =
+          Number(payment.collectedAmount) || 0;
+
+        const remainingAmount = Math.max(
+          0,
+          Number(
+            (
+              collectibleAmount -
+              collectedAmount
+            ).toFixed(2)
+          )
+        );
+
+        return {
+          ...payment,
+
+          collectibleAmount,
+
+          collectedAmount,
+
+          remainingAmount,
+
+          isCollected:
+            remainingAmount <=
+            AMOUNT_EPSILON,
+        };
+      })
+
+      /*
+       * IMPORTANT:
+       *
+       * If remaining amount is ₹0,
+       * don't return the payment.
+       *
+       * Therefore after collecting the full amount,
+       * the payment disappears from this screen.
+       */
+      .filter(
+        (payment) =>
+          payment.remainingAmount >
+          AMOUNT_EPSILON
+      );
+
+    /*
+     * Apply pagination AFTER filtering.
+     *
+     * This makes sure the screen receives the correct
+     * pending collection records.
+     */
+    const total = pendingPayments.length;
+
+    const paginatedPayments =
+      pendingPayments.slice(
+        skip,
+        skip + limit
+      );
+
+    const hasMore =
+      skip + limit < total;
+
+    return res.status(200).json({
+      success: true,
+
+      data: paginatedPayments,
+
+      page,
+
+      limit,
+
+      total,
+
+      hasMore,
+    });
+  } catch (error) {
+    console.error(
+      "Get Cash Collection Payments Error:",
+      error
+    );
+
+    next(error);
+  }
+};
