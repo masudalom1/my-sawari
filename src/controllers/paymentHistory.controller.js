@@ -3,6 +3,53 @@ import PaymentHistory from "../models/paymentHistory.model.js";
 
 const AMOUNT_EPSILON = 0.01;
 
+const MAX_PAGE_LIMIT = 50;
+const DEFAULT_PAGE_LIMIT = 12;
+
+const computePaymentFields = (payment) => {
+  const method = String(payment.paymentMethod || "").toLowerCase();
+
+  const collectibleAmount =
+    method === "mixed"
+      ? Number(payment.paymentBreakdown?.cash) || 0
+      : Number(payment.amount) || 0;
+
+  const collectedAmount = Number(payment.collectedAmount) || 0;
+
+  const remainingAmount = Math.max(
+    0,
+    Number((collectibleAmount - collectedAmount).toFixed(2)),
+  );
+
+  const isCollected = remainingAmount <= AMOUNT_EPSILON;
+
+  const lastEntry =
+    Array.isArray(payment.collectionHistory) && payment.collectionHistory.length
+      ? payment.collectionHistory[payment.collectionHistory.length - 1]
+      : null;
+
+  return {
+    ...payment,
+    collectibleAmount,
+    collectedAmount,
+    remainingAmount,
+    isCollected,
+    lastCollectedByName: lastEntry?.collectedByName || null,
+  };
+};
+
+const startOfToday = () => {
+  const date = new Date();
+  date.setHours(0, 0, 0, 0);
+  return date;
+};
+
+const endOfToday = () => {
+  const date = new Date();
+  date.setHours(23, 59, 59, 999);
+  return date;
+};
+
 export const collectCashPayment = async (req, res, next) => {
   try {
     const { id } = req.params;
@@ -55,7 +102,7 @@ export const collectCashPayment = async (req, res, next) => {
     }
 
     const alreadyCollected = Number(payment.collectedAmount) || 0;
-    const remaining = collectibleAmount - alreadyCollected;
+    const remaining = Number((collectibleAmount - alreadyCollected).toFixed(2));
 
     const collectAmount = amount != null ? Number(amount) : remaining;
 
@@ -112,7 +159,13 @@ export const collectCashPayment = async (req, res, next) => {
       data: {
         paymentId: payment._id,
         isCollected: payment.isCollected,
-        collectedAmount: payment.collectedAmount,
+        // Amount collected in THIS request. Use this for "just
+        // collected" UI feedback — NOT totalCollectedAmount below.
+        transactionAmount: collectAmount,
+        // Cumulative amount collected across all collection events
+        // for this payment (relevant once you support partial/mixed
+        // multi-step collections).
+        totalCollectedAmount: payment.collectedAmount,
         remainingAmount: Math.max(
           0,
           Number((collectibleAmount - payment.collectedAmount).toFixed(2)),
@@ -229,153 +282,136 @@ export const getPaymentHistory = async (req, res, next) => {
     next(error);
   }
 };
-
 export const getCashCollectionPayments = async (req, res, next) => {
   try {
-    const page = Math.max(
-      1,
-      parseInt(req.query.page, 10) || 1
-    );
+    const page = Math.max(1, parseInt(req.query.page, 10) || 1);
 
     const limit = Math.min(
-      50,
-      Math.max(
-        1,
-        parseInt(req.query.limit, 10) || 12
-      )
+      MAX_PAGE_LIMIT,
+      Math.max(1, parseInt(req.query.limit, 10) || DEFAULT_PAGE_LIMIT),
     );
 
     const skip = (page - 1) * limit;
 
+    const status = ["pending", "collected", "all"].includes(req.query.status)
+      ? req.query.status
+      : "pending";
+
     /*
-     * Get only CASH and MIXED payments.
-     *
-     * We intentionally don't use:
-     *
-     * isCollected: false
-     *
-     * because old payment records may not have
-     * isCollected properly stored.
-     *
-     * Instead, we calculate the actual remaining
-     * cash amount below.
+     * NOTE ON SCALE:
+     * We load every cash/mixed PaymentHistory record into memory and
+     * compute remainingAmount in JS, because old records can't be
+     * trusted to have an accurate `isCollected` flag stored. This is
+     * fine at moderate volume (hundreds/low thousands of records). If
+     * this collection grows large, move this to a Mongo aggregation
+     * pipeline ($addFields + $match + $facet) so filtering and
+     * pagination happen in the DB instead of in Node.
      */
-    const payments = await PaymentHistory.find({
-      paymentMethod: {
-        $in: ["cash", "mixed"],
-      },
+    const rawPayments = await PaymentHistory.find({
+      paymentMethod: { $in: ["cash", "mixed"] },
     })
-      .populate(
-        "createdBy",
-        "name fullName email username"
-      )
-      .sort({
-        createdAt: -1,
-      })
+      .populate("createdBy", "name fullName email username")
+      .sort({ createdAt: -1 })
       .lean();
 
-    /*
-     * Calculate remaining cash for every payment.
-     */
-    const pendingPayments = payments
-      .map((payment) => {
-        const method = String(
-          payment.paymentMethod || ""
-        ).toLowerCase();
+    const computed = rawPayments.map(computePaymentFields);
 
-        /*
-         * CASH:
-         * Entire payment amount is collectible.
-         *
-         * MIXED:
-         * Only the cash portion is collectible.
-         */
-        const collectibleAmount =
-          method === "mixed"
-            ? Number(
-                payment.paymentBreakdown?.cash
-              ) || 0
-            : Number(payment.amount) || 0;
+    /* ---- stats for tab badges & summary — always computed over the
+       FULL data set, independent of the current page, so the UI can
+       show an exact total even before every page has loaded ---- */
 
-        const collectedAmount =
-          Number(payment.collectedAmount) || 0;
+    const todayStart = startOfToday();
+    const todayEnd = endOfToday();
 
-        const remainingAmount = Math.max(
-          0,
-          Number(
-            (
-              collectibleAmount -
-              collectedAmount
-            ).toFixed(2)
-          )
-        );
+    const stats = {
+      pending: { count: 0, amount: 0 },
+      collectedToday: { count: 0, amount: 0 },
+      collectedTotal: { count: 0, amount: 0 },
+      all: { count: computed.length },
+    };
 
-        return {
-          ...payment,
+    computed.forEach((payment) => {
+      if (!payment.isCollected) {
+        stats.pending.count += 1;
+        stats.pending.amount += payment.remainingAmount;
+        return;
+      }
 
-          collectibleAmount,
+      stats.collectedTotal.count += 1;
+      stats.collectedTotal.amount += payment.collectedAmount;
 
-          collectedAmount,
+      const collectedAt = payment.lastCollectedAt
+        ? new Date(payment.lastCollectedAt)
+        : null;
 
-          remainingAmount,
+      if (collectedAt && collectedAt >= todayStart && collectedAt <= todayEnd) {
+        stats.collectedToday.count += 1;
+        stats.collectedToday.amount += payment.collectedAmount;
+      }
+    });
 
-          isCollected:
-            remainingAmount <=
-            AMOUNT_EPSILON,
-        };
-      })
+    stats.pending.amount = Number(stats.pending.amount.toFixed(2));
+    stats.collectedToday.amount = Number(
+      stats.collectedToday.amount.toFixed(2),
+    );
+    stats.collectedTotal.amount = Number(
+      stats.collectedTotal.amount.toFixed(2),
+    );
 
-      /*
-       * IMPORTANT:
-       *
-       * If remaining amount is ₹0,
-       * don't return the payment.
-       *
-       * Therefore after collecting the full amount,
-       * the payment disappears from this screen.
-       */
-      .filter(
-        (payment) =>
-          payment.remainingAmount >
-          AMOUNT_EPSILON
+    /* ---- filter by requested tab ---- */
+
+    let filtered;
+
+    if (status === "pending") {
+      filtered = computed.filter((payment) => !payment.isCollected);
+    } else if (status === "collected") {
+      filtered = computed.filter((payment) => payment.isCollected);
+
+      const { collectedFrom, collectedTo } = req.query;
+
+      if (collectedFrom || collectedTo) {
+        const from = collectedFrom ? new Date(collectedFrom) : null;
+        const to = collectedTo ? new Date(collectedTo) : null;
+
+        filtered = filtered.filter((payment) => {
+          if (!payment.lastCollectedAt) return false;
+
+          const collectedAt = new Date(payment.lastCollectedAt);
+
+          if (from && collectedAt < from) return false;
+          if (to && collectedAt > to) return false;
+
+          return true;
+        });
+      }
+
+      filtered.sort(
+        (a, b) =>
+          new Date(b.lastCollectedAt || 0) - new Date(a.lastCollectedAt || 0),
       );
+    } else {
+      // "all" — already sorted newest-first by createdAt from the query
+      filtered = computed;
+    }
 
-    /*
-     * Apply pagination AFTER filtering.
-     *
-     * This makes sure the screen receives the correct
-     * pending collection records.
-     */
-    const total = pendingPayments.length;
+    const total = filtered.length;
 
-    const paginatedPayments =
-      pendingPayments.slice(
-        skip,
-        skip + limit
-      );
+    const paginatedPayments = filtered.slice(skip, skip + limit);
 
-    const hasMore =
-      skip + limit < total;
+    const hasMore = skip + limit < total;
 
     return res.status(200).json({
       success: true,
-
       data: paginatedPayments,
-
       page,
-
       limit,
-
       total,
-
       hasMore,
+      status,
+      stats,
     });
   } catch (error) {
-    console.error(
-      "Get Cash Collection Payments Error:",
-      error
-    );
-
+    console.error("Get Cash Collection Payments Error:", error);
     next(error);
   }
 };
