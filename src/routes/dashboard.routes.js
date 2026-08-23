@@ -5,6 +5,6 @@ import { getVehiclesForImport } from "../controllers/dashboard.controller.js";
 
 const router = express.Router();
 
-router.get("/import", protect, getVehiclesForImport);
+router.get("/import",getVehiclesForImport);
 
 export default router;
