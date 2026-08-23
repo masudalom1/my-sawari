@@ -19,6 +19,7 @@ import customerRoutes from "./routes/customer.routes.js";
 import leadRoutes from "./routes/lead.routes.js";
 import bookingRoutes from "./routes/bookingRoutes.js";
 import paymentHistoryRoutes from "./routes/paymentHistory.routes.js"
+import dashboardRoutes from "./routes/dashboard.routes.js"
 
 dotenv.config();
 
@@ -131,6 +132,7 @@ app.use("/api/v1/customers", customerRoutes);
 app.use("/api/v1/leads", leadRoutes);
 app.use("/api/v1/bookings", bookingRoutes);
 app.use("/api/v1/payments", paymentHistoryRoutes);
+app.use("/api/v1/dashboard", dashboardRoutes);
 
 
 // 404
