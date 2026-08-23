@@ -1,4 +1,5 @@
 import Vehicle from "../models/vehicle.model.js";
+import Booking from "../models/booking.model.js"
 
 export const getVehiclesForImport = async (req, res) => {
   try {
