@@ -6,8 +6,10 @@ export const getVehiclesForImport = async (req, res) => {
     const vehicles = await Vehicle.find({
       isDeleted: false,
     })
-      .select("_id vehicleName vehicleNumber vehicleType images status")
-      .sort({ vehicleName: 1 })
+      .select(
+        "_id vehicleName vehicleNumber vehicleType images status pricePerDay"
+      )
+      .sort({ pricePerDay: 1 })
       .lean();
 
     const formattedVehicles = vehicles.map((vehicle) => ({
@@ -17,6 +19,7 @@ export const getVehiclesForImport = async (req, res) => {
       vehicleType: vehicle.vehicleType,
       image: vehicle.images?.[0]?.url || null,
       status: vehicle.status,
+      pricePerDay: vehicle.pricePerDay || 0,
     }));
 
     return res.status(200).json({
