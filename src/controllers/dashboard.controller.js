@@ -2,28 +2,26 @@ import Vehicle from "../models/vehicle.model.js";
 
 export const getVehiclesForImport = async (req, res) => {
   try {
-    // Company comes from authenticated user
-    const companyId = req.user.company || req.user._id;
-
-    if (!companyId) {
-      return res.status(401).json({
-        success: false,
-        message: "Company information not found",
-      });
-    }
-
     const vehicles = await Vehicle.find({
-      company: companyId,
       isDeleted: false,
     })
-      .select("_id vehicleName vehicleNumber images status")
+      .select("_id vehicleName vehicleNumber vehicleType images status")
       .sort({ vehicleName: 1 })
       .lean();
 
+    const formattedVehicles = vehicles.map((vehicle) => ({
+      _id: vehicle._id,
+      vehicleName: vehicle.vehicleName,
+      vehicleNumber: vehicle.vehicleNumber,
+      vehicleType: vehicle.vehicleType,
+      image: vehicle.images?.[0]?.url || null,
+      status: vehicle.status,
+    }));
+
     return res.status(200).json({
       success: true,
-      count: vehicles.length,
-      vehicles,
+      count: formattedVehicles.length,
+      vehicles: formattedVehicles,
     });
   } catch (error) {
     console.error("Get vehicles for import error:", error);
