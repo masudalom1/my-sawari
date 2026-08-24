@@ -1839,281 +1839,8 @@ const combineDateAndTime = (date, time) => {
   return d;
 };
 
-//old fresh booking and below new one creating leand booking both
-export const createBooking = async (req, res, next) => {
-  try {
-    const {
-      customerName,
-      mobileNumber,
-      alternateMobileNumber,
-      occupation,
-      destination,
-      aadhaarNumber,
-      drivingLicenseNumber,
-      totalDays,
-      tripType,
-      fromDate,
-      toDate,
-      pickupTime,
-      dropTime,
-      residents,
-
-      vehicleId,
-
-      bookingAmount,
-      discountAmount,
-      securityDeposit,
-
-      // Pickup / Drop Service
-      pickupDropRequired = false,
-      serviceType = "pickup_drop",
-
-      pickup = {},
-      drop = {},
-      pickupDropNotes = "",
-    } = req.body;
-
-    // =========================
-    // VALIDATIONS
-    // =========================
-
-    if (!customerName?.trim()) {
-      return res.status(400).json({
-        success: false,
-        message: "Customer name is required.",
-      });
-    }
-
-    if (!mobileNumber?.trim()) {
-      return res.status(400).json({
-        success: false,
-        message: "Mobile number is required.",
-      });
-    }
-
-    if (!vehicleId) {
-      return res.status(400).json({
-        success: false,
-        message: "Vehicle is required.",
-      });
-    }
-
-    if (!fromDate || !toDate) {
-      return res.status(400).json({
-        success: false,
-        message: "Trip dates are required.",
-      });
-    }
-
-    if (pickupDropRequired) {
-      if (
-        (serviceType === "pickup" || serviceType === "pickup_drop") &&
-        !pickup.location?.trim()
-      ) {
-        return res.status(400).json({
-          success: false,
-          message: "Pickup location is required.",
-        });
-      }
-
-      if (
-        (serviceType === "drop" || serviceType === "pickup_drop") &&
-        !drop.location?.trim()
-      ) {
-        return res.status(400).json({
-          success: false,
-          message: "Drop location is required.",
-        });
-      }
-    }
-
-    // =========================
-    // VEHICLE
-    // =========================
-
-    const vehicle = await Vehicle.findById(vehicleId);
-
-    if (!vehicle || vehicle.isDeleted) {
-      return res.status(404).json({
-        success: false,
-        message: "Vehicle not found.",
-      });
-    }
-
-    // =========================
-    // DATES
-    // =========================
-    // Keep fromDate/toDate date-only (no time-of-day baked in). This matches
-    // createLeadBooking and keeps the schema's pre-save totalDays calc
-    // (which re-derives totalDays from fromDate/toDate) consistent with the
-    // totalDays used below to compute quotationAmount. pickupTime/dropTime
-    // are stored separately as display strings, same as the lead flow.
-
-    const finalFromDate = new Date(fromDate);
-    const finalToDate = new Date(toDate);
-    const finalTotalDays = Number(totalDays);
-
-    if (!Number.isInteger(finalTotalDays) || finalTotalDays < 1) {
-      return res.status(400).json({
-        success: false,
-        message: "Invalid total days.",
-      });
-    }
-
-    // =========================
-    // DUPLICATE BOOKING CHECK
-    // =========================
-    // Prevent double-booking the same vehicle for an overlapping trip window,
-    // mirroring the guard in createLeadBooking.
-
-    const existingBooking = await Booking.findOne({
-      vehicleId,
-      fromDate: finalFromDate,
-      toDate: finalToDate,
-      isDeleted: false,
-      status: { $nin: ["cancelled", "completed"] },
-    });
-
-    if (existingBooking) {
-      return res.status(400).json({
-        success: false,
-        message:
-          "A booking already exists for this vehicle during the selected trip.",
-      });
-    }
-
-    // =========================
-    // TOTAL DAYS
-    // =========================
-    // =========================
-    // TOTAL DAYS
-    // =========================
-
-    const pickupDateTime = combineDateAndTime(
-      finalFromDate,
-      pickupTime || "08:00 AM",
-    );
-
-    const dropDateTime = combineDateAndTime(
-      finalToDate,
-      dropTime || "08:00 AM",
-    );
-
-    const diffMs = dropDateTime.getTime() - pickupDateTime.getTime();
-
-    // =========================
-    // PRICING
-    // =========================
-
-    const vehicleRent = Number(vehicle.pricePerDay || 0) * finalTotalDays;
-
-    const pickupCharge =
-      pickupDropRequired &&
-      (serviceType === "pickup" || serviceType === "pickup_drop")
-        ? Number(pickup.charge || 0)
-        : 0;
-
-    const dropCharge =
-      pickupDropRequired &&
-      (serviceType === "drop" || serviceType === "pickup_drop")
-        ? Number(drop.charge || 0)
-        : 0;
-
-    const serviceCharge = pickupCharge + dropCharge;
-
-    const quotationAmount = vehicleRent + serviceCharge;
-
-    // =========================
-    // CREATE BOOKING
-    // =========================
-
-    const booking = await Booking.create({
-      lead: null,
-
-      company: req.user.company || req.user._id,
-      createdBy: req.user._id,
-
-      customerName: customerName.trim(),
-      mobileNumber: mobileNumber.trim(),
-
-      alternateMobileNumber: alternateMobileNumber?.trim() || "",
-
-      occupation: occupation?.trim() || "",
-
-      destination: destination?.trim() || "",
-
-      aadhaarNumber: aadhaarNumber?.trim() || "",
-
-      drivingLicenseNumber: drivingLicenseNumber?.trim().toUpperCase() || "",
-
-      tripType: tripType || "local",
-
-      fromDate: finalFromDate,
-      toDate: finalToDate,
-
-      pickupTime: pickupTime || "09:00 AM",
-      dropTime: dropTime || "06:00 PM",
-
-      totalDays: finalTotalDays,
-      residents: Number(residents) || 1,
-
-      vehicleId: vehicle._id,
-      vehicleName: vehicle.vehicleName,
-      vehicleNumber: vehicle.vehicleNumber,
-      vehicleColor: vehicle.color,
-
-      quotationAmount,
-
-      bookingAmount: Number(bookingAmount) || 0,
-      discountAmount: Number(discountAmount) || 0,
-      securityDeposit: Number(securityDeposit) || 0,
-
-      // =========================
-      // PICKUP / DROP SERVICE
-      // =========================
-
-      pickupDropRequired,
-
-      serviceType,
-
-      pickup: {
-        location: pickup.location?.trim() || "",
-        landmark: pickup.landmark?.trim() || "",
-        mapLink: pickup.mapLink?.trim() || "",
-        charge: pickupCharge,
-      },
-
-      drop: {
-        location: drop.location?.trim() || "",
-        landmark: drop.landmark?.trim() || "",
-        mapLink: drop.mapLink?.trim() || "",
-        charge: dropCharge,
-      },
-
-      pickupDropNotes: pickupDropNotes?.trim() || "",
-
-      status: "confirmed",
-    });
-
-    await booking.populate({
-      path: "vehicleId",
-      select: "vehicleName vehicleNumber color manufacturer model pricePerDay",
-    });
-
-    return res.status(201).json({
-      success: true,
-      message: "Booking created successfully.",
-      booking,
-    });
-  } catch (error) {
-    next(error);
-  }
-};
-
-//v1.0
-
 //v1.1
-export const createBookings = async (req, res, next) => {
+export const createBooking = async (req, res, next) => {
   const session = await mongoose.startSession();
   try {
     const {
@@ -2210,7 +1937,6 @@ export const createBookings = async (req, res, next) => {
       });
     }
 
-
     // NEW: validate payment method / mixed breakdown
     const VALID_PAYMENT_METHODS = ["cash", "phonepe", "razorpay", "mixed"];
     if (!VALID_PAYMENT_METHODS.includes(paymentMethod)) {
@@ -2236,9 +1962,6 @@ export const createBookings = async (req, res, next) => {
         });
       }
     } else if (advancePaid > 0) {
-      // Single-method payments: mirror the full advance into that method's
-      // breakdown bucket so paymentBreakdown is always a complete record,
-      // even when the user didn't fill it in manually.
       breakdown.cash = paymentMethod === "cash" ? advancePaid : 0;
       breakdown.phonePe = paymentMethod === "phonepe" ? advancePaid : 0;
       breakdown.razorpay = paymentMethod === "razorpay" ? advancePaid : 0;
@@ -2265,15 +1988,12 @@ export const createBookings = async (req, res, next) => {
         : 0;
     const fastagAmount = Number(fastagBalance || 0);
 
-    // Total rental amount — discount is NOT subtracted here, it only
-    // reduces the balance due, matching the frontend bill summary logic.
     const quotationAmount =
       vehicleRent + pickupCharge + dropCharge + fastagAmount;
 
     const finalDiscountAmount = Number(discountAmount) || 0;
     const finalSecurityDeposit = Number(securityDeposit) || 0;
 
-    // ========================= TRANSACTION: Lead (existing or new) -> Booking -> link =========================
     session.startTransaction();
 
     const existingBooking = await Booking.findOne({
@@ -2413,12 +2133,6 @@ export const createBookings = async (req, res, next) => {
       { session },
     );
 
-    // ==========================
-    // CREATE PAYMENT HISTORY
-    // ==========================
-    // Record booking advance payment separately.
-    // Payment history failure must NOT break booking creation.
-
     if (Number(advancePaid) > 0) {
       try {
         await PaymentHistory.create({
@@ -2479,11 +2193,6 @@ export const createBookings = async (req, res, next) => {
   } catch (error) {
     if (session.inTransaction()) await session.abortTransaction();
 
-    // MongoDB replica-set transactions raise a WriteConflict (code 112) or
-    // similar TransientTransactionError label when two concurrent requests
-    // touch overlapping data — this is the last line of defense against
-    // the race window described above. Surface it as a normal conflict
-    // instead of a generic 500.
     if (
       error?.code === 112 ||
       error?.errorLabels?.includes("TransientTransactionError")
@@ -2500,7 +2209,710 @@ export const createBookings = async (req, res, next) => {
     session.endSession();
   }
 };
+export const createBookings = async (req, res, next) => {
+  const session = await mongoose.startSession();
 
+  try {
+    const {
+      customerName,
+      mobileNumber,
+      alternateMobileNumber,
+      occupation,
+      destination,
+      aadhaarNumber,
+      drivingLicenseNumber,
+
+      // We accept this for compatibility with the frontend,
+      // but backend calculates the real value.
+      totalDays,
+
+      tripType,
+      fromDate,
+      toDate,
+      pickupTime,
+      dropTime,
+      residents,
+      vehicleId,
+      vehicleType,
+
+      bookingAmount,
+      discountAmount,
+      securityDeposit,
+      fastagBalance,
+
+      paymentMethod = "cash",
+      paymentBreakdown = {},
+
+      pickupDropRequired = false,
+      serviceType = "pickup_drop",
+      pickup = {},
+      drop = {},
+      pickupDropNotes = "",
+    } = req.body;
+
+    // ============================================================
+    // BASIC VALIDATION
+    // ============================================================
+
+    if (!customerName?.trim()) {
+      return res.status(400).json({
+        success: false,
+        message: "Customer name is required.",
+      });
+    }
+
+    if (!mobileNumber?.trim()) {
+      return res.status(400).json({
+        success: false,
+        message: "Mobile number is required.",
+      });
+    }
+
+    if (!vehicleId) {
+      return res.status(400).json({
+        success: false,
+        message: "Vehicle is required.",
+      });
+    }
+
+    if (!fromDate || !toDate) {
+      return res.status(400).json({
+        success: false,
+        message: "Trip dates are required.",
+      });
+    }
+
+    // ============================================================
+    // PICKUP / DROP VALIDATION
+    // ============================================================
+
+    if (pickupDropRequired) {
+      if (
+        (serviceType === "pickup" || serviceType === "pickup_drop") &&
+        !pickup.location?.trim()
+      ) {
+        return res.status(400).json({
+          success: false,
+          message: "Pickup location is required.",
+        });
+      }
+
+      if (
+        (serviceType === "drop" || serviceType === "pickup_drop") &&
+        !drop.location?.trim()
+      ) {
+        return res.status(400).json({
+          success: false,
+          message: "Drop location is required.",
+        });
+      }
+    }
+
+    // ============================================================
+    // DATE PARSER
+    //
+    // Only accept:
+    //
+    // YYYY-MM-DD
+    //
+    // Example:
+    // 2026-08-25
+    //
+    // Store at UTC midnight to prevent timezone shifting.
+    // ============================================================
+
+    const parseBookingDate = (value) => {
+      if (typeof value !== "string") {
+        return null;
+      }
+
+      const dateString = value.trim();
+
+      const match = dateString.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+
+      if (!match) {
+        return null;
+      }
+
+      const year = Number(match[1]);
+      const month = Number(match[2]);
+      const day = Number(match[3]);
+
+      const date = new Date(Date.UTC(year, month - 1, day));
+
+      // Validate dates like:
+      // 2026-02-31
+      // 2026-04-31
+      // etc.
+      if (
+        date.getUTCFullYear() !== year ||
+        date.getUTCMonth() !== month - 1 ||
+        date.getUTCDate() !== day
+      ) {
+        return null;
+      }
+
+      return date;
+    };
+
+    const finalFromDate = parseBookingDate(fromDate);
+    const finalToDate = parseBookingDate(toDate);
+
+    // ============================================================
+    // DATE VALIDATION
+    // ============================================================
+
+    if (!finalFromDate) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid start date. Date must be in YYYY-MM-DD format.",
+      });
+    }
+
+    if (!finalToDate) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid end date. Date must be in YYYY-MM-DD format.",
+      });
+    }
+
+    // Start must be before end.
+    if (finalFromDate >= finalToDate) {
+      return res.status(400).json({
+        success: false,
+        message: "End date must be after start date.",
+      });
+    }
+
+    // ============================================================
+    // FUTURE DATE VALIDATION
+    //
+    // No maximum duration.
+    //
+    // 25 Aug -> 09 Sep       allowed
+    // 25 Aug -> 25 Dec       allowed
+    // 25 Aug -> 25 Aug 2027  allowed
+    // ============================================================
+
+    const now = new Date();
+
+    const todayUTC = new Date(
+      Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()),
+    );
+
+    if (finalFromDate < todayUTC) {
+      return res.status(400).json({
+        success: false,
+        message: "Booking start date cannot be in the past.",
+      });
+    }
+
+    // ============================================================
+    // CALCULATE TOTAL DAYS
+    //
+    // Backend is the source of truth.
+    // Do not trust frontend totalDays.
+    // ============================================================
+
+    const MS_PER_DAY = 24 * 60 * 60 * 1000;
+
+    const calculatedTotalDays = Math.round(
+      (finalToDate.getTime() - finalFromDate.getTime()) / MS_PER_DAY,
+    );
+
+    if (calculatedTotalDays < 1) {
+      return res.status(400).json({
+        success: false,
+        message: "Booking duration must be at least 1 day.",
+      });
+    }
+
+    const finalTotalDays = calculatedTotalDays;
+
+    // ============================================================
+    // PAYMENT METHOD VALIDATION
+    // ============================================================
+
+    const VALID_PAYMENT_METHODS = ["cash", "phonepe", "razorpay", "mixed"];
+
+    if (!VALID_PAYMENT_METHODS.includes(paymentMethod)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid payment method.",
+      });
+    }
+
+    const advancePaid = Number(bookingAmount) || 0;
+
+    if (advancePaid < 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Booking amount cannot be negative.",
+      });
+    }
+
+    const breakdown = {
+      cash: Number(paymentBreakdown.cash) || 0,
+      phonePe: Number(paymentBreakdown.phonePe) || 0,
+      razorpay: Number(paymentBreakdown.razorpay) || 0,
+    };
+
+    // ============================================================
+    // MIXED PAYMENT VALIDATION
+    // ============================================================
+
+    if (paymentMethod === "mixed") {
+      const breakdownSum =
+        breakdown.cash + breakdown.phonePe + breakdown.razorpay;
+
+      if (Math.round(breakdownSum * 100) !== Math.round(advancePaid * 100)) {
+        return res.status(400).json({
+          success: false,
+          message: `Payment breakdown (₹${breakdownSum}) does not match the advance amount (₹${advancePaid}).`,
+        });
+      }
+    } else if (advancePaid > 0) {
+      breakdown.cash = paymentMethod === "cash" ? advancePaid : 0;
+
+      breakdown.phonePe = paymentMethod === "phonepe" ? advancePaid : 0;
+
+      breakdown.razorpay = paymentMethod === "razorpay" ? advancePaid : 0;
+    }
+
+    // ============================================================
+    // VEHICLE
+    // ============================================================
+
+    const vehicle = await Vehicle.findOne({
+      _id: vehicleId,
+      isDeleted: false,
+    });
+
+    if (!vehicle) {
+      return res.status(404).json({
+        success: false,
+        message: "Vehicle not found.",
+      });
+    }
+
+    // ============================================================
+    // PRICING
+    // ============================================================
+
+    const vehicleRent = Number(vehicle.pricePerDay || 0) * finalTotalDays;
+
+    const pickupCharge =
+      pickupDropRequired &&
+      (serviceType === "pickup" || serviceType === "pickup_drop")
+        ? Number(pickup.charge || 0)
+        : 0;
+
+    const dropCharge =
+      pickupDropRequired &&
+      (serviceType === "drop" || serviceType === "pickup_drop")
+        ? Number(drop.charge || 0)
+        : 0;
+
+    const fastagAmount = Number(fastagBalance || 0);
+
+    const quotationAmount =
+      vehicleRent + pickupCharge + dropCharge + fastagAmount;
+
+    const finalDiscountAmount = Number(discountAmount) || 0;
+
+    const finalSecurityDeposit = Number(securityDeposit) || 0;
+
+    // ============================================================
+    // START TRANSACTION
+    // ============================================================
+
+    await session.startTransaction();
+
+    // ============================================================
+    // CHECK BOOKING CONFLICT
+    // ============================================================
+
+    const existingBooking = await Booking.findOne({
+      vehicleId: vehicle._id,
+
+      isDeleted: false,
+
+      status: {
+        $nin: ["cancelled", "completed"],
+      },
+
+      fromDate: {
+        $lt: finalToDate,
+      },
+
+      toDate: {
+        $gt: finalFromDate,
+      },
+    })
+      .select("_id bookingCode fromDate toDate status customerName")
+      .session(session);
+
+    if (existingBooking) {
+      await session.abortTransaction();
+
+      return res.status(409).json({
+        success: false,
+        message: "This vehicle is already booked during the selected dates.",
+        conflict: {
+          bookingId: existingBooking._id,
+          bookingCode: existingBooking.bookingCode || null,
+          customerName: existingBooking.customerName || "",
+          fromDate: existingBooking.fromDate,
+          toDate: existingBooking.toDate,
+          status: existingBooking.status,
+        },
+      });
+    }
+
+    // ============================================================
+    // COMPANY
+    // ============================================================
+
+    const companyId = req.user.company || req.user._id;
+
+    // ============================================================
+    // FIND EXISTING LEAD
+    // ============================================================
+
+    let lead = await Lead.findOne({
+      mobileNumber: mobileNumber.trim(),
+
+      company: companyId,
+
+      isDeleted: false,
+    }).session(session);
+
+    // ============================================================
+    // CREATE LEAD IF NOT EXISTS
+    // ============================================================
+
+    if (!lead) {
+      const [newLead] = await Lead.create(
+        [
+          {
+            customerName: customerName.trim(),
+
+            mobileNumber: mobileNumber.trim(),
+
+            vehicleType: vehicleType === "bike" ? "bike" : "car",
+
+            vehicleName: vehicle.vehicleName,
+
+            fromDate: finalFromDate,
+
+            toDate: finalToDate,
+
+            totalDays: finalTotalDays,
+
+            residents: Number(residents) || 1,
+
+            source: "other",
+
+            status: "Booking confirmed",
+
+            quotationAmount,
+
+            isBookingCreated: true,
+
+            company: companyId,
+
+            createdBy: req.user._id,
+
+            booking: {
+              alternateMobileNumber: alternateMobileNumber?.trim() || "",
+
+              occupation: occupation?.trim() || "",
+
+              destination: destination?.trim() || "",
+
+              aadhaarNumber: aadhaarNumber?.trim() || "",
+
+              drivingLicenseNumber:
+                drivingLicenseNumber?.trim().toUpperCase() || "",
+
+              tripType: tripType || "local",
+
+              vehicleId: vehicle._id,
+
+              vehicleName: vehicle.vehicleName,
+
+              bookingAmount: advancePaid,
+
+              discountAmount: finalDiscountAmount,
+
+              createdAt: new Date(),
+            },
+          },
+        ],
+        {
+          session,
+        },
+      );
+
+      lead = newLead;
+    }
+
+    // ============================================================
+    // CREATE BOOKING
+    // ============================================================
+
+    const [booking] = await Booking.create(
+      [
+        {
+          lead: lead._id,
+
+          company: companyId,
+
+          createdBy: req.user._id,
+
+          customerName: customerName.trim(),
+
+          mobileNumber: mobileNumber.trim(),
+
+          alternateMobileNumber: alternateMobileNumber?.trim() || "",
+
+          occupation: occupation?.trim() || "",
+
+          destination: destination?.trim() || "",
+
+          aadhaarNumber: aadhaarNumber?.trim() || "",
+
+          drivingLicenseNumber:
+            drivingLicenseNumber?.trim().toUpperCase() || "",
+
+          tripType: tripType || "local",
+
+          // IMPORTANT:
+          // Store canonical UTC date.
+          fromDate: finalFromDate,
+
+          toDate: finalToDate,
+
+          pickupTime: pickupTime || "08:00 AM",
+
+          dropTime: dropTime || "08:00 AM",
+
+          // Backend calculated value.
+          totalDays: finalTotalDays,
+
+          residents: Number(residents) || 1,
+
+          vehicleId: vehicle._id,
+
+          vehicleName: vehicle.vehicleName,
+
+          vehicleNumber: vehicle.vehicleNumber,
+
+          vehicleColor: vehicle.color,
+
+          // Flat fields.
+          quotationAmount,
+
+          bookingAmount: advancePaid,
+
+          discountAmount: finalDiscountAmount,
+
+          securityDeposit: finalSecurityDeposit,
+
+          fastagBalance: fastagAmount,
+
+          // Structured payment.
+          payment: {
+            vehicleRent,
+
+            pickupCharge,
+
+            dropCharge,
+
+            fastagAmount,
+
+            totalAmount: quotationAmount,
+
+            discountAmount: finalDiscountAmount,
+
+            securityDeposit: finalSecurityDeposit,
+
+            bookingAmountPaid: advancePaid,
+
+            paymentMethod,
+
+            paymentBreakdown: breakdown,
+          },
+
+          pickupDropRequired,
+
+          serviceType,
+
+          pickup: {
+            location: pickup.location?.trim() || "",
+
+            landmark: pickup.landmark?.trim() || "",
+
+            mapLink: pickup.mapLink?.trim() || "",
+
+            charge: pickupCharge,
+          },
+
+          drop: {
+            location: drop.location?.trim() || "",
+
+            landmark: drop.landmark?.trim() || "",
+
+            mapLink: drop.mapLink?.trim() || "",
+
+            charge: dropCharge,
+          },
+
+          pickupDropNotes: pickupDropNotes?.trim() || "",
+
+          status: "confirmed",
+        },
+      ],
+      {
+        session,
+      },
+    );
+
+    // ============================================================
+    // PAYMENT HISTORY
+    // ============================================================
+
+    if (advancePaid > 0) {
+      try {
+        await PaymentHistory.create(
+          [
+            {
+              company: companyId,
+
+              bookingId: booking._id,
+
+              customer: {
+                fullName: customerName.trim(),
+
+                mobileNumber: mobileNumber.trim(),
+              },
+
+              vehicle: {
+                vehicleId: vehicle._id,
+
+                vehicleName: vehicle.vehicleName,
+
+                vehicleNumber: vehicle.vehicleNumber,
+              },
+
+              amount: advancePaid,
+
+              paymentMethod,
+
+              paymentBreakdown: {
+                cash: Number(breakdown.cash) || 0,
+
+                phonePe: Number(breakdown.phonePe) || 0,
+
+                razorpay: Number(breakdown.razorpay) || 0,
+              },
+
+              type: "booking",
+
+              note: "Booking advance payment",
+
+              createdBy: req.user._id,
+            },
+          ],
+          {
+            session,
+          },
+        );
+      } catch (paymentHistoryError) {
+        /*
+         * Keep your existing behavior:
+         * booking should not fail only because payment
+         * history creation failed.
+         */
+        console.error("Payment History Creation Error:", paymentHistoryError);
+      }
+    }
+
+    // ============================================================
+    // UPDATE LEAD
+    // ============================================================
+
+    lead.bookingId = booking._id;
+
+    lead.bookingConfirmedAt = new Date();
+
+    lead.isBookingCreated = true;
+
+    await lead.save({
+      session,
+    });
+
+    // ============================================================
+    // COMMIT TRANSACTION
+    // ============================================================
+
+    await session.commitTransaction();
+
+    // ============================================================
+    // POPULATE VEHICLE
+    // ============================================================
+
+    await booking.populate({
+      path: "vehicleId",
+
+      select: "vehicleName vehicleNumber color manufacturer model pricePerDay",
+    });
+
+    // ============================================================
+    // RESPONSE
+    // ============================================================
+
+    return res.status(201).json({
+      success: true,
+
+      message: "Booking created successfully.",
+
+      booking,
+
+      leadId: lead._id,
+    });
+  } catch (error) {
+    // ============================================================
+    // ROLLBACK
+    // ============================================================
+
+    if (session.inTransaction()) {
+      await session.abortTransaction();
+    }
+
+    // ============================================================
+    // TRANSACTION CONFLICT
+    // ============================================================
+
+    if (
+      error?.code === 112 ||
+      error?.errorLabels?.includes("TransientTransactionError")
+    ) {
+      return res.status(409).json({
+        success: false,
+
+        message:
+          "This vehicle was just booked by someone else for overlapping dates. Please refresh and try again.",
+      });
+    }
+
+    console.error("Create booking error:", error);
+
+    next(error);
+  } finally {
+    await session.endSession();
+  }
+};
 export const getBookingDetails = async (req, res, next) => {
   try {
     const { id } = req.params;
