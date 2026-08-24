@@ -2210,12 +2210,6 @@ export const createBookings = async (req, res, next) => {
       });
     }
 
-    if (finalFromDate >= finalToDate) {
-      return res.status(400).json({
-        success: false,
-        message: "End date must be after start date.",
-      });
-    }
 
     // NEW: validate payment method / mixed breakdown
     const VALID_PAYMENT_METHODS = ["cash", "phonepe", "razorpay", "mixed"];
