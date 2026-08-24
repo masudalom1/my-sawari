@@ -2201,13 +2201,20 @@ export const createBookings = async (req, res, next) => {
     const finalToDate = new Date(toDate);
 
     if (
-      isNaN(finalFromDate.getTime()) ||
-      isNaN(finalToDate.getTime()) ||
-      finalFromDate >= finalToDate
+      !Number.isFinite(finalFromDate.getTime()) ||
+      !Number.isFinite(finalToDate.getTime())
     ) {
-      return res
-        .status(400)
-        .json({ success: false, message: "Invalid trip date range." });
+      return res.status(400).json({
+        success: false,
+        message: "Invalid trip date.",
+      });
+    }
+
+    if (finalFromDate >= finalToDate) {
+      return res.status(400).json({
+        success: false,
+        message: "End date must be after start date.",
+      });
     }
 
     // NEW: validate payment method / mixed breakdown
