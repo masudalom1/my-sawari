@@ -1,7 +1,7 @@
 import mongoose from "mongoose";
 import Maintenance from "../models/maintenance.model.js";
 import Vehicle from "../models/vehicle.model.js";
-import Booking from "../models/booking.model.js"
+import Booking from "../models/booking.model.js";
 
 export const getVehiclesForImport = async (req, res) => {
   try {
@@ -9,7 +9,7 @@ export const getVehiclesForImport = async (req, res) => {
       isDeleted: false,
     })
       .select(
-        "_id vehicleName vehicleNumber vehicleType images status pricePerDay"
+        "_id vehicleName vehicleNumber vehicleType images status pricePerDay",
       )
       .sort({ pricePerDay: 1 })
       .lean();
@@ -48,7 +48,8 @@ export const getBookingsForImport = async (req, res) => {
         $ne: "cancelled",
       },
     })
-      .select(`
+      .select(
+        `
         _id
         bookingCode
         customerName
@@ -67,7 +68,8 @@ export const getBookingsForImport = async (req, res) => {
         pickup
         drop
         payment
-      `)
+      `,
+      )
       .populate({
         path: "vehicleId",
         select: "_id vehicleName vehicleNumber vehicleType images status",
@@ -93,8 +95,7 @@ export const getBookingsForImport = async (req, res) => {
       totalDays: booking.totalDays,
 
       vehicleId: booking.vehicleId?._id || booking.vehicleId,
-      vehicleName:
-        booking.vehicleId?.vehicleName || booking.vehicleName || "",
+      vehicleName: booking.vehicleId?.vehicleName || booking.vehicleName || "",
       vehicleNumber:
         booking.vehicleId?.vehicleNumber || booking.vehicleNumber || "",
 
@@ -124,12 +125,7 @@ export const getBookingsForImport = async (req, res) => {
 
 export const createMaintenance = async (req, res, next) => {
   try {
-    const {
-      vehicle,
-      startDate,
-      endDate,
-      createdBy,
-    } = req.body;
+    const { vehicle, startDate, endDate, createdBy } = req.body;
 
     // -----------------------------
     // Required fields
@@ -243,20 +239,25 @@ export const createMaintenance = async (req, res, next) => {
       startDate: maintenanceStart,
       endDate: maintenanceEnd,
       createdBy,
-
-      // Existing maintenance fields
-      // remain optional and can still
-      // be added later from the other screen.
-
       status: "Scheduled",
     });
+
+    // Update vehicle status to service
+    await Vehicle.findByIdAndUpdate(
+      vehicle,
+      {
+        status: "service",
+      },
+      {
+        new: true,
+        runValidators: true,
+      },
+    );
 
     // -----------------------------
     // Populate vehicle
     // -----------------------------
-    const populatedMaintenance = await Maintenance.findById(
-      maintenance._id
-    )
+    const populatedMaintenance = await Maintenance.findById(maintenance._id)
       .populate("vehicle")
       .populate("createdBy", "name email")
       .lean();
