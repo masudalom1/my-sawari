@@ -11,30 +11,46 @@ const maintenanceSchema = new Schema(
       index: true,
     },
 
+    // Maintenance availability blocking period
+    startDate: {
+      type: Date,
+      required: [true, "Maintenance start date is required"],
+      index: true,
+    },
+
+    endDate: {
+      type: Date,
+      required: [true, "Maintenance end date is required"],
+      index: true,
+    },
+
+    // Existing maintenance information
+    // NOT required when creating simple MNT period
+
     maintenanceType: {
       type: String,
       enum: ["Major", "Minor"],
-      required: [true, "Maintenance type is required"],
       trim: true,
+      default: "",
     },
 
     title: {
       type: String,
-      required: [true, "Maintenance title is required"],
       trim: true,
+      default: "",
     },
 
     description: {
       type: String,
-      required: [true, "Maintenance description is required"],
       trim: true,
+      default: "",
     },
 
     garage: {
       name: {
         type: String,
-        required: [true, "Garage name is required"],
         trim: true,
+        default: "",
       },
       contact: {
         type: String,
@@ -85,13 +101,11 @@ const maintenanceSchema = new Schema(
       default: "",
     },
 
-    // Set automatically when status transitions to "Completed"
     completedDate: {
       type: Date,
       default: null,
     },
 
-    // Proof of completion — captured when status moves to "Completed"
     completionProof: {
       billImage: {
         type: String,
@@ -108,7 +122,7 @@ const maintenanceSchema = new Schema(
       },
     },
 
-  images: [{ type: String }],
+    images: [{ type: String }],
 
     additionalNotes: {
       type: String,
@@ -122,7 +136,6 @@ const maintenanceSchema = new Schema(
       default: "Scheduled",
     },
 
-    // Lightweight audit trail of status changes
     statusHistory: {
       type: [
         {
@@ -166,6 +179,12 @@ const maintenanceSchema = new Schema(
     versionKey: false,
   }
 );
+
+maintenanceSchema.index({
+  vehicle: 1,
+  startDate: 1,
+  endDate: 1,
+});
 
 maintenanceSchema.index({
   vehicle: 1,

@@ -407,16 +407,6 @@ const bookingSchema = new mongoose.Schema(
   },
 );
 
-// =========================
-// AUTO BOOKING CODE
-// =========================
-
-// =========================
-// AUTO-COMPUTE PAYMENT DERIVED FIELDS
-// Keeps balanceAmount / paymentStatus / totalCollected always in sync,
-// the same way Handover.payment does.
-// =========================
-
 bookingSchema.pre("save", function () {
   if (this.payment) {
     const totalAmount = Number(this.payment.totalAmount) || 0;

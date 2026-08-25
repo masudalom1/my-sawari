@@ -1,3 +1,5 @@
+import mongoose from "mongoose";
+import Maintenance from "../models/maintenance.model.js";
 import Vehicle from "../models/vehicle.model.js";
 import Booking from "../models/booking.model.js"
 
@@ -117,5 +119,154 @@ export const getBookingsForImport = async (req, res) => {
       message: "Failed to fetch booking details",
       error: error.message,
     });
+  }
+};
+
+export const createMaintenance = async (req, res, next) => {
+  try {
+    const {
+      vehicle,
+      startDate,
+      endDate,
+      createdBy,
+    } = req.body;
+
+    // -----------------------------
+    // Required fields
+    // -----------------------------
+    if (!vehicle) {
+      return res.status(400).json({
+        success: false,
+        message: "Vehicle is required",
+      });
+    }
+
+    if (!startDate) {
+      return res.status(400).json({
+        success: false,
+        message: "Maintenance start date is required",
+      });
+    }
+
+    if (!endDate) {
+      return res.status(400).json({
+        success: false,
+        message: "Maintenance end date is required",
+      });
+    }
+
+    if (!createdBy) {
+      return res.status(400).json({
+        success: false,
+        message: "Created by is required",
+      });
+    }
+
+    // -----------------------------
+    // Validate ObjectIds
+    // -----------------------------
+    if (!mongoose.Types.ObjectId.isValid(vehicle)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid vehicle ID",
+      });
+    }
+
+    if (!mongoose.Types.ObjectId.isValid(createdBy)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid createdBy ID",
+      });
+    }
+
+    // -----------------------------
+    // Validate dates
+    // -----------------------------
+    const maintenanceStart = new Date(startDate);
+    const maintenanceEnd = new Date(endDate);
+
+    if (Number.isNaN(maintenanceStart.getTime())) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid maintenance start date",
+      });
+    }
+
+    if (Number.isNaN(maintenanceEnd.getTime())) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid maintenance end date",
+      });
+    }
+
+    if (maintenanceEnd <= maintenanceStart) {
+      return res.status(400).json({
+        success: false,
+        message: "Maintenance end date must be after start date",
+      });
+    }
+
+    // -----------------------------
+    // Check overlapping maintenance
+    // -----------------------------
+    const overlappingMaintenance = await Maintenance.findOne({
+      vehicle,
+      isDeleted: false,
+      status: { $ne: "Cancelled" },
+
+      startDate: {
+        $lt: maintenanceEnd,
+      },
+
+      endDate: {
+        $gt: maintenanceStart,
+      },
+    }).lean();
+
+    if (overlappingMaintenance) {
+      return res.status(409).json({
+        success: false,
+        message: "Vehicle already has maintenance during this period",
+        data: {
+          maintenanceId: overlappingMaintenance._id,
+          startDate: overlappingMaintenance.startDate,
+          endDate: overlappingMaintenance.endDate,
+        },
+      });
+    }
+
+    // -----------------------------
+    // Create maintenance
+    // -----------------------------
+    const maintenance = await Maintenance.create({
+      vehicle,
+      startDate: maintenanceStart,
+      endDate: maintenanceEnd,
+      createdBy,
+
+      // Existing maintenance fields
+      // remain optional and can still
+      // be added later from the other screen.
+
+      status: "Scheduled",
+    });
+
+    // -----------------------------
+    // Populate vehicle
+    // -----------------------------
+    const populatedMaintenance = await Maintenance.findById(
+      maintenance._id
+    )
+      .populate("vehicle")
+      .populate("createdBy", "name email")
+      .lean();
+
+    return res.status(201).json({
+      success: true,
+      message: "Maintenance created successfully",
+      data: populatedMaintenance,
+    });
+  } catch (error) {
+    next(error);
   }
 };
