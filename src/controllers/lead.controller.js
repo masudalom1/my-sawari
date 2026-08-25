@@ -2954,6 +2954,19 @@ export const getBookingDetails = async (req, res, next) => {
   }
 };
 
+const calculateTotalDaysFromDates = (fromDate, toDate) => {
+  const start = new Date(fromDate);
+  const end = new Date(toDate);
+
+  start.setHours(0, 0, 0, 0);
+  end.setHours(0, 0, 0, 0);
+
+  const diffMs = end.getTime() - start.getTime();
+  const diffDays = Math.round(diffMs / (1000 * 60 * 60 * 24));
+
+  return diffDays < 1 ? 1 : diffDays;
+};
+
 export const updateBooking = async (req, res, next) => {
   try {
     const { id } = req.params;
@@ -2984,8 +2997,6 @@ export const updateBooking = async (req, res, next) => {
       pickupTime,
       dropTime,
       residents,
-
-      totalDays,
 
       vehicleId,
 
@@ -3033,18 +3044,27 @@ export const updateBooking = async (req, res, next) => {
     const finalFromDate = new Date(fromDate);
     const finalToDate = new Date(toDate);
 
-    // =========================
-    // TOTAL DAYS
-    // =========================
-
-    const finalTotalDays = Number(totalDays);
-
-    if (!Number.isInteger(finalTotalDays) || finalTotalDays < 1) {
+    if (isNaN(finalFromDate.getTime()) || isNaN(finalToDate.getTime())) {
       return res.status(400).json({
         success: false,
-        message: "Invalid total days.",
+        message: "Invalid pickup or drop date.",
       });
     }
+
+    // =========================
+    // TOTAL DAYS
+    // ── FIX: recompute from fromDate/toDate server-side instead of
+    // trusting req.body.totalDays. The client's totalDays is no longer
+    // read at all — this is now the single source of truth for both the
+    // frontend and backend, using the same calendar-day-difference logic,
+    // so pricing can never be manipulated or drift out of sync with the
+    // dates actually stored on the booking.
+    // =========================
+
+    const finalTotalDays = calculateTotalDaysFromDates(
+      finalFromDate,
+      finalToDate,
+    );
 
     // =========================
     // PRICING (recomputed server-side — never trust client totals)
@@ -3171,6 +3191,7 @@ export const updateBooking = async (req, res, next) => {
     next(error);
   }
 };
+
 
 export const cancelBooking = async (req, res, next) => {
   try {
