@@ -31,7 +31,6 @@ const maintenanceSchema = new Schema(
       type: String,
       enum: ["Major", "Minor"],
       trim: true,
-      default: "",
     },
 
     title: {
