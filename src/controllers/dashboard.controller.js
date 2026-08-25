@@ -270,3 +270,50 @@ export const createMaintenance = async (req, res, next) => {
     next(error);
   }
 };
+export const getMaintenances = async (req, res, next) => {
+  try {
+    const { vehicle, startDate, endDate, status } = req.query;
+
+    const filter = {
+      isDeleted: false,
+    };
+
+    if (vehicle) {
+      filter.vehicle = vehicle;
+    }
+
+    if (status) {
+      filter.status = status;
+    }
+
+    // Optional date filtering
+    if (startDate || endDate) {
+      filter.startDate = {};
+
+      if (startDate) {
+        filter.startDate.$gte = new Date(startDate);
+      }
+
+      if (endDate) {
+        filter.endDate = {
+          $lte: new Date(endDate),
+        };
+      }
+    }
+
+    const maintenances = await Maintenance.find(filter)
+      .populate("vehicle")
+      .populate("createdBy", "name email")
+      .sort({ startDate: 1 })
+      .lean();
+
+    return res.status(200).json({
+      success: true,
+      message: "Maintenance records fetched successfully",
+      count: maintenances.length,
+      data: maintenances,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
