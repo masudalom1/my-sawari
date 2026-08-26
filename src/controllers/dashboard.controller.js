@@ -127,9 +127,9 @@ export const createMaintenance = async (req, res, next) => {
   try {
     const { vehicle, startDate, endDate } = req.body;
 
-    // -----------------------------
-    // Required fields
-    // -----------------------------
+    // ---------------------------------------
+    // Validate required fields
+    // ---------------------------------------
     if (!vehicle) {
       return res.status(400).json({
         success: false,
@@ -151,9 +151,9 @@ export const createMaintenance = async (req, res, next) => {
       });
     }
 
-    // -----------------------------
-    // Validate vehicle ID
-    // -----------------------------
+    // ---------------------------------------
+    // Validate vehicle ObjectId
+    // ---------------------------------------
     if (!mongoose.Types.ObjectId.isValid(vehicle)) {
       return res.status(400).json({
         success: false,
@@ -161,9 +161,9 @@ export const createMaintenance = async (req, res, next) => {
       });
     }
 
-    // -----------------------------
+    // ---------------------------------------
     // Validate dates
-    // -----------------------------
+    // ---------------------------------------
     const maintenanceStart = new Date(startDate);
     const maintenanceEnd = new Date(endDate);
 
@@ -188,9 +188,9 @@ export const createMaintenance = async (req, res, next) => {
       });
     }
 
-    // -----------------------------
+    // ---------------------------------------
     // Check vehicle exists
-    // -----------------------------
+    // ---------------------------------------
     const existingVehicle = await Vehicle.findById(vehicle);
 
     if (!existingVehicle) {
@@ -200,13 +200,16 @@ export const createMaintenance = async (req, res, next) => {
       });
     }
 
-    // -----------------------------
+    // ---------------------------------------
     // Check overlapping maintenance
-    // -----------------------------
+    // ---------------------------------------
     const overlappingMaintenance = await Maintenance.findOne({
       vehicle,
       isDeleted: { $ne: true },
-      status: { $nin: ["Cancelled", "Completed"] },
+
+      status: {
+        $nin: ["Cancelled", "Completed"],
+      },
 
       startDate: {
         $lt: maintenanceEnd,
@@ -225,13 +228,14 @@ export const createMaintenance = async (req, res, next) => {
           maintenanceId: overlappingMaintenance._id,
           startDate: overlappingMaintenance.startDate,
           endDate: overlappingMaintenance.endDate,
+          status: overlappingMaintenance.status,
         },
       });
     }
 
-    // -----------------------------
+    // ---------------------------------------
     // Create maintenance
-    // -----------------------------
+    // ---------------------------------------
     const maintenance = await Maintenance.create({
       vehicle,
       startDate: maintenanceStart,
@@ -239,13 +243,15 @@ export const createMaintenance = async (req, res, next) => {
       status: "Scheduled",
     });
 
-    // -----------------------------
+    // ---------------------------------------
     // Update vehicle status
-    // -----------------------------
+    // ---------------------------------------
     await Vehicle.findByIdAndUpdate(
       vehicle,
       {
-        status: "service",
+        $set: {
+          status: "service",
+        },
       },
       {
         new: true,
@@ -253,21 +259,30 @@ export const createMaintenance = async (req, res, next) => {
       },
     );
 
-    // -----------------------------
-    // Populate response
-    // -----------------------------
-    const populatedMaintenance = await Maintenance.findById(maintenance._id)
+    // ---------------------------------------
+    // Get populated maintenance
+    // ---------------------------------------
+    const populatedMaintenance = await Maintenance.findById(
+      maintenance._id,
+    )
       .populate("vehicle")
       .lean();
 
+    // ---------------------------------------
+    // Success
+    // ---------------------------------------
     return res.status(201).json({
       success: true,
       message: "Maintenance created successfully",
       data: populatedMaintenance,
     });
   } catch (error) {
-    console.error("Create maintenance error:", error);
-    next(error);
+    console.error("CREATE MAINTENANCE ERROR:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: error.message || "Failed to create maintenance",
+    });
   }
 };
 export const getMaintenances = async (req, res, next) => {
