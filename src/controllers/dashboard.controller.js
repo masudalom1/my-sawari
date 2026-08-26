@@ -122,7 +122,6 @@ export const getBookingsForImport = async (req, res) => {
     });
   }
 };
-
 export const createMaintenance = async (req, res, next) => {
   try {
     const { vehicle, startDate, endDate } = req.body;
