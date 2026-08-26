@@ -735,10 +735,15 @@ export const updateMaintenanceStatus = async (req, res, next) => {
 
     maintenance.status = status;
 
-    // Auto-set completedDate when moving into Completed,
-    // clear it if moved back out of Completed
     if (status === "Completed") {
-      maintenance.completedDate = new Date();
+      const completionTime = new Date();
+
+      // Actual maintenance completion date & time
+      maintenance.completedDate = completionTime;
+
+      // Update endDate to actual completion date & time
+      maintenance.endDate = completionTime;
+
       maintenance.completionProof = {
         billImage,
         cardImage,
