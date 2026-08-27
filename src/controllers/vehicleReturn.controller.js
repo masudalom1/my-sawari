@@ -561,17 +561,18 @@ export const receiveVehicle = async (req, res) => {
 
     await handover.save();
 
-    if (handover.bookingId) {
-      await Booking.findByIdAndUpdate(
-        handover.bookingId,
-        {
-          $set: {
-            status: "completed",
-          },
-        },
-        { new: true },
-      );
-    }
+if (handover.bookingId) {
+  await Booking.findByIdAndUpdate(
+    handover.bookingId,
+    {
+      $set: {
+        toDate: actualReceivingTime,
+        status: "completed",
+      },
+    },
+    { new: true },
+  );
+}
 
     /* ==========================
        RESPONSE
