@@ -9,7 +9,7 @@ export const getVehiclesForImport = async (req, res) => {
       isDeleted: false,
     })
       .select(
-        "_id vehicleName vehicleNumber vehicleType images status pricePerDay",
+        "_id vehicleName vehicleNumber vehicleType category images status pricePerDay",
       )
       .sort({ pricePerDay: 1 })
       .lean();
@@ -19,6 +19,10 @@ export const getVehiclesForImport = async (req, res) => {
       vehicleName: vehicle.vehicleName,
       vehicleNumber: vehicle.vehicleNumber,
       vehicleType: vehicle.vehicleType,
+
+      // Optional field
+      category: vehicle.category || null,
+
       image: vehicle.images?.[0]?.url || null,
       status: vehicle.status,
       pricePerDay: vehicle.pricePerDay || 0,
