@@ -561,18 +561,29 @@ export const receiveVehicle = async (req, res) => {
 
     await handover.save();
 
-if (handover.bookingId) {
-  await Booking.findByIdAndUpdate(
-    handover.bookingId,
-    {
-      $set: {
-        toDate: actualReceivingTime,
-        status: "completed",
-      },
-    },
-    { new: true },
-  );
-}
+    /* ==========================
+   UPDATE BOOKING
+========================== */
+
+    if (handover.bookingId) {
+      const booking = await Booking.findByIdAndUpdate(
+        handover.bookingId,
+        {
+          $set: {
+            toDate: actualReceivingTime,
+            status: "completed",
+          },
+        },
+        {
+          new: true,
+          runValidators: true,
+        },
+      );
+
+      if (!booking) {
+        console.warn(`Booking not found: ${handover.bookingId}`);
+      }
+    }
 
     /* ==========================
        RESPONSE
