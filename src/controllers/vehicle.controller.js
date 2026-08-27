@@ -281,6 +281,9 @@ export const updateVehicle = async (req, res, next) => {
   try {
     const vehicle = await Vehicle.findById(req.params.id);
 
+    // -----------------------------------------
+    // Vehicle existence
+    // -----------------------------------------
     if (!vehicle || vehicle.isDeleted) {
       return res.status(404).json({
         success: false,
@@ -288,18 +291,103 @@ export const updateVehicle = async (req, res, next) => {
       });
     }
 
+    // -----------------------------------------
+    // Allowed fields
+    // -----------------------------------------
+    const allowedFields = [
+      "vehicleName",
+      "vehicleNumber",
+      "manufacturer",
+      "model",
+      "variant",
+      "pricePerDay",
+      "category",
+      "vehicleType",
+      "fuelType",
+      "transmission",
+      "seatingCapacity",
+      "color",
+      "chassisNumber",
+      "engineNumber",
+      "registrationDate",
+      "insuranceValidUpto",
+      "pucValidUpto",
+      "fitnessValidUpto",
+      "notes",
+    ];
+
+    // -----------------------------------------
+    // Update fields
+    // -----------------------------------------
+    allowedFields.forEach((field) => {
+      if (req.body[field] !== undefined) {
+        vehicle[field] = req.body[field];
+      }
+    });
+
+    // -----------------------------------------
+    // Optional category validation
+    // -----------------------------------------
+    if (
+      vehicle.category !== null &&
+      vehicle.category !== "" &&
+      !["bike", "car"].includes(vehicle.category)
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: "Category must be either bike or car",
+      });
+    }
+
+    // -----------------------------------------
+    // Vehicle number normalization
+    // -----------------------------------------
+    if (vehicle.vehicleNumber) {
+      vehicle.vehicleNumber =
+        vehicle.vehicleNumber.toUpperCase().trim();
+    }
+
+    // -----------------------------------------
+    // Status
+    // -----------------------------------------
+    if (req.body.status !== undefined) {
+      const allowedStatuses = [
+        "available",
+        "rent",
+        "service",
+      ];
+
+      if (!allowedStatuses.includes(req.body.status)) {
+        return res.status(400).json({
+          success: false,
+          message:
+            "Status must be available, rent, or service",
+        });
+      }
+
+      vehicle.status = req.body.status;
+    }
+
+    // -----------------------------------------
+    // Add new images
+    // -----------------------------------------
     if (req.files?.length > 0) {
       const newImages = req.files.map((file) => ({
         url: `/uploads/vehicles/${file.filename}`,
+        publicId: null,
       }));
 
       vehicle.images.push(...newImages);
     }
 
-    Object.assign(vehicle, req.body);
-
+    // -----------------------------------------
+    // Save
+    // -----------------------------------------
     await vehicle.save();
 
+    // -----------------------------------------
+    // Response
+    // -----------------------------------------
     return res.status(200).json({
       success: true,
       message: "Vehicle updated successfully",

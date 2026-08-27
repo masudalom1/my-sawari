@@ -66,6 +66,13 @@ const vehicleSchema = new mongoose.Schema(
       default: 0,
       min: 0,
     },
+    category: {
+      type: String,
+      enum: ["bike", "car"],
+      lowercase: true,
+      trim: true,
+      index: true,
+    },
 
     vehicleType: {
       type: String,
