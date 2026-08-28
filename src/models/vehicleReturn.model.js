@@ -145,11 +145,31 @@ const settlementDetailsSchema = new mongoose.Schema(
       min: 0,
     },
 
-    paymentMode: {
-      type: String,
-      enum: ["Cash", "UPI", "Card", "Bank Transfer"],
-      default: "Cash",
-    },
+ paymentMode: {
+  type: String,
+  enum: ["Cash", "PhonePe", "Razorpay", "Mixed"],
+  default: "Cash",
+},
+
+paymentBreakdown: {
+  cash: {
+    type: Number,
+    default: 0,
+    min: 0,
+  },
+
+  phonePe: {
+    type: Number,
+    default: 0,
+    min: 0,
+  },
+
+  razorpay: {
+    type: Number,
+    default: 0,
+    min: 0,
+  },
+},
 
     /*
       Remaining amount

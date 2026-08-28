@@ -23,6 +23,7 @@ export const receiveVehicle = async (req, res) => {
       fuelUsageAmount,
       amountCollected,
       paymentMode,
+      paymentBreakdown, // ADDED: raw breakdown value coming from FormData (arrives as a JSON string)
       balanceReason,
 
       needsMaintenance,
@@ -131,6 +132,64 @@ export const receiveVehicle = async (req, res) => {
     }
 
     /* ==========================
+       PAYMENT MODE / BREAKDOWN PARSE   // ADDED BLOCK
+       The frontend sends paymentBreakdown as a JSON string inside
+       FormData (JSON.stringify(...)), so it must be parsed the same
+       way `inspection` is above. We also normalize paymentMode so it
+       always matches one of the schema enum values, and default the
+       breakdown for non-mixed modes so PaymentHistory + settlement
+       records always have a consistent shape.
+    ========================== */
+
+    let parsedPaymentBreakdown = { cash: 0, phonePe: 0, razorpay: 0 }; // ADDED
+
+    try {
+      // ADDED: paymentBreakdown may already be an object (e.g. JSON body)
+      // or a JSON string (multipart/FormData) — handle both safely.
+      if (paymentBreakdown) {
+        const raw =
+          typeof paymentBreakdown === "string"
+            ? JSON.parse(paymentBreakdown)
+            : paymentBreakdown;
+
+        parsedPaymentBreakdown = {
+          cash: Number(raw?.cash) || 0,
+          phonePe: Number(raw?.phonePe) || 0,
+          razorpay: Number(raw?.razorpay) || 0,
+        };
+      }
+    } catch (error) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid payment breakdown format",
+      }); // ADDED
+    }
+
+    // ADDED: normalize paymentMode against the schema enum
+    // (["Cash", "PhonePe", "Razorpay", "Mixed"]). Anything else falls
+    // back to "Cash" so document creation never fails validation.
+    const ALLOWED_PAYMENT_MODES = ["Cash", "PhonePe", "Razorpay", "Mixed"];
+    const normalizedPaymentMode = ALLOWED_PAYMENT_MODES.includes(paymentMode)
+      ? paymentMode
+      : "Cash"; // ADDED
+
+    // ADDED: when the mode isn't Mixed but no breakdown was sent
+    // (or it came from an older client), derive it from the single
+    // amountCollected + paymentMode so settlementDetails.paymentBreakdown
+    // is always populated, matching the frontend's own fallback logic.
+    if (
+      normalizedPaymentMode !== "Mixed" &&
+      !paymentBreakdown
+    ) {
+      const singleAmount = Number(amountCollected) || 0;
+      parsedPaymentBreakdown = {
+        cash: normalizedPaymentMode === "Cash" ? singleAmount : 0,
+        phonePe: normalizedPaymentMode === "PhonePe" ? singleAmount : 0,
+        razorpay: normalizedPaymentMode === "Razorpay" ? singleAmount : 0,
+      };
+    }
+
+    /* ==========================
        DAMAGE DATA
     ========================== */
 
@@ -209,6 +268,38 @@ export const receiveVehicle = async (req, res) => {
         success: false,
         message: "Reason is required when full amount is not collected",
       });
+    }
+
+    // ADDED: server-side guard mirroring the frontend's mixed-payment
+    // validation — the breakdown total must actually match the amount
+    // collected so settlementDetails and PaymentHistory never drift.
+    if (normalizedPaymentMode === "Mixed") {
+      const mixedTotal =
+        parsedPaymentBreakdown.cash +
+        parsedPaymentBreakdown.phonePe +
+        parsedPaymentBreakdown.razorpay;
+
+      if (mixedTotal <= 0) {
+        return res.status(400).json({
+          success: false,
+          message: "Please provide mixed payment amounts",
+        });
+      }
+
+      if (Math.round(mixedTotal) !== Math.round(collected)) {
+        return res.status(400).json({
+          success: false,
+          message:
+            "Payment breakdown total does not match the amount collected",
+        });
+      }
+
+      if (mixedTotal > totalBalanceAmount) {
+        return res.status(400).json({
+          success: false,
+          message: "Received amount cannot exceed total balance",
+        });
+      }
     }
 
     /* ==========================
@@ -376,7 +467,9 @@ export const receiveVehicle = async (req, res) => {
 
         amountCollected: collected,
 
-        paymentMode: paymentMode || "Cash",
+        paymentMode: normalizedPaymentMode, // CHANGED: use normalized value instead of raw req.body.paymentMode
+
+        paymentBreakdown: parsedPaymentBreakdown, // ADDED: persist cash/phonePe/razorpay split on the return doc itself
 
         finalBalance,
 
@@ -423,7 +516,7 @@ export const receiveVehicle = async (req, res) => {
           amount: collected,
 
           paymentMethod: (() => {
-            const mode = String(paymentMode || "cash").toLowerCase();
+            const mode = String(normalizedPaymentMode || "cash").toLowerCase(); // CHANGED: use normalizedPaymentMode
 
             const paymentMethodMap = {
               cash: "cash",
@@ -435,11 +528,10 @@ export const receiveVehicle = async (req, res) => {
             return paymentMethodMap[mode] || "cash";
           })(),
 
-          paymentBreakdown: {
-            cash: Number(req.body?.paymentBreakdown?.cash) || 0,
-            phonePe: Number(req.body?.paymentBreakdown?.phonePe) || 0,
-            razorpay: Number(req.body?.paymentBreakdown?.razorpay) || 0,
-          },
+          // CHANGED: use the already-parsed breakdown instead of reaching
+          // back into req.body (which is a JSON string, not an object,
+          // when sent via FormData — the old code silently produced zeros).
+          paymentBreakdown: parsedPaymentBreakdown,
 
           type: "receive",
 
