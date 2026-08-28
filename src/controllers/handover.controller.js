@@ -2396,7 +2396,7 @@ ${updateNote}`
 
           amount: Number(amountReceivedNow),
 
-          paymentMethod: paymentMethod || "cash",
+          paymentMethod: paymentMethod || "phonepe",
 
           paymentBreakdown: {
             cash: paymentMethod === "cash" ? Number(amountReceivedNow) : 0,
