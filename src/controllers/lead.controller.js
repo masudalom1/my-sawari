@@ -2240,7 +2240,7 @@ export const createBookings = async (req, res, next) => {
       securityDeposit,
       fastagBalance,
 
-      paymentMethod = "cash",
+      paymentMethod = "phonepe",
       paymentBreakdown = {},
 
       pickupDropRequired = false,
@@ -2829,11 +2829,6 @@ export const createBookings = async (req, res, next) => {
           },
         );
       } catch (paymentHistoryError) {
-        /*
-         * Keep your existing behavior:
-         * booking should not fail only because payment
-         * history creation failed.
-         */
         console.error("Payment History Creation Error:", paymentHistoryError);
       }
     }
@@ -3191,7 +3186,6 @@ export const updateBooking = async (req, res, next) => {
     next(error);
   }
 };
-
 
 export const cancelBooking = async (req, res, next) => {
   try {

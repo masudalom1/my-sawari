@@ -132,21 +132,12 @@ export const receiveVehicle = async (req, res) => {
       });
     }
 
-    /* ==========================
-       PAYMENT MODE / BREAKDOWN PARSE   // ADDED BLOCK
-       The frontend sends paymentBreakdown as a JSON string inside
-       FormData (JSON.stringify(...)), so it must be parsed the same
-       way `inspection` is above. We also normalize paymentMode so it
-       always matches one of the schema enum values, and default the
-       breakdown for non-mixed modes so PaymentHistory + settlement
-       records always have a consistent shape.
-    ========================== */
+
 
     let parsedPaymentBreakdown = { cash: 0, phonePe: 0, razorpay: 0 }; // ADDED
 
     try {
-      // ADDED: paymentBreakdown may already be an object (e.g. JSON body)
-      // or a JSON string (multipart/FormData) — handle both safely.
+ 
       if (paymentBreakdown) {
         const raw =
           typeof paymentBreakdown === "string"
@@ -486,15 +477,7 @@ export const receiveVehicle = async (req, res) => {
       returnStatus: "completed",
     });
 
-    // ==========================
-    // CREATE PAYMENT HISTORY
-    // ==========================
-    // Record only the amount actually collected
-    // during vehicle receiving/settlement.
-    //
-    // IMPORTANT:
-    // The pending handover amount is NOT recorded again.
-    // Only `amountCollected` belongs to this receive transaction.
+ 
 
     if (collected > 0) {
       try {
@@ -531,9 +514,6 @@ export const receiveVehicle = async (req, res) => {
             return paymentMethodMap[mode] || "cash";
           })(),
 
-          // CHANGED: use the already-parsed breakdown instead of reaching
-          // back into req.body (which is a JSON string, not an object,
-          // when sent via FormData — the old code silently produced zeros).
           paymentBreakdown: parsedPaymentBreakdown,
 
           type: "receive",
