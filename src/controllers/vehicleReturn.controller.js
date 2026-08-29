@@ -25,6 +25,7 @@ export const receiveVehicle = async (req, res) => {
       paymentMode,
       paymentBreakdown, // ADDED: raw breakdown value coming from FormData (arrives as a JSON string)
       balanceReason,
+      upiLast4,
 
       needsMaintenance,
       maintenanceReason,
@@ -165,22 +166,24 @@ export const receiveVehicle = async (req, res) => {
       }); // ADDED
     }
 
-    // ADDED: normalize paymentMode against the schema enum
-    // (["Cash", "PhonePe", "Razorpay", "Mixed"]). Anything else falls
-    // back to "Cash" so document creation never fails validation.
     const ALLOWED_PAYMENT_MODES = ["Cash", "PhonePe", "Razorpay", "Mixed"];
     const normalizedPaymentMode = ALLOWED_PAYMENT_MODES.includes(paymentMode)
       ? paymentMode
-      : "Cash"; // ADDED
+      : "Cash";
+    const normalizedUpiLast4 = String(upiLast4 || "").trim();
 
-    // ADDED: when the mode isn't Mixed but no breakdown was sent
-    // (or it came from an older client), derive it from the single
-    // amountCollected + paymentMode so settlementDetails.paymentBreakdown
-    // is always populated, matching the frontend's own fallback logic.
-    if (
-      normalizedPaymentMode !== "Mixed" &&
-      !paymentBreakdown
-    ) {
+    const isUpiPayment =
+      normalizedPaymentMode === "PhonePe" ||
+      (normalizedPaymentMode === "Mixed" && parsedPaymentBreakdown.phonePe > 0);
+
+    if (isUpiPayment && !/^\d{4}$/.test(normalizedUpiLast4)) {
+      return res.status(400).json({
+        success: false,
+        message: "Please enter valid UPI last 4 digits",
+      });
+    }
+
+    if (normalizedPaymentMode !== "Mixed" && !paymentBreakdown) {
       const singleAmount = Number(amountCollected) || 0;
       parsedPaymentBreakdown = {
         cash: normalizedPaymentMode === "Cash" ? singleAmount : 0,
@@ -468,7 +471,7 @@ export const receiveVehicle = async (req, res) => {
         amountCollected: collected,
 
         paymentMode: normalizedPaymentMode, // CHANGED: use normalized value instead of raw req.body.paymentMode
-
+        upiLast4: isUpiPayment ? normalizedUpiLast4 : "",
         paymentBreakdown: parsedPaymentBreakdown, // ADDED: persist cash/phonePe/razorpay split on the return doc itself
 
         finalBalance,
@@ -696,7 +699,6 @@ export const receiveVehicle = async (req, res) => {
   }
 };
 
-// menu/service
 export const getServiceVehicles = async (req, res) => {
   try {
     const companyId = req.user.company || req.user._id;
@@ -827,10 +829,6 @@ export const markVehicleAvailable = async (req, res) => {
     });
   }
 };
-
-/* ==========================
-   GET RETURN DETAILS (for Completed tab)
-========================== */
 
 export const getReturnDetails = async (req, res) => {
   try {

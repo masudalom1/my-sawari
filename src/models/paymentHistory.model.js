@@ -101,6 +101,12 @@ const paymentHistorySchema = new mongoose.Schema(
       enum: ["cash", "phonepe", "razorpay", "mixed"],
       default: "cash",
     },
+    upiLast4: {
+      type: String,
+      default: "",
+      trim: true,
+      match: [/^\d{4}$/, "UPI last 4 digits must contain exactly 4 numbers"],
+    },
 
     paymentBreakdown: {
       cash: {

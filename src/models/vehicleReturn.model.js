@@ -145,31 +145,37 @@ const settlementDetailsSchema = new mongoose.Schema(
       min: 0,
     },
 
- paymentMode: {
-  type: String,
-  enum: ["Cash", "PhonePe", "Razorpay", "Mixed"],
-  default: "Cash",
-},
+    paymentMode: {
+      type: String,
+      enum: ["Cash", "PhonePe", "Razorpay", "Mixed"],
+      default: "Cash",
+    },
+    upiLast4: {
+      type: String,
+      default: "",
+      trim: true,
+      match: [/^\d{4}$/, "UPI last 4 digits must contain exactly 4 digits"],
+    },
 
-paymentBreakdown: {
-  cash: {
-    type: Number,
-    default: 0,
-    min: 0,
-  },
+    paymentBreakdown: {
+      cash: {
+        type: Number,
+        default: 0,
+        min: 0,
+      },
 
-  phonePe: {
-    type: Number,
-    default: 0,
-    min: 0,
-  },
+      phonePe: {
+        type: Number,
+        default: 0,
+        min: 0,
+      },
 
-  razorpay: {
-    type: Number,
-    default: 0,
-    min: 0,
-  },
-},
+      razorpay: {
+        type: Number,
+        default: 0,
+        min: 0,
+      },
+    },
 
     /*
       Remaining amount

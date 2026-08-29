@@ -1941,7 +1941,27 @@ export const updateRental = async (req, res) => {
       amountReceivedNow,
       paymentMethod,
       reasonForChange,
+      upiLast4,
     } = req.body;
+
+    // ==========================================================
+    // VALIDATE UPI LAST 4 DIGITS (only relevant for phonepe)
+    // Reject early rather than letting a malformed value fail
+    // silently at handover.save() / PaymentHistory.create().
+    // ==========================================================
+
+    let sanitizedUpiLast4 = "";
+
+    if (paymentMethod === "phonepe" && Number(amountReceivedNow) > 0) {
+      sanitizedUpiLast4 = String(upiLast4 || "").trim();
+
+      if (!/^\d{4}$/.test(sanitizedUpiLast4)) {
+        return res.status(400).json({
+          success: false,
+          message: "Please provide a valid 4-digit PhonePe reference number",
+        });
+      }
+    }
 
     // ==========================================================
     // FIND ACTIVE RENTAL
@@ -2199,6 +2219,10 @@ export const updateRental = async (req, res) => {
       } else if (paymentMethod === "phonepe") {
         handover.payment.paymentBreakdown.phonePe =
           (Number(handover.payment.paymentBreakdown.phonePe) || 0) + received;
+
+        // Keep the last-used UPI reference on the handover itself too,
+        // so it's visible without having to look up PaymentHistory.
+        handover.payment.upiLast4 = sanitizedUpiLast4;
       } else if (paymentMethod === "razorpay") {
         handover.payment.paymentBreakdown.razorpay =
           (Number(handover.payment.paymentBreakdown.razorpay) || 0) + received;
@@ -2259,17 +2283,6 @@ ${updateNote}`
         .slice(-500);
     }
 
-    // ==========================================================
-    // SYNC LINKED BOOKING
-    //
-    // IMPORTANT:
-    // Booking stores:
-    //   toDate     -> Date
-    //   dropTime   -> String
-    //   totalDays  -> Number
-    //
-    // Therefore update ALL THREE.
-    // ==========================================================
 
     if (handover.bookingId) {
       const booking = await Booking.findById(handover.bookingId);
@@ -2346,15 +2359,6 @@ ${updateNote}`
             (Number(booking.payment.fastagAmount) || 0),
         );
 
-        // ------------------------------------------------------
-        // SAVE BOOKING
-        //
-        // pre("save") will recalculate:
-        // balanceAmount
-        // totalCollected
-        // paymentStatus
-        // ------------------------------------------------------
-
         await booking.save();
       }
     }
@@ -2365,11 +2369,6 @@ ${updateNote}`
 
     await handover.save();
 
-    // ==========================================================
-    // CREATE PAYMENT HISTORY
-    //
-    // Only record NEW payment received in this update.
-    // ==========================================================
 
     if (Number(amountReceivedNow) > 0) {
       try {
@@ -2397,6 +2396,12 @@ ${updateNote}`
           amount: Number(amountReceivedNow),
 
           paymentMethod: paymentMethod || "phonepe",
+
+          // Only ever store a UPI reference when it actually applies —
+          // sanitizedUpiLast4 was validated up front and is "" for
+          // any non-phonepe payment, matching the schema's regex
+          // (which allows an empty string or exactly 4 digits).
+          upiLast4: sanitizedUpiLast4,
 
           paymentBreakdown: {
             cash: paymentMethod === "cash" ? Number(amountReceivedNow) : 0,
