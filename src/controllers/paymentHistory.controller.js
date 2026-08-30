@@ -416,16 +416,37 @@ export const getCashCollectionPayments = async (req, res, next) => {
 };
 
 const computePhonePeFields = (payment) => {
-  const collectibleAmount = Number(payment.amount) || 0;
-  const collectedAmount = Number(payment.collectedAmount) || 0;
-  const remainingAmount = Math.max(0, collectibleAmount - collectedAmount);
+  const method = String(payment.paymentMethod || "").toLowerCase();
+
+  const collectibleAmount =
+    method === "mixed"
+      ? Number(payment.paymentBreakdown?.phonePe) || 0
+      : Number(payment.amount) || 0;
+
+  const collectedAmount = Number(payment.collectedPhonePe) || 0;
+
+  const remainingAmount = Math.max(
+    0,
+    Number((collectibleAmount - collectedAmount).toFixed(2)),
+  );
+
+  const isCollected = remainingAmount <= AMOUNT_EPSILON;
+
+  const lastPhonePeEntry =
+    Array.isArray(payment.collectionHistory) && payment.collectionHistory.length
+      ? [...payment.collectionHistory]
+          .reverse()
+          .find((entry) => entry.channel === "phonepe")
+      : null;
 
   return {
     ...payment,
     collectibleAmount,
-    remainingAmount: Number(remainingAmount.toFixed(2)),
-    collectedAmount: Number(collectedAmount.toFixed(2)),
-    isCollected: Boolean(payment.isCollected),
+    remainingAmount,
+    collectedAmount,
+    isCollected,
+    lastCollectedByName: lastPhonePeEntry?.collectedByName || null,
+    lastCollectedAt: lastPhonePeEntry?.collectedAt || null,
   };
 };
 
