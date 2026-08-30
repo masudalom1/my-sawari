@@ -2,7 +2,6 @@ import mongoose from "mongoose";
 import PaymentHistory from "../models/paymentHistory.model.js";
 
 const AMOUNT_EPSILON = 0.01;
-
 const MAX_PAGE_LIMIT = 50;
 const DEFAULT_PAGE_LIMIT = 12;
 
@@ -416,7 +415,6 @@ export const getCashCollectionPayments = async (req, res, next) => {
   }
 };
 
-
 const computePhonePeFields = (payment) => {
   const collectibleAmount = Number(payment.amount) || 0;
   const collectedAmount = Number(payment.collectedAmount) || 0;
@@ -446,12 +444,11 @@ export const getPhonePeCollectionPayments = async (req, res, next) => {
       ? req.query.status
       : "pending";
 
-
     const rawPayments = await PaymentHistory.find({
-      paymentMethod: "phonepe",
+      paymentMethod: { $in: ["phonepe", "mixed"] },
     })
       .populate("createdBy", "name fullName email username")
-      .populate("lastCollectedBy", "name fullName email username")
+      .populate("collectionHistory.collectedBy", "name fullName email username")
       .sort({ createdAt: -1 })
       .lean();
 
@@ -479,9 +476,7 @@ export const getPhonePeCollectionPayments = async (req, res, next) => {
       stats.collectedTotal.count += 1;
       stats.collectedTotal.amount += payment.collectedAmount;
 
-      const collectedAt = payment.lastCollectedAt
-        ? new Date(payment.lastCollectedAt)
-        : null;
+      const collectedAt = payment.lastCollectedAt ? new Date(payment.lastCollectedAt) : null;
 
       if (collectedAt && collectedAt >= todayStart && collectedAt <= todayEnd) {
         stats.collectedToday.count += 1;
@@ -510,29 +505,24 @@ export const getPhonePeCollectionPayments = async (req, res, next) => {
 
         filtered = filtered.filter((payment) => {
           if (!payment.lastCollectedAt) return false;
-
           const collectedAt = new Date(payment.lastCollectedAt);
-
           if (from && collectedAt < from) return false;
           if (to && collectedAt > to) return false;
-
           return true;
         });
       }
 
       filtered.sort(
-        (a, b) =>
-          new Date(b.lastCollectedAt || 0) - new Date(a.lastCollectedAt || 0),
+        (a, b) => new Date(b.lastCollectedAt || 0) - new Date(a.lastCollectedAt || 0),
       );
     } else {
-      // "all" — already sorted newest-first by createdAt from the query
-      filtered = computed;
+      filtered = [...computed].sort(
+        (a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0),
+      );
     }
 
     const total = filtered.length;
-
     const paginatedPayments = filtered.slice(skip, skip + limit);
-
     const hasMore = skip + limit < total;
 
     return res.status(200).json({
