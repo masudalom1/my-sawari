@@ -570,44 +570,49 @@ export const collectPhonePePayment = async (req, res, next) => {
     const numericAmount = Number(amount);
 
     if (!paymentId) {
-      return res.status(400).json({
-        success: false,
-        message: "Payment ID is required",
-      });
+      return res.status(400).json({ success: false, message: "Payment ID is required" });
     }
 
     if (!Number.isFinite(numericAmount) || numericAmount <= 0) {
-      return res.status(400).json({
-        success: false,
-        message: "A valid amount is required",
-      });
+      return res.status(400).json({ success: false, message: "A valid amount is required" });
     }
 
     const payment = await PaymentHistory.findOne({
       _id: paymentId,
-      paymentMethod: "phonepe",
+      paymentMethod: { $in: ["phonepe", "mixed"] },
     });
 
     if (!payment) {
-      return res.status(404).json({
+      return res.status(404).json({ success: false, message: "PhonePe payment not found" });
+    }
+
+    const method = String(payment.paymentMethod || "").toLowerCase();
+
+    const collectibleAmount =
+      method === "mixed"
+        ? Number(payment.paymentBreakdown?.phonePe) || 0
+        : Number(payment.amount) || 0;
+
+    if (collectibleAmount <= 0) {
+      return res.status(400).json({
         success: false,
-        message: "PhonePe payment not found",
+        message: "This payment has no PhonePe amount to collect",
       });
     }
 
+    const alreadyCollected = Number(payment.collectedPhonePe) || 0;
+    const remaining = Number((collectibleAmount - alreadyCollected).toFixed(2));
+
     // Optimistic-concurrency guard: another device/staff member may have
-    // already verified this payment between page load and this request.
-    if (payment.isCollected) {
+    // already verified the PhonePe portion between page load and this request.
+    if (remaining <= AMOUNT_EPSILON) {
       return res.status(409).json({
         success: false,
         message: "This payment has already been verified by someone else.",
       });
     }
 
-    const alreadyCollected = Number(payment.collectedAmount) || 0;
-    const remaining = Number(payment.amount) - alreadyCollected;
-
-    if (numericAmount > remaining + 0.01) {
+    if (numericAmount > remaining + AMOUNT_EPSILON) {
       return res.status(409).json({
         success: false,
         message: "Amount exceeds what's left to verify for this payment.",
@@ -618,18 +623,24 @@ export const collectPhonePePayment = async (req, res, next) => {
       req.user?.name || req.user?.fullName || req.user?.username || "";
 
     payment.collectionHistory.push({
+      channel: "phonepe",
       collectedBy: req.user?._id,
       collectedByName,
       amount: numericAmount,
       note: note || "",
     });
 
-    const newCollectedAmount = Number(
-      (alreadyCollected + numericAmount).toFixed(2),
-    );
+    const newCollectedPhonePe = Number((alreadyCollected + numericAmount).toFixed(2));
+    payment.collectedPhonePe = newCollectedPhonePe;
 
-    payment.collectedAmount = newCollectedAmount;
-    payment.isCollected = newCollectedAmount >= Number(payment.amount) - 0.01;
+    const phonePeNowCollected = newCollectedPhonePe >= collectibleAmount - AMOUNT_EPSILON;
+
+    // For a pure "phonepe" payment, keep legacy top-level fields in sync.
+    if (method === "phonepe") {
+      payment.collectedAmount = newCollectedPhonePe;
+      payment.isCollected = phonePeNowCollected;
+    }
+
     payment.lastCollectedAt = new Date();
     payment.lastCollectedBy = req.user?._id;
 
@@ -638,8 +649,13 @@ export const collectPhonePePayment = async (req, res, next) => {
     return res.status(200).json({
       success: true,
       data: {
+        isCollected: phonePeNowCollected,
         transactionAmount: numericAmount,
-        totalCollectedAmount: payment.collectedAmount,
+        totalCollectedAmount: payment.collectedPhonePe,
+        remainingAmount: Math.max(
+          0,
+          Number((collectibleAmount - payment.collectedPhonePe).toFixed(2)),
+        ),
         collectedAt: payment.lastCollectedAt,
         collectedBy: collectedByName,
       },
