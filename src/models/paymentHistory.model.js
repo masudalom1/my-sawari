@@ -2,6 +2,12 @@ import mongoose from "mongoose";
 
 const collectionEntrySchema = new mongoose.Schema(
   {
+    channel: {
+      type: String,
+      enum: ["cash", "phonepe", "razorpay"],
+      default: "cash",
+    },
+
     collectedBy: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
@@ -25,8 +31,6 @@ const collectionEntrySchema = new mongoose.Schema(
     },
   },
   {
-    // `collectedAt` instead of the default `createdAt` — reads
-    // naturally when this sub-doc is serialized to the frontend.
     timestamps: { createdAt: "collectedAt", updatedAt: false },
   },
 );
@@ -158,6 +162,17 @@ const paymentHistorySchema = new mongoose.Schema(
     },
 
     collectedAmount: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+    collectedAmount: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+
+    collectedPhonePe: {
       type: Number,
       default: 0,
       min: 0,
