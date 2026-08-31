@@ -1478,243 +1478,171 @@ export const getSingleHandover = async (req, res) => {
 
 export const getReceiveCarList = async (req, res) => {
   try {
-    /* ==========================
-       GET ALL HANDOVERS
-    ========================== */
+    const {
+      tab = "today",
+      page = 1,
+      limit = 7,
+      search = "",
+      completedDays = 90,
+    } = req.query;
 
-    const handovers = await Handover.find({
+    const pageNum = Math.max(parseInt(page, 10) || 1, 1);
+    const limitNum = Math.min(Math.max(parseInt(limit, 10) || 7, 1), 50);
+    const searchTerm = String(search || "").trim().toLowerCase();
+
+    /* ==========================
+       BASE QUERY — trimmed select + trimmed populate.
+       NOTE: verify the field names below ("customer", "payment.billSummary",
+       "vehicle.vehicleId" sub-fields) match your actual Handover/Vehicle
+       schemas — adjust the .select()/.populate() lists if they differ.
+    ========================== */
+    const baseMatch = {
       isDeleted: false,
       "vehicle.vehicleId": { $exists: true },
       handoverStatus: { $ne: "cancelled" },
-    })
-      .populate("vehicle.vehicleId")
-      .populate("createdBy", "fullName role email mobileNumber profileImage")
-      .populate("assignedDriver", "fullName mobileNumber profileImage role")
-      .populate({
-        path: "bookingId",
-        select: {
-          tripType: 1,
-          destination: 1,
-          pickup: 1,
-          drop: 1,
-        },
-      })
-      .sort({
-        "trip.dropDateTime": 1,
-        createdAt: -1,
-      });
+    };
 
-    /* ==========================
-       GET COMPLETED RETURNS
-    ========================== */
+    const handovers = await Handover.find(baseMatch)
+      .select("vehicle trip customer createdAt bookingId assignedDriver createdBy payment")
+      .populate({ path: "vehicle.vehicleId", select: "vehicleName vehicleNumber images" })
+      .populate("createdBy", "fullName role")
+      .populate("assignedDriver", "fullName mobileNumber profileImage role")
+      .populate({ path: "bookingId", select: "drop" })
+      .sort({ "trip.dropDateTime": 1 })
+      .lean(); // plain JS objects — skips mongoose document overhead
+
+    const handoverIds = handovers.map((h) => h._id);
+
+    const completedSince = new Date();
+    completedSince.setDate(completedSince.getDate() - Number(completedDays));
 
     const vehicleReturns = await VehicleReturn.find({
+      handover: { $in: handoverIds },
       returnStatus: "completed",
-    }).populate("receivedBy", "fullName role email mobileNumber").select(`
-        handover
-        returnStatus
-        receivedBy
-        receivingTime
-        scheduledReturnTime
-        timeStatus
-        delayText
-        settlementDetails
-      `);
+    })
+      .select("handover receivedBy receivingTime scheduledReturnTime timeStatus delayText settlementDetails")
+      .populate("receivedBy", "fullName role")
+      .lean();
+
+    const completedMap = new Map(vehicleReturns.map((r) => [String(r.handover), r]));
 
     /* ==========================
-       CREATE LOOKUP MAP
+       BUCKET each handover into a tab — cheap, in-memory, no image/nested
+       data touched, so this loop is fast even over a few hundred docs.
     ========================== */
+    const now = new Date();
+    const todayStr = now.toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" });
+    const tomorrowD = new Date(now);
+    tomorrowD.setDate(tomorrowD.getDate() + 1);
+    const tomorrowStr = tomorrowD.toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" });
 
-    const completedMap = new Map(
-      vehicleReturns.map((item) => [item.handover.toString(), item]),
-    );
-
-    /* ==========================
-       MERGE DATA
-    ========================== */
-
-    const finalData = handovers.map((handover) => {
-      const obj = handover.toObject();
-
-      const now = new Date();
-      const dropDateTime = new Date(obj.trip.dropDateTime);
-
-      const diffMs = dropDateTime.getTime() - now.getTime();
-      const absMs = Math.abs(diffMs);
-
-      const days = Math.floor(absMs / (1000 * 60 * 60 * 24));
-      const hours = Math.floor((absMs / (1000 * 60 * 60)) % 24);
-      const minutes = Math.floor((absMs / (1000 * 60)) % 60);
-
-      const formatDuration = () => {
-        const parts = [];
-
-        if (days > 0) parts.push(`${days}d`);
-        if (hours > 0) parts.push(`${hours}h`);
-        if (minutes > 0 || parts.length === 0) parts.push(`${minutes}m`);
-
-        return parts.join(" ");
-      };
-
-      // ==========================
-      // DATE COMPARISON (IST)
-      // ==========================
-
-      const today = new Date();
-      const tomorrow = new Date();
-      tomorrow.setDate(today.getDate() + 1);
-
-      const todayStr = today.toLocaleDateString("en-CA", {
-        timeZone: "Asia/Kolkata",
-      });
-
-      const tomorrowStr = tomorrow.toLocaleDateString("en-CA", {
-        timeZone: "Asia/Kolkata",
-      });
-
-      const dropStr = dropDateTime.toLocaleDateString("en-CA", {
-        timeZone: "Asia/Kolkata",
-      });
-
-      const isToday = dropStr === todayStr;
-      const isTomorrow = dropStr === tomorrowStr;
-      const isPastDate = dropStr < todayStr;
-      const isFutureDate = dropStr > tomorrowStr;
-
-      let receiveStatus = "";
-      let receiveLabel = "";
-
-      if (isToday) {
-        // Keep in Today tab for the entire calendar day
-        receiveStatus = diffMs >= 0 ? "today" : "today_overdue";
-        receiveLabel =
-          diffMs >= 0
-            ? `Due in ${formatDuration()}`
-            : `Overdue by ${formatDuration()}`;
-      } else if (isTomorrow) {
-        receiveStatus = "tomorrow";
-        receiveLabel = `Due in ${formatDuration()}`;
-      } else if (isPastDate) {
-        receiveStatus = "overdue";
-        receiveLabel = `Overdue by ${formatDuration()}`;
-      } else if (isFutureDate) {
-        receiveStatus = "upcoming";
-        receiveLabel = `Due in ${formatDuration()}`;
+    const bucketed = handovers.map((h) => {
+      const returnInfo = completedMap.get(String(h._id));
+      let tabBucket;
+      if (returnInfo) {
+        tabBucket = "completed";
       } else {
-        receiveStatus = "upcoming";
-        receiveLabel = `Due in ${formatDuration()}`;
+        const dropDateTime = new Date(h.trip?.dropDateTime);
+        const dropStr = dropDateTime.toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" });
+        if (dropStr === todayStr) tabBucket = "today";
+        else if (dropStr === tomorrowStr) tabBucket = "tomorrow";
+        else if (dropStr < todayStr) tabBucket = "overdue";
+        else tabBucket = "active";
       }
+      return { handover: h, returnInfo, tabBucket };
+    });
 
-      obj.receiveTracker = {
-        status: receiveStatus,
-        label: receiveLabel,
-        overdue: diffMs < 0,
-        isToday,
-        isTomorrow,
-        remainingMs: diffMs,
-      };
-
-      obj.billSummary = obj.payment?.billSummary || {};
-
-      const booking = obj.bookingId;
-
-      obj.dropLocation =
-        booking &&
-        booking.drop &&
-        typeof booking.drop.location === "string" &&
-        booking.drop.location.trim().length > 0
-          ? booking.drop.location.trim()
-          : "Office";
-
-      obj.dropLandmark =
-        booking && booking.drop && typeof booking.drop.landmark === "string"
-          ? booking.drop.landmark.trim()
-          : "";
-
-      obj.dropMapLink =
-        booking && booking.drop && typeof booking.drop.mapLink === "string"
-          ? booking.drop.mapLink.trim()
-          : "";
-      obj.dropCharge =
-        booking && booking.drop && typeof booking.drop.charge === "number"
-          ? booking.drop.charge
-          : 0;
-
-      // ==========================
-      // CREATED BY
-      // ==========================
-
-      obj.createdByUser = handover.createdBy
-        ? {
-            _id: handover.createdBy._id,
-            fullName: handover.createdBy.fullName,
-            role: handover.createdBy.role,
-            email: handover.createdBy.email,
-            mobileNumber: handover.createdBy.mobileNumber,
-            profileImage: handover.createdBy.profileImage,
-          }
-        : null;
-
-      // ==========================
-      // RETURN DETAILS
-      // ==========================
-
-      const returnData = completedMap.get(handover._id.toString());
-
-      if (returnData) {
-        obj.returnStatus = "completed";
-
-        obj.returnDetails = {
-          receivedBy: returnData.receivedBy
-            ? {
-                _id: returnData.receivedBy._id,
-                fullName: returnData.receivedBy.fullName,
-                role: returnData.receivedBy.role,
-                email: returnData.receivedBy.email,
-                mobileNumber: returnData.receivedBy.mobileNumber,
-              }
-            : null,
-
-          receivingTime: returnData.receivingTime || null,
-          scheduledReturnTime: returnData.scheduledReturnTime || null,
-          timeStatus: returnData.timeStatus || "On Time",
-          delayText: returnData.delayText || "0 minutes",
-          settlementDetails: returnData.settlementDetails || {},
-        };
-      } else {
-        obj.returnStatus = null;
-        obj.returnDetails = null;
-      }
-
-      return obj;
+    // Drop completed records older than completedDays so that tab doesn't grow forever
+    const scoped = bucketed.filter(({ tabBucket, returnInfo }) => {
+      if (tabBucket !== "completed") return true;
+      return new Date(returnInfo.receivingTime) >= completedSince;
     });
 
     /* ==========================
-       COUNTS
+       COUNTS for the tab badges (cheap — just tallying labels already computed above)
     ========================== */
-
-    const completedCount = finalData.filter(
-      (item) => item.returnStatus === "completed",
-    ).length;
-
-    const activeCount = finalData.filter(
-      (item) => item.returnStatus !== "completed",
-    ).length;
+    const counts = { today: 0, all: 0, tomorrow: 0, overdue: 0, completed: 0 };
+    for (const { tabBucket } of scoped) {
+      if (tabBucket === "completed") counts.completed++;
+      else {
+        counts.all++;
+        if (counts[tabBucket] !== undefined) counts[tabBucket]++;
+      }
+    }
 
     /* ==========================
-       RESPONSE
+       FILTER to the requested tab, then search, then sort, then slice.
+       Everything after this point only ever touches the current tab's
+       subset — never the whole dataset.
     ========================== */
+    const inTab = scoped.filter(({ tabBucket }) => {
+      if (tab === "all") return tabBucket !== "completed";
+      if (tab === "completed") return tabBucket === "completed";
+      return tabBucket === tab;
+    });
+
+    const searched = searchTerm
+      ? inTab.filter(({ handover: h }) => {
+          const vehicleName = h.vehicle?.vehicleId?.vehicleName || h.vehicle?.vehicleName || "";
+          const vehicleNumber = h.vehicle?.vehicleId?.vehicleNumber || h.vehicle?.vehicleNumber || "";
+          const customerName = h.customer?.fullName || "";
+          const bookingTag = String(h._id).slice(-8);
+          const dropLocation = h.bookingId?.drop?.location || "";
+          return [vehicleName, vehicleNumber, customerName, bookingTag, dropLocation]
+            .join(" ")
+            .toLowerCase()
+            .includes(searchTerm);
+        })
+      : inTab;
+
+    const TAB_PRIORITY = { overdue: 1, today: 2, tomorrow: 3, active: 4 };
+    searched.sort((a, b) => {
+      if (tab === "completed") {
+        return new Date(b.returnInfo?.receivingTime || 0) - new Date(a.returnInfo?.receivingTime || 0);
+      }
+      if (tab === "all") {
+        return (TAB_PRIORITY[a.tabBucket] || 99) - (TAB_PRIORITY[b.tabBucket] || 99);
+      }
+      return new Date(a.handover.trip?.dropDateTime) - new Date(b.handover.trip?.dropDateTime);
+    });
+
+    const total = searched.length;
+    const start = (pageNum - 1) * limitNum;
+    const pageSlice = searched.slice(start, start + limitNum);
+
+    // Only map the page we're returning (7–20 items), not the whole dataset
+    const data = pageSlice.map(({ handover: h, returnInfo }) => ({
+      ...h,
+      dropLocation: h.bookingId?.drop?.location || "Office",
+      dropCharge: h.bookingId?.drop?.charge || 0,
+      createdByUser: h.createdBy ? { fullName: h.createdBy.fullName, role: h.createdBy.role } : null,
+      returnStatus: returnInfo ? "completed" : null,
+      returnDetails: returnInfo
+        ? {
+            receivedBy: returnInfo.receivedBy
+              ? { fullName: returnInfo.receivedBy.fullName, role: returnInfo.receivedBy.role }
+              : null,
+            receivingTime: returnInfo.receivingTime || null,
+            scheduledReturnTime: returnInfo.scheduledReturnTime || null,
+            timeStatus: returnInfo.timeStatus || "On Time",
+            delayText: returnInfo.delayText || "0 minutes",
+            settlementDetails: returnInfo.settlementDetails || {},
+          }
+        : null,
+    }));
 
     return res.status(200).json({
       success: true,
-      count: finalData.length,
-      activeCount,
-      completedCount,
-      data: finalData,
+      tab,
+      page: pageNum,
+      limit: limitNum,
+      total,
+      hasMore: start + pageSlice.length < total,
+      counts,
+      data,
     });
   } catch (error) {
     console.error("GET RECEIVE CAR LIST ERROR:", error);
-
     return res.status(500).json({
       success: false,
       message: error.message || "Failed to fetch receive car list",
@@ -1723,7 +1651,6 @@ export const getReceiveCarList = async (req, res) => {
 };
 
 // ACTIVE RENTAL EDIT APIS
-
 function buildBillSummaryResponse(handover) {
   const payment = handover.payment || {};
   const extensionBills = handover.extensionBills || [];
