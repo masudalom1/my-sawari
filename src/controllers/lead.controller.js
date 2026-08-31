@@ -2420,14 +2420,9 @@ export const createBookings = async (req, res, next) => {
       (finalToDate.getTime() - finalFromDate.getTime()) / MS_PER_DAY,
     );
 
-    if (calculatedTotalDays < 1) {
-      return res.status(400).json({
-        success: false,
-        message: "Booking duration must be at least 1 day.",
-      });
-    }
-
-    const finalTotalDays = calculatedTotalDays;
+    // Same-day booking is allowed.
+    // Minimum duration is 0 days at date level.
+    const finalTotalDays = Math.max(0, calculatedTotalDays);
 
     // ============================================================
     // PAYMENT METHOD VALIDATION
