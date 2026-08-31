@@ -132,12 +132,9 @@ export const receiveVehicle = async (req, res) => {
       });
     }
 
-
-
     let parsedPaymentBreakdown = { cash: 0, phonePe: 0, razorpay: 0 }; // ADDED
 
     try {
- 
       if (paymentBreakdown) {
         const raw =
           typeof paymentBreakdown === "string"
@@ -461,9 +458,8 @@ export const receiveVehicle = async (req, res) => {
 
         amountCollected: collected,
 
-        paymentMode: normalizedPaymentMode, // CHANGED: use normalized value instead of raw req.body.paymentMode
-        upiLast4: isUpiPayment ? normalizedUpiLast4 : "",
-        paymentBreakdown: parsedPaymentBreakdown, // ADDED: persist cash/phonePe/razorpay split on the return doc itself
+        paymentMode: normalizedPaymentMode, 
+        paymentBreakdown: parsedPaymentBreakdown,
 
         finalBalance,
 
@@ -476,8 +472,6 @@ export const receiveVehicle = async (req, res) => {
 
       returnStatus: "completed",
     });
-
- 
 
     if (collected > 0) {
       try {
@@ -500,9 +494,10 @@ export const receiveVehicle = async (req, res) => {
           },
 
           amount: collected,
+          upiLast4: isUpiPayment ? normalizedUpiLast4 : "",
 
           paymentMethod: (() => {
-            const mode = String(normalizedPaymentMode || "cash").toLowerCase(); // CHANGED: use normalizedPaymentMode
+            const mode = String(normalizedPaymentMode || "cash").toLowerCase();
 
             const paymentMethodMap = {
               cash: "cash",
@@ -513,6 +508,8 @@ export const receiveVehicle = async (req, res) => {
 
             return paymentMethodMap[mode] || "cash";
           })(),
+
+          upiLast4: isUpiPayment ? normalizedUpiLast4 : "",
 
           paymentBreakdown: parsedPaymentBreakdown,
 
