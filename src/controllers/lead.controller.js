@@ -2420,9 +2420,8 @@ export const createBookings = async (req, res, next) => {
       (finalToDate.getTime() - finalFromDate.getTime()) / MS_PER_DAY,
     );
 
-    // Same-day booking is allowed.
-    // Minimum duration is 0 days at date level.
-    const finalTotalDays = Math.max(0, calculatedTotalDays);
+    // Same-day booking is allowed and counts as 1 rental day.
+    const finalTotalDays = Math.max(1, calculatedTotalDays);
 
     // ============================================================
     // PAYMENT METHOD VALIDATION
