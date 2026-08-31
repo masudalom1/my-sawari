@@ -2377,10 +2377,10 @@ export const createBookings = async (req, res, next) => {
     }
 
     // Start must be before end.
-    if (finalFromDate >= finalToDate) {
+    if (finalFromDate > finalToDate) {
       return res.status(400).json({
         success: false,
-        message: "End date must be after start date.",
+        message: "End date cannot be before start date.",
       });
     }
 
