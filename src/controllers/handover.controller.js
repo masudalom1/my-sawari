@@ -1906,16 +1906,20 @@ export const getBillSummary = async (req, res) => {
 };
 
 const formatDropTime = (date) => {
-  const hours = date.getHours();
-  const minutes = date.getMinutes();
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "Asia/Kolkata",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).formatToParts(date);
 
-  const hour12 = hours % 12 || 12;
-  const period = hours >= 12 ? "PM" : "AM";
+  const hour = Number(parts.find((p) => p.type === "hour").value);
+  const minute = Number(parts.find((p) => p.type === "minute").value);
 
-  return `${String(hour12).padStart(2, "0")}:${String(minutes).padStart(
-    2,
-    "0",
-  )} ${period}`;
+  const hour12 = hour % 12 || 12;
+  const period = hour >= 12 ? "PM" : "AM";
+
+  return `${String(hour12).padStart(2, "0")}:${String(minute).padStart(2, "0")} ${period}`;
 };
 
 export const updateRental = async (req, res) => {
