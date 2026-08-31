@@ -2242,6 +2242,7 @@ export const createBookings = async (req, res, next) => {
 
       paymentMethod = "phonepe",
       paymentBreakdown = {},
+      upiLast4 = "",
 
       pickupDropRequired = false,
       serviceType = "pickup_drop",
@@ -2437,6 +2438,17 @@ export const createBookings = async (req, res, next) => {
     }
 
     const advancePaid = Number(bookingAmount) || 0;
+
+    const normalizedUpiLast4 = String(upiLast4 || "").trim();
+
+    if (paymentMethod === "phonepe" && advancePaid > 0) {
+      if (!/^\d{4}$/.test(normalizedUpiLast4)) {
+        return res.status(400).json({
+          success: false,
+          message: "PhonePe UPI last 4 digits are required.",
+        });
+      }
+    }
 
     if (advancePaid < 0) {
       return res.status(400).json({
@@ -2802,7 +2814,7 @@ export const createBookings = async (req, res, next) => {
               amount: advancePaid,
 
               paymentMethod,
-
+              upiLast4: paymentMethod === "phonepe" ? normalizedUpiLast4 : "",
               paymentBreakdown: {
                 cash: Number(breakdown.cash) || 0,
 
