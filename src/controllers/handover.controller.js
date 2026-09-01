@@ -8,13 +8,13 @@ import PaymentHistory from "../models/paymentHistory.model.js";
 
 //extra function helper
 const IST_TZ = "Asia/Kolkata";
-// recieved list 
+// recieved list
 function istDayBoundsUTC(yyyyMmDd) {
   const startUTC = new Date(`${yyyyMmDd}T00:00:00+05:30`);
   const endUTC = new Date(startUTC.getTime() + 24 * 60 * 60 * 1000);
   return { startUTC, endUTC };
 }
-// recieved list helper 
+// recieved list helper
 async function countNonCompleted(baseMatch, dateFilter) {
   const result = await Handover.aggregate([
     { $match: { ...baseMatch, ...dateFilter } },
@@ -827,6 +827,7 @@ export const createHandover = async (req, res, next) => {
           amount: Number(payment.amountReceivedNow),
 
           paymentMethod: payment?.paymentMethod || "cash",
+          upiLast4: payment?.upiLast4 || "",
 
           paymentBreakdown: {
             cash: Number(payment?.paymentBreakdown?.cash) || 0,
@@ -1133,16 +1134,16 @@ export const saveHandoverImages = async (req, res) => {
     ];
 
     // Saved if provided, but don't affect completion/progress calculation
-   const OPTIONAL_IMAGES = [
-  "drivingLicenseFront",
-  "drivingLicenseBack",
-  "toolkit",
-  "spareTyre",
-  "odometer",
-  "fuelGauge",
-  "interior",
-  "roofTop",
-];
+    const OPTIONAL_IMAGES = [
+      "drivingLicenseFront",
+      "drivingLicenseBack",
+      "toolkit",
+      "spareTyre",
+      "odometer",
+      "fuelGauge",
+      "interior",
+      "roofTop",
+    ];
 
     const update = {};
 
@@ -1535,7 +1536,9 @@ export const getReceiveCarList = async (req, res) => {
 
     const pageNum = Math.max(parseInt(page, 10) || 1, 1);
     const limitNum = Math.min(Math.max(parseInt(limit, 10) || 7, 1), 50);
-    const searchTerm = String(search || "").trim().toLowerCase();
+    const searchTerm = String(search || "")
+      .trim()
+      .toLowerCase();
 
     const baseMatch = {
       isDeleted: false,
@@ -1548,7 +1551,9 @@ export const getReceiveCarList = async (req, res) => {
     const todayStr = now.toLocaleDateString("en-CA", { timeZone: IST_TZ });
     const tomorrowD = new Date(now);
     tomorrowD.setDate(tomorrowD.getDate() + 1);
-    const tomorrowStr = tomorrowD.toLocaleDateString("en-CA", { timeZone: IST_TZ });
+    const tomorrowStr = tomorrowD.toLocaleDateString("en-CA", {
+      timeZone: IST_TZ,
+    });
 
     const today = istDayBoundsUTC(todayStr);
     const tomorrow = istDayBoundsUTC(tomorrowStr);
@@ -1561,9 +1566,13 @@ export const getReceiveCarList = async (req, res) => {
     // Mongo with a narrow, indexable range on trip.dropDateTime.
     let dateFilter = {};
     if (tab === "today") {
-      dateFilter = { "trip.dropDateTime": { $gte: today.startUTC, $lt: today.endUTC } };
+      dateFilter = {
+        "trip.dropDateTime": { $gte: today.startUTC, $lt: today.endUTC },
+      };
     } else if (tab === "tomorrow") {
-      dateFilter = { "trip.dropDateTime": { $gte: tomorrow.startUTC, $lt: tomorrow.endUTC } };
+      dateFilter = {
+        "trip.dropDateTime": { $gte: tomorrow.startUTC, $lt: tomorrow.endUTC },
+      };
     } else if (tab === "overdue") {
       dateFilter = { "trip.dropDateTime": { $lt: today.startUTC } };
     }
@@ -1584,12 +1593,17 @@ export const getReceiveCarList = async (req, res) => {
          purpose-built collection), paginate there, then fetch only the
          matching Handover docs by id.
       ========================== */
-      const returnMatch = { returnStatus: "completed", receivingTime: { $gte: completedSince } };
+      const returnMatch = {
+        returnStatus: "completed",
+        receivingTime: { $gte: completedSince },
+      };
 
       total = await VehicleReturn.countDocuments(returnMatch);
 
       const returnsPage = await VehicleReturn.find(returnMatch)
-        .select("handover receivedBy receivingTime scheduledReturnTime timeStatus delayText settlementDetails")
+        .select(
+          "handover receivedBy receivingTime scheduledReturnTime timeStatus delayText settlementDetails",
+        )
         .populate("receivedBy", "fullName role")
         .sort({ receivingTime: -1 })
         .skip((pageNum - 1) * limitNum)
@@ -1600,8 +1614,13 @@ export const getReceiveCarList = async (req, res) => {
       const ids = returnsPage.map((r) => r.handover);
 
       handoverDocs = await Handover.find({ ...baseMatch, _id: { $in: ids } })
-        .select("vehicle trip customer createdAt bookingId assignedDriver createdBy payment")
-        .populate({ path: "vehicle.vehicleId", select: "vehicleName vehicleNumber images" })
+        .select(
+          "vehicle trip customer createdAt bookingId assignedDriver createdBy payment",
+        )
+        .populate({
+          path: "vehicle.vehicleId",
+          select: "vehicleName vehicleNumber images",
+        })
         .populate("createdBy", "fullName role")
         .populate("assignedDriver", "fullName mobileNumber profileImage role")
         .populate({ path: "bookingId", select: "drop" })
@@ -1610,7 +1629,9 @@ export const getReceiveCarList = async (req, res) => {
       // Preserve VehicleReturn's receivingTime-desc order, since the Handover
       // $in query above does not guarantee it.
       const order = new Map(ids.map((id, i) => [String(id), i]));
-      handoverDocs.sort((a, b) => order.get(String(a._id)) - order.get(String(b._id)));
+      handoverDocs.sort(
+        (a, b) => order.get(String(a._id)) - order.get(String(b._id)),
+      );
 
       hasMore = (pageNum - 1) * limitNum + returnsPage.length < total;
     } else {
@@ -1620,8 +1641,13 @@ export const getReceiveCarList = async (req, res) => {
          anything that already has a completed return, then paginate.
       ========================== */
       const candidates = await Handover.find({ ...baseMatch, ...dateFilter })
-        .select("vehicle trip customer createdAt bookingId assignedDriver createdBy payment")
-        .populate({ path: "vehicle.vehicleId", select: "vehicleName vehicleNumber images" })
+        .select(
+          "vehicle trip customer createdAt bookingId assignedDriver createdBy payment",
+        )
+        .populate({
+          path: "vehicle.vehicleId",
+          select: "vehicleName vehicleNumber images",
+        })
         .populate("createdBy", "fullName role")
         .populate("assignedDriver", "fullName mobileNumber profileImage role")
         .populate({ path: "bookingId", select: "drop" })
@@ -1630,23 +1656,38 @@ export const getReceiveCarList = async (req, res) => {
 
       const candidateIds = candidates.map((h) => h._id);
       const returns = candidateIds.length
-        ? await VehicleReturn.find({ handover: { $in: candidateIds }, returnStatus: "completed" })
+        ? await VehicleReturn.find({
+            handover: { $in: candidateIds },
+            returnStatus: "completed",
+          })
             .select("handover")
             .lean()
         : [];
       const completedIdSet = new Set(returns.map((r) => String(r.handover)));
 
-      let notCompleted = candidates.filter((h) => !completedIdSet.has(String(h._id)));
+      let notCompleted = candidates.filter(
+        (h) => !completedIdSet.has(String(h._id)),
+      );
 
       // Search (within this already-small, tab-scoped set)
       if (searchTerm) {
         notCompleted = notCompleted.filter((h) => {
-          const vehicleName = h.vehicle?.vehicleId?.vehicleName || h.vehicle?.vehicleName || "";
-          const vehicleNumber = h.vehicle?.vehicleId?.vehicleNumber || h.vehicle?.vehicleNumber || "";
+          const vehicleName =
+            h.vehicle?.vehicleId?.vehicleName || h.vehicle?.vehicleName || "";
+          const vehicleNumber =
+            h.vehicle?.vehicleId?.vehicleNumber ||
+            h.vehicle?.vehicleNumber ||
+            "";
           const customerName = h.customer?.fullName || "";
           const bookingTag = String(h._id).slice(-8);
           const dropLocation = h.bookingId?.drop?.location || "";
-          return [vehicleName, vehicleNumber, customerName, bookingTag, dropLocation]
+          return [
+            vehicleName,
+            vehicleNumber,
+            customerName,
+            bookingTag,
+            dropLocation,
+          ]
             .join(" ")
             .toLowerCase()
             .includes(searchTerm);
@@ -1665,12 +1706,17 @@ export const getReceiveCarList = async (req, res) => {
         ...h,
         dropLocation: h.bookingId?.drop?.location || "Office",
         dropCharge: h.bookingId?.drop?.charge || 0,
-        createdByUser: h.createdBy ? { fullName: h.createdBy.fullName, role: h.createdBy.role } : null,
+        createdByUser: h.createdBy
+          ? { fullName: h.createdBy.fullName, role: h.createdBy.role }
+          : null,
         returnStatus: returnInfo ? "completed" : null,
         returnDetails: returnInfo
           ? {
               receivedBy: returnInfo.receivedBy
-                ? { fullName: returnInfo.receivedBy.fullName, role: returnInfo.receivedBy.role }
+                ? {
+                    fullName: returnInfo.receivedBy.fullName,
+                    role: returnInfo.receivedBy.role,
+                  }
                 : null,
               receivingTime: returnInfo.receivingTime || null,
               scheduledReturnTime: returnInfo.scheduledReturnTime || null,
@@ -1687,12 +1733,25 @@ export const getReceiveCarList = async (req, res) => {
        These never hydrate full documents, so they stay fast even though
        "all"/"overdue" span a wider date range.
     ========================== */
-    const [todayCount, tomorrowCount, overdueCount, completedCount] = await Promise.all([
-      countNonCompleted(baseMatch, { "trip.dropDateTime": { $gte: today.startUTC, $lt: today.endUTC } }),
-      countNonCompleted(baseMatch, { "trip.dropDateTime": { $gte: tomorrow.startUTC, $lt: tomorrow.endUTC } }),
-      countNonCompleted(baseMatch, { "trip.dropDateTime": { $lt: today.startUTC } }),
-      VehicleReturn.countDocuments({ returnStatus: "completed", receivingTime: { $gte: completedSince } }),
-    ]);
+    const [todayCount, tomorrowCount, overdueCount, completedCount] =
+      await Promise.all([
+        countNonCompleted(baseMatch, {
+          "trip.dropDateTime": { $gte: today.startUTC, $lt: today.endUTC },
+        }),
+        countNonCompleted(baseMatch, {
+          "trip.dropDateTime": {
+            $gte: tomorrow.startUTC,
+            $lt: tomorrow.endUTC,
+          },
+        }),
+        countNonCompleted(baseMatch, {
+          "trip.dropDateTime": { $lt: today.startUTC },
+        }),
+        VehicleReturn.countDocuments({
+          returnStatus: "completed",
+          receivingTime: { $gte: completedSince },
+        }),
+      ]);
     // "all" = everything non-completed regardless of date; approximate it
     // from a 4th cheap count rather than a full scan.
     const allCount = await countNonCompleted(baseMatch, {});
@@ -2288,7 +2347,6 @@ ${updateNote}`
         .slice(-500);
     }
 
-
     if (handover.bookingId) {
       const booking = await Booking.findById(handover.bookingId);
 
@@ -2373,7 +2431,6 @@ ${updateNote}`
     // ==========================================================
 
     await handover.save();
-
 
     if (Number(amountReceivedNow) > 0) {
       try {
