@@ -454,6 +454,35 @@ const handoverSchema = new mongoose.Schema(
         type: String,
         default: "",
       },
+      toolkit: {
+        type: String,
+        default: "",
+      },
+
+      spareTyre: {
+        type: String,
+        default: "",
+      },
+
+      odometer: {
+        type: String,
+        default: "",
+      },
+
+      fuelGauge: {
+        type: String,
+        default: "",
+      },
+
+      interior: {
+        type: String,
+        default: "",
+      },
+
+      roofTop: {
+        type: String,
+        default: "",
+      },
 
       vehicleFront: {
         type: String,

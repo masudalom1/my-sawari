@@ -1133,7 +1133,16 @@ export const saveHandoverImages = async (req, res) => {
     ];
 
     // Saved if provided, but don't affect completion/progress calculation
-    const OPTIONAL_IMAGES = ["drivingLicenseFront", "drivingLicenseBack"];
+   const OPTIONAL_IMAGES = [
+  "drivingLicenseFront",
+  "drivingLicenseBack",
+  "toolkit",
+  "spareTyre",
+  "odometer",
+  "fuelGauge",
+  "interior",
+  "roofTop",
+];
 
     const update = {};
 
