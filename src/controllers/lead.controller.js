@@ -2538,25 +2538,95 @@ export const createBookings = async (req, res, next) => {
     // CHECK BOOKING CONFLICT
     // ============================================================
 
-    const existingBooking = await Booking.findOne({
+    const parseTimeToMinutes = (timeString) => {
+      if (!timeString || typeof timeString !== "string") {
+        return 0;
+      }
+
+      const match = timeString.trim().match(/^(\d{1,2}):(\d{2})\s*(AM|PM)$/i);
+
+      if (!match) {
+        return 0;
+      }
+
+      let hour = Number(match[1]);
+      const minute = Number(match[2]);
+      const period = match[3].toUpperCase();
+
+      if (period === "AM" && hour === 12) {
+        hour = 0;
+      }
+
+      if (period === "PM" && hour !== 12) {
+        hour += 12;
+      }
+
+      return hour * 60 + minute;
+    };
+
+    const newPickupMinutes = parseTimeToMinutes(pickupTime || "08:00 AM");
+    const newDropMinutes = parseTimeToMinutes(dropTime || "08:00 AM");
+
+    const newStart = new Date(finalFromDate);
+    newStart.setUTCHours(0, newPickupMinutes, 0, 0);
+
+    const newEnd = new Date(finalToDate);
+    newEnd.setUTCHours(0, newDropMinutes, 0, 0);
+
+    // Exact boundary is allowed:
+    // Existing ends exactly when new booking starts = NO conflict.
+    const existingBookings = await Booking.find({
       vehicleId: vehicle._id,
-
       isDeleted: false,
-
       status: {
         $nin: ["cancelled", "completed"],
       },
-
-      fromDate: {
-        $lt: finalToDate,
-      },
-
-      toDate: {
-        $gt: finalFromDate,
-      },
     })
-      .select("_id bookingCode fromDate toDate status customerName")
-      .session(session);
+      .select(
+        "_id bookingCode fromDate toDate pickupTime dropTime status customerName",
+      )
+      .session(session)
+      .lean();
+
+    const existingBooking = existingBookings.find((booking) => {
+      const existingStart = new Date(booking.fromDate);
+      const existingEnd = new Date(booking.toDate);
+
+      const existingPickupMinutes = parseTimeToMinutes(
+        booking.pickupTime || "08:00 AM",
+      );
+
+      const existingDropMinutes = parseTimeToMinutes(
+        booking.dropTime || "08:00 AM",
+      );
+
+      existingStart.setUTCHours(0, existingPickupMinutes, 0, 0);
+      existingEnd.setUTCHours(0, existingDropMinutes, 0, 0);
+
+      // Overlap only when:
+      // existingStart < newEnd
+      // AND existingEnd > newStart
+      return existingStart < newEnd && existingEnd > newStart;
+    });
+
+    if (existingBooking) {
+      await session.abortTransaction();
+
+      return res.status(409).json({
+        success: false,
+        message: "This vehicle is already booked during the selected dates.",
+        conflict: {
+          bookingId: existingBooking._id,
+          bookingCode: existingBooking.bookingCode || null,
+          customerName: existingBooking.customerName || "",
+          fromDate: existingBooking.fromDate,
+          toDate: existingBooking.toDate,
+          pickupTime: existingBooking.pickupTime,
+          dropTime: existingBooking.dropTime,
+          status: existingBooking.status,
+        },
+      });
+    }
 
     if (existingBooking) {
       await session.abortTransaction();
