@@ -301,6 +301,35 @@ const vehicleReturnSchema = new mongoose.Schema(
         type: String,
         default: "",
       },
+      tyreFrontLeft: {
+        type: String,
+        default: "",
+      },
+
+      tyreFrontRight: {
+        type: String,
+        default: "",
+      },
+
+      tyreRearLeft: {
+        type: String,
+        default: "",
+      },
+
+      tyreRearRight: {
+        type: String,
+        default: "",
+      },
+
+      spareTyre: {
+        type: String,
+        default: "",
+      },
+
+      toolkit: {
+        type: String,
+        default: "",
+      },
     },
 
     /* ======================

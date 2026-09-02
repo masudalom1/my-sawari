@@ -396,15 +396,18 @@ export const receiveVehicle = async (req, res) => {
       /* ======================
      VEHICLE RETURN IMAGES
   ====================== */
-
       images: {
         vehicleFront: files.vehicleFront?.[0]?.path || "",
-
         vehicleRear: files.vehicleRear?.[0]?.path || "",
-
         vehicleLeft: files.vehicleLeft?.[0]?.path || "",
-
         vehicleRight: files.vehicleRight?.[0]?.path || "",
+
+        tyreFrontLeft: files.tyreFrontLeft?.[0]?.path || "",
+        tyreFrontRight: files.tyreFrontRight?.[0]?.path || "",
+        tyreRearLeft: files.tyreRearLeft?.[0]?.path || "",
+        tyreRearRight: files.tyreRearRight?.[0]?.path || "",
+        spareTyre: files.spareTyre?.[0]?.path || "",
+        toolkit: files.toolkit?.[0]?.path || "",
       },
 
       /* ======================
@@ -458,7 +461,7 @@ export const receiveVehicle = async (req, res) => {
 
         amountCollected: collected,
 
-        paymentMode: normalizedPaymentMode, 
+        paymentMode: normalizedPaymentMode,
         paymentBreakdown: parsedPaymentBreakdown,
 
         finalBalance,

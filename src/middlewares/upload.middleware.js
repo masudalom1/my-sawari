@@ -111,6 +111,32 @@ export const vehicleReturnUpload = upload.fields([
     maxCount: 1,
   },
 
+  // Optional tyre & toolkit photos
+  {
+    name: "tyreFrontLeft",
+    maxCount: 1,
+  },
+  {
+    name: "tyreFrontRight",
+    maxCount: 1,
+  },
+  {
+    name: "tyreRearLeft",
+    maxCount: 1,
+  },
+  {
+    name: "tyreRearRight",
+    maxCount: 1,
+  },
+  {
+    name: "spareTyre",
+    maxCount: 1,
+  },
+  {
+    name: "toolkit",
+    maxCount: 1,
+  },
+
   {
     name: "damageImages",
     maxCount: 20,
