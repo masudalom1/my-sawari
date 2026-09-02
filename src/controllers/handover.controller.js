@@ -647,6 +647,34 @@ export const createHandover = async (req, res, next) => {
     }
 
     // ==========================
+    // NORMALIZE / VALIDATE UPI LAST 4 DIGITS
+    // ==========================
+    // Accepts an array of 4-digit strings (new multi-entry format).
+    // Falls back gracefully if a single string is somehow still sent,
+    // so older clients don't break outright.
+    const rawUpiLast4 = payment?.upiLast4;
+    const upiLast4List = Array.isArray(rawUpiLast4)
+      ? rawUpiLast4
+      : rawUpiLast4
+        ? [rawUpiLast4]
+        : [];
+
+    const normalizedUpiLast4 = upiLast4List
+      .map((v) => String(v || "").trim())
+      .filter((v) => v.length > 0);
+
+    const hasInvalidUpiEntry = normalizedUpiLast4.some(
+      (v) => !/^\d{4}$/.test(v),
+    );
+
+    if (hasInvalidUpiEntry) {
+      return res.status(400).json({
+        success: false,
+        message: "Each UPI last 4 digits entry must contain exactly 4 numbers",
+      });
+    }
+
+    // ==========================
     // CHECK VEHICLE
     // ==========================
     const selectedVehicle = await Vehicle.findOne({
@@ -743,6 +771,8 @@ export const createHandover = async (req, res, next) => {
 
         paymentMethod: payment?.paymentMethod || "cash",
 
+        upiLast4: normalizedUpiLast4,
+
         paymentBreakdown: {
           cash: Number(payment?.paymentBreakdown?.cash) || 0,
 
@@ -827,7 +857,7 @@ export const createHandover = async (req, res, next) => {
           amount: Number(payment.amountReceivedNow),
 
           paymentMethod: payment?.paymentMethod || "cash",
-          upiLast4: payment?.upiLast4 || "",
+          upiLast4: normalizedUpiLast4,
 
           paymentBreakdown: {
             cash: Number(payment?.paymentBreakdown?.cash) || 0,

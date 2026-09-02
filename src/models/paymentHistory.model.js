@@ -105,11 +105,23 @@ const paymentHistorySchema = new mongoose.Schema(
       enum: ["cash", "phonepe", "razorpay", "mixed"],
       default: "cash",
     },
+
+    // Multiple UPI references can be recorded against a single payment
+    // (e.g. a customer split one PhonePe payment across two transactions,
+    // or a "mixed" payment includes more than one UPI transfer).
+    // Each entry must be exactly 4 digits; empty/invalid entries are
+    // filtered out before saving (see controller).
     upiLast4: {
-      type: String,
-      default: "",
-      trim: true,
-      match: [/^\d{4}$/, "UPI last 4 digits must contain exactly 4 numbers"],
+      type: [String],
+      default: [],
+      validate: {
+        validator: function (arr) {
+          return (
+            Array.isArray(arr) && arr.every((v) => /^\d{4}$/.test(v))
+          );
+        },
+        message: "Each UPI last 4 digits entry must contain exactly 4 numbers",
+      },
     },
 
     paymentBreakdown: {
@@ -161,11 +173,6 @@ const paymentHistorySchema = new mongoose.Schema(
       index: true,
     },
 
-    collectedAmount: {
-      type: Number,
-      default: 0,
-      min: 0,
-    },
     collectedAmount: {
       type: Number,
       default: 0,
