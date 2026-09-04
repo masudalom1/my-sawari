@@ -1,6 +1,6 @@
 import express from "express";
 import protect from "../middlewares/auth.middleware.js";
-import { handoverUpload, singleImageUpload } from "../middlewares/upload.middleware.js";
+import { handoverUpload, singleImageUpload,vehicleExchangeUpload,multerErrorHandler } from "../middlewares/upload.middleware.js";
 import {
   completeDraftHandover,
   createDraftHandover,
@@ -41,7 +41,7 @@ router.get("/receive-list", getReceiveCarList);
 // ACTIVE RENTAL EDIT APIS
 router.get("/rentals/:id",protect,getRentalDetails);
 
-router.put("/rentals/edit/:id",protect,updateRental);
+router.put("/rentals/edit/:id",protect,vehicleExchangeUpload,multerErrorHandler,updateRental);
 
 //handover api 
 router.get("/list", protect, getHandovers);

@@ -147,6 +147,25 @@ export const vehicleReturnUpload = upload.fields([
   },
 ]);
 
+export const vehicleExchangeUpload = upload.fields([
+  {
+    name: "vehicleFront",
+    maxCount: 1,
+  },
+  {
+    name: "vehicleRear",
+    maxCount: 1,
+  },
+  {
+    name: "vehicleLeft",
+    maxCount: 1,
+  },
+  {
+    name: "vehicleRight",
+    maxCount: 1,
+  },
+]);
+
 /* ==================================
    MULTER ERROR HANDLER
 ================================== */

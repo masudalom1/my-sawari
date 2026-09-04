@@ -60,6 +60,31 @@ const extensionBillSchema = new mongoose.Schema(
   { _id: true },
 );
 
+const vehicleExchangeImageSchema = new mongoose.Schema(
+  {
+    vehicleFront: {
+      type: String,
+      default: "",
+    },
+
+    vehicleRear: {
+      type: String,
+      default: "",
+    },
+
+    vehicleLeft: {
+      type: String,
+      default: "",
+    },
+
+    vehicleRight: {
+      type: String,
+      default: "",
+    },
+  },
+  { _id: false }
+);
+
 const handoverSchema = new mongoose.Schema(
   {
     company: {
@@ -176,56 +201,67 @@ const handoverSchema = new mongoose.Schema(
       },
     },
 
-    vehicleHistory: [
-      {
-        oldVehicle: {
-          vehicleId: {
-            type: mongoose.Schema.Types.ObjectId,
-            ref: "Vehicle",
-          },
-          vehicleName: {
-            type: String,
-            default: "",
-          },
-          vehicleNumber: {
-            type: String,
-            default: "",
-          },
-        },
-
-        newVehicle: {
-          vehicleId: {
-            type: mongoose.Schema.Types.ObjectId,
-            ref: "Vehicle",
-          },
-          vehicleName: {
-            type: String,
-            default: "",
-          },
-          vehicleNumber: {
-            type: String,
-            default: "",
-          },
-        },
-
-        changedBy: {
-          type: mongoose.Schema.Types.ObjectId,
-          ref: "User",
-          required: true,
-        },
-
-        changedAt: {
-          type: Date,
-          default: Date.now,
-        },
-
-        reason: {
-          type: String,
-          default: "",
-          trim: true,
-        },
+  vehicleHistory: [
+  {
+    oldVehicle: {
+      vehicleId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "Vehicle",
       },
-    ],
+
+      vehicleName: {
+        type: String,
+        default: "",
+      },
+
+      vehicleNumber: {
+        type: String,
+        default: "",
+      },
+    },
+
+    newVehicle: {
+      vehicleId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "Vehicle",
+      },
+
+      vehicleName: {
+        type: String,
+        default: "",
+      },
+
+      vehicleNumber: {
+        type: String,
+        default: "",
+      },
+    },
+
+    // Photos captured when the customer received
+    // the replacement vehicle.
+    exchangeImages: {
+      type: vehicleExchangeImageSchema,
+      default: () => ({}),
+    },
+
+    changedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      required: true,
+    },
+
+    changedAt: {
+      type: Date,
+      default: Date.now,
+    },
+
+    reason: {
+      type: String,
+      default: "",
+      trim: true,
+    },
+  },
+],
 
     trip: {
       tripType: {
