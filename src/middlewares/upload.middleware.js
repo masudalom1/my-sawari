@@ -164,6 +164,7 @@ export const vehicleExchangeUpload = upload.fields([
     name: "vehicleRight",
     maxCount: 1,
   },
+  { name: "additional", maxCount: 1 },
 ]);
 
 /* ==================================

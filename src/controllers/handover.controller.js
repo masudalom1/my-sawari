@@ -2685,6 +2685,7 @@ export const updateRental = async (req, res) => {
         vehicleLeft: getUploadedImage(req.files, "vehicleLeft"),
 
         vehicleRight: getUploadedImage(req.files, "vehicleRight"),
+        additional: getUploadedImage(req.files, "additional"),
       };
 
       // --------------------------------------------------------

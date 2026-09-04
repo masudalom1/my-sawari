@@ -81,8 +81,9 @@ const vehicleExchangeImageSchema = new mongoose.Schema(
       type: String,
       default: "",
     },
+    additional: { type: String, default: "" },
   },
-  { _id: false }
+  { _id: false },
 );
 
 const handoverSchema = new mongoose.Schema(
@@ -201,67 +202,67 @@ const handoverSchema = new mongoose.Schema(
       },
     },
 
-  vehicleHistory: [
-  {
-    oldVehicle: {
-      vehicleId: {
-        type: mongoose.Schema.Types.ObjectId,
-        ref: "Vehicle",
+    vehicleHistory: [
+      {
+        oldVehicle: {
+          vehicleId: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: "Vehicle",
+          },
+
+          vehicleName: {
+            type: String,
+            default: "",
+          },
+
+          vehicleNumber: {
+            type: String,
+            default: "",
+          },
+        },
+
+        newVehicle: {
+          vehicleId: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: "Vehicle",
+          },
+
+          vehicleName: {
+            type: String,
+            default: "",
+          },
+
+          vehicleNumber: {
+            type: String,
+            default: "",
+          },
+        },
+
+        // Photos captured when the customer received
+        // the replacement vehicle.
+        exchangeImages: {
+          type: vehicleExchangeImageSchema,
+          default: () => ({}),
+        },
+
+        changedBy: {
+          type: mongoose.Schema.Types.ObjectId,
+          ref: "User",
+          required: true,
+        },
+
+        changedAt: {
+          type: Date,
+          default: Date.now,
+        },
+
+        reason: {
+          type: String,
+          default: "",
+          trim: true,
+        },
       },
-
-      vehicleName: {
-        type: String,
-        default: "",
-      },
-
-      vehicleNumber: {
-        type: String,
-        default: "",
-      },
-    },
-
-    newVehicle: {
-      vehicleId: {
-        type: mongoose.Schema.Types.ObjectId,
-        ref: "Vehicle",
-      },
-
-      vehicleName: {
-        type: String,
-        default: "",
-      },
-
-      vehicleNumber: {
-        type: String,
-        default: "",
-      },
-    },
-
-    // Photos captured when the customer received
-    // the replacement vehicle.
-    exchangeImages: {
-      type: vehicleExchangeImageSchema,
-      default: () => ({}),
-    },
-
-    changedBy: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "User",
-      required: true,
-    },
-
-    changedAt: {
-      type: Date,
-      default: Date.now,
-    },
-
-    reason: {
-      type: String,
-      default: "",
-      trim: true,
-    },
-  },
-],
+    ],
 
     trip: {
       tripType: {
