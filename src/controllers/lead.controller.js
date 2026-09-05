@@ -1056,7 +1056,8 @@ export const getLeadHistory = async (req, res) => {
   }
 };
 
-export const getBookingsDashboard = async (req, res) => {
+// v1.0
+export const getBookingsDashboards = async (req, res) => {
   try {
     // ==========================
     // IST DATE HELPERS
@@ -1325,6 +1326,348 @@ export const getBookingsDashboard = async (req, res) => {
       message: "Unable to fetch bookings.",
       error: error.message,
     });
+  }
+};
+//v1.1
+// ==========================================
+// In-memory micro-cache (swap for Redis if you run >1 instance)
+// TTL is short — just enough to absorb repeated dashboard hits
+// (tab switches, pull-to-refresh double-taps, multiple devices).
+// ==========================================
+const dashboardCache = new Map();
+const CACHE_TTL_MS = 8000;
+
+export const invalidateBookingsCache = () => dashboardCache.clear();
+
+const getISTDateString = (date) =>
+  new Date(date).toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" });
+
+export const getBookingsDashboard = async (req, res) => {
+  try {
+    const page = Math.max(parseInt(req.query.page) || 1, 1);
+    const limit = Math.min(parseInt(req.query.limit) || 20, 50); // hard cap
+    const tab = req.query.tab || "All";
+    const search = (req.query.search || "").trim();
+
+    const cacheKey = `${page}:${limit}:${tab}:${search}`;
+    const cached = dashboardCache.get(cacheKey);
+    if (cached && Date.now() - cached.ts < CACHE_TTL_MS) {
+      res.set("X-Cache", "HIT");
+      return res.status(200).json(cached.payload);
+    }
+
+    const now = new Date();
+    const today = getISTDateString(now);
+    const tomorrowDate = new Date(now);
+    tomorrowDate.setDate(tomorrowDate.getDate() + 1);
+    const tomorrow = getISTDateString(tomorrowDate);
+
+    const skip = (page - 1) * limit;
+
+    const basePipeline = [
+      // Uses { isDeleted: 1, createdAt: -1 } index — see index note below
+      { $match: { isDeleted: false } },
+
+      // ---- lightweight lookups, projected at the source (no full doc hydration) ----
+      {
+        $lookup: {
+          from: "leads",
+          localField: "lead",
+          foreignField: "_id",
+          as: "lead",
+          pipeline: [
+            {
+              $project: {
+                leadId: 1,
+                priority: 1,
+                source: 1,
+                vehicleType: 1,
+                bookingConfirmedAt: 1,
+                leadOwner: 1,
+              },
+            },
+            {
+              $lookup: {
+                from: "users",
+                localField: "leadOwner",
+                foreignField: "_id",
+                as: "leadOwner",
+                pipeline: [{ $project: { name: 1, fullName: 1 } }],
+              },
+            },
+            { $unwind: { path: "$leadOwner", preserveNullAndEmptyArrays: true } },
+          ],
+        },
+      },
+      { $unwind: { path: "$lead", preserveNullAndEmptyArrays: true } },
+
+      {
+        $lookup: {
+          from: "vehicles",
+          localField: "vehicleId",
+          foreignField: "_id",
+          as: "vehicleId",
+          pipeline: [{ $project: { vehicleName: 1, vehicleNumber: 1, color: 1 } }],
+        },
+      },
+      { $unwind: { path: "$vehicleId", preserveNullAndEmptyArrays: true } },
+
+      {
+        $lookup: {
+          from: "users",
+          localField: "createdBy",
+          foreignField: "_id",
+          as: "createdBy",
+          pipeline: [{ $project: { name: 1, fullName: 1 } }],
+        },
+      },
+      { $unwind: { path: "$createdBy", preserveNullAndEmptyArrays: true } },
+
+      {
+        $lookup: {
+          from: "drivers", // adjust to your actual collection name
+          localField: "assignedDriver",
+          foreignField: "_id",
+          as: "assignedDriver",
+          pipeline: [{ $project: { fullName: 1, name: 1, mobileNumber: 1 } }],
+        },
+      },
+      { $unwind: { path: "$assignedDriver", preserveNullAndEmptyArrays: true } },
+
+      // ---- derived status computed once, in the DB, not per-request in JS on every doc ----
+      {
+        $addFields: {
+          pickupDateStr: {
+            $cond: [
+              { $ifNull: ["$fromDate", false] },
+              { $dateToString: { format: "%Y-%m-%d", date: "$fromDate", timezone: "Asia/Kolkata" } },
+              null,
+            ],
+          },
+          isOpenBooking: { $not: [{ $in: ["$status", ["completed", "cancelled", "active", "vehicle_handover"]] }] },
+        },
+      },
+      {
+        $addFields: {
+          computedStatus: {
+            $switch: {
+              branches: [
+                { case: { $eq: ["$status", "completed"] }, then: "Completed" },
+                { case: { $eq: ["$status", "cancelled"] }, then: "Cancelled" },
+                { case: { $in: ["$status", ["active", "vehicle_handover"]] }, then: "Active Rental" },
+                {
+                  case: { $and: ["$isOpenBooking", { $ne: ["$pickupDateStr", null] }, { $lt: ["$pickupDateStr", today] }] },
+                  then: "Pending Handover",
+                },
+                {
+                  case: { $and: ["$isOpenBooking", { $eq: ["$pickupDateStr", today] }] },
+                  then: "Today's Pickup",
+                },
+                {
+                  case: { $and: ["$isOpenBooking", { $eq: ["$pickupDateStr", tomorrow] }] },
+                  then: "Tomorrow's Pickup",
+                },
+              ],
+              default: "Booking Confirmed",
+            },
+          },
+          isUpcoming: {
+            $and: [
+              "$isOpenBooking",
+              { $ne: ["$pickupDateStr", null] },
+              { $gte: ["$pickupDateStr", today] },
+            ],
+          },
+        },
+      },
+    ];
+
+    // ---- tab filter (server-side, on the already-computed status) ----
+    const tabMatch = [];
+    if (tab === "Pending") tabMatch.push({ $match: { computedStatus: "Pending Handover" } });
+    else if (tab === "Upcoming") tabMatch.push({ $match: { isUpcoming: true } });
+    else if (tab !== "All") tabMatch.push({ $match: { computedStatus: tab } });
+
+    // ---- search filter (server-side, across the fields the UI searches) ----
+    const searchMatch = [];
+    if (search) {
+      const re = new RegExp(search.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
+      searchMatch.push({
+        $match: {
+          $or: [
+            { customerName: re },
+            { mobileNumber: re },
+            { bookingCode: re },
+            { destination: re },
+            { "vehicleId.vehicleName": re },
+            { vehicleName: re },
+          ],
+        },
+      });
+    }
+
+    const filterStage = [...tabMatch, ...searchMatch];
+
+    const pipeline = [
+      ...basePipeline,
+      ...filterStage,
+      {
+        $facet: {
+          stats: [
+            {
+              $group: {
+                _id: null,
+                totalBookings: { $sum: 1 },
+                pendingHandover: { $sum: { $cond: [{ $eq: ["$computedStatus", "Pending Handover"] }, 1, 0] } },
+                todayPickup: { $sum: { $cond: [{ $eq: ["$computedStatus", "Today's Pickup"] }, 1, 0] } },
+                tomorrowPickup: { $sum: { $cond: [{ $eq: ["$computedStatus", "Tomorrow's Pickup"] }, 1, 0] } },
+                activeRentals: { $sum: { $cond: [{ $eq: ["$computedStatus", "Active Rental"] }, 1, 0] } },
+                completed: { $sum: { $cond: [{ $eq: ["$computedStatus", "Completed"] }, 1, 0] } },
+                cancelled: { $sum: { $cond: [{ $eq: ["$computedStatus", "Cancelled"] }, 1, 0] } },
+                upcoming: { $sum: { $cond: ["$isUpcoming", 1, 0] } },
+              },
+            },
+          ],
+          totalCount: [{ $count: "count" }],
+          data: [
+            { $sort: { createdAt: -1 } },
+            { $skip: skip },
+            { $limit: limit },
+            {
+              $project: {
+                bookingCode: 1,
+                lead: 1,
+                customerName: 1,
+                mobileNumber: 1,
+                alternateMobileNumber: 1,
+                occupation: 1,
+                destination: 1,
+                aadhaarNumber: 1,
+                drivingLicenseNumber: 1,
+                tripType: 1,
+                fromDate: 1,
+                toDate: 1,
+                pickupTime: 1,
+                dropTime: 1,
+                totalDays: 1,
+                residents: 1,
+                payment: 1,
+                vehicleId: 1,
+                vehicleName: 1,
+                vehicleNumber: 1,
+                vehicleColor: 1,
+                status: 1,
+                computedStatus: 1,
+                handover: 1,
+                vehicleReturn: 1,
+                pickupDropRequired: 1,
+                serviceType: 1,
+                pickup: 1,
+                drop: 1,
+                assignedDriver: 1,
+                createdBy: 1,
+                pickupDropNotes: 1,
+                createdAt: 1,
+              },
+            },
+          ],
+        },
+      },
+    ];
+
+    const [result] = await Booking.aggregate(pipeline).allowDiskUse(true);
+
+    const stats = result.stats[0] || {
+      totalBookings: 0,
+      pendingHandover: 0,
+      todayPickup: 0,
+      tomorrowPickup: 0,
+      upcoming: 0,
+      activeRentals: 0,
+      completed: 0,
+      cancelled: 0,
+    };
+    const total = result.totalCount[0]?.count || 0;
+
+    const dashboard = result.data.map((booking) => ({
+      _id: booking._id,
+      bookingId: booking._id,
+      bookingCode: booking.bookingCode,
+      leadId: booking.lead?.leadId || "",
+      customerName: booking.customerName,
+      mobileNumber: booking.mobileNumber,
+      alternateMobileNumber: booking.alternateMobileNumber,
+      occupation: booking.occupation,
+      destination: booking.destination,
+      aadhaarNumber: booking.aadhaarNumber,
+      drivingLicenseNumber: booking.drivingLicenseNumber,
+      tripType: booking.tripType,
+      pickupDate: booking.fromDate,
+      dropDate: booking.toDate,
+      fromDate: booking.fromDate,
+      toDate: booking.toDate,
+      pickupTime: booking.pickupTime,
+      dropTime: booking.dropTime,
+      tripDays: booking.totalDays,
+      totalDays: booking.totalDays,
+      residents: booking.residents,
+      quotationAmount: booking.payment?.totalAmount || 0,
+      bookingAmount: booking.payment?.bookingAmountPaid || 0,
+      discountAmount: booking.payment?.discountAmount || 0,
+      fastagBalance: booking.payment?.fastagAmount || 0,
+      securityDeposit: booking.payment?.securityDeposit || 0,
+      payment: booking.payment || null,
+      vehicleId: booking.vehicleId?._id || null,
+      vehicleName: booking.vehicleId?.vehicleName || booking.vehicleName,
+      vehicleNumber: booking.vehicleId?.vehicleNumber || booking.vehicleNumber,
+      vehicleColor: booking.vehicleId?.color || booking.vehicleColor,
+      vehicleType: booking.lead?.vehicleType || "",
+      priority: booking.lead?.priority || "medium",
+      source: booking.lead?.source || "",
+      leadOwner:
+        booking.lead?.leadOwner?.fullName ||
+        booking.lead?.leadOwner?.name ||
+        booking.createdBy?.fullName ||
+        booking.createdBy?.name ||
+        "",
+      bookingConfirmedAt: booking.lead?.bookingConfirmedAt || booking.createdAt,
+      status: booking.computedStatus,
+      bookingStatus: booking.status,
+      handoverCompleted: booking.status !== "confirmed",
+      handover: booking.handover,
+      vehicleReturn: booking.vehicleReturn,
+      pickupDropRequired: booking.pickupDropRequired,
+      serviceType: booking.serviceType,
+      pickup: booking.pickup,
+      drop: booking.drop,
+      assignedDriver: booking.assignedDriver
+        ? {
+            _id: booking.assignedDriver._id,
+            fullName: booking.assignedDriver.fullName || booking.assignedDriver.name || "",
+            mobileNumber: booking.assignedDriver.mobileNumber || "",
+          }
+        : null,
+      pickupDropNotes: booking.pickupDropNotes,
+      createdBy: booking.createdBy
+        ? { _id: booking.createdBy._id, name: booking.createdBy.fullName || booking.createdBy.name || "" }
+        : null,
+      createdAt: booking.createdAt,
+    }));
+
+    const payload = {
+      success: true,
+      stats,
+      bookings: dashboard,
+      pagination: { page, limit, total, hasMore: skip + dashboard.length < total },
+    };
+
+    dashboardCache.set(cacheKey, { ts: Date.now(), payload });
+
+    res.set("X-Cache", "MISS");
+    return res.status(200).json(payload);
+  } catch (error) {
+    console.error("BOOKING DASHBOARD ERROR:", error);
+    return res.status(500).json({ success: false, message: "Unable to fetch bookings.", error: error.message });
   }
 };
 
