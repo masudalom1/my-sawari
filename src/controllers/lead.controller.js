@@ -1057,7 +1057,7 @@ export const getLeadHistory = async (req, res) => {
 };
 
 // v1.0
-export const getBookingsDashboards = async (req, res) => {
+export const getBookingsDashboard = async (req, res) => {
   try {
     // ==========================
     // IST DATE HELPERS
@@ -1342,7 +1342,7 @@ export const invalidateBookingsCache = () => dashboardCache.clear();
 const getISTDateString = (date) =>
   new Date(date).toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" });
 
-export const getBookingsDashboard = async (req, res) => {
+export const getBookingsDashboards = async (req, res) => {
   try {
     const page = Math.max(parseInt(req.query.page) || 1, 1);
     const limit = Math.min(parseInt(req.query.limit) || 20, 50); // hard cap
