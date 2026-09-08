@@ -1315,8 +1315,8 @@ export const saveHandoverImages = async (req, res) => {
     });
   }
 };
-// active rental screen
-export const getActiveHandovers = async (req, res) => {
+// active rental screen new
+export const getActiveHandover = async (req, res) => {
   try {
     const page = Math.max(1, parseInt(req.query.page, 10) || 1);
     const limit = Math.min(
@@ -1405,6 +1405,31 @@ export const getActiveHandovers = async (req, res) => {
       total,
       hasMore: skip + data.length < total,
       tab,
+    });
+  } catch (error) {
+    console.log("ACTIVE HANDOVER ERROR:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: error.message || "Failed to fetch active handovers",
+    });
+  }
+};
+//old
+export const getActiveHandovers = async (req, res) => {
+  try {
+    const activeHandovers = await Handover.find({
+      handoverStatus: "active",
+      isDeleted: false,
+    })
+      .populate("vehicle.vehicleId")
+      .populate("createdBy", "fullName")
+      .sort({ createdAt: -1 });
+
+    return res.status(200).json({
+      success: true,
+      count: activeHandovers.length,
+      data: activeHandovers,
     });
   } catch (error) {
     console.log("ACTIVE HANDOVER ERROR:", error);
