@@ -1291,18 +1291,93 @@ export const saveHandoverImages = async (req, res) => {
 // active rental screen
 export const getActiveHandovers = async (req, res) => {
   try {
-    const activeHandovers = await Handover.find({
+    const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+    const limit = Math.min(
+      MAX_PAGE_LIMIT,
+      Math.max(1, parseInt(req.query.limit, 10) || PAGE_SIZE_DEFAULT),
+    );
+    const skip = (page - 1) * limit;
+
+    const tab = ["today", "yesterday", "all"].includes(req.query.tab)
+      ? req.query.tab
+      : "all";
+
+    const search = String(req.query.search || "").trim();
+
+    // Custom date range (from the filter modal) always wins over the
+    // today/yesterday/all tab logic when present.
+    const rangeFrom = parseDateParam(req.query.from);
+    const rangeTo = parseDateParam(req.query.to);
+
+    const match = {
       handoverStatus: "active",
       isDeleted: false,
-    })
-      .populate("vehicle.vehicleId")
-      .populate("createdBy", "fullName")
-      .sort({ createdAt: -1 });
+    };
+
+    if (rangeFrom || rangeTo) {
+      match["trip.pickupDateTime"] = {};
+      if (rangeFrom) match["trip.pickupDateTime"].$gte = rangeFrom;
+      if (rangeTo) match["trip.pickupDateTime"].$lte = rangeTo;
+    } else if (tab === "today") {
+      const now = new Date();
+      match["trip.pickupDateTime"] = {
+        $gte: startOfDay(now),
+        $lte: endOfDay(now),
+      };
+    } else if (tab === "yesterday") {
+      const y = new Date();
+      y.setDate(y.getDate() - 1);
+      match["trip.pickupDateTime"] = {
+        $gte: startOfDay(y),
+        $lte: endOfDay(y),
+      };
+    }
+    // tab === "all" with no custom range -> no date filter
+
+    if (search) {
+      const regex = new RegExp(escapeRegex(search), "i");
+      match.$or = [
+        { "customer.fullName": regex },
+        { "customer.mobileNumber": regex },
+        { "vehicle.vehicleName": regex },
+        { "vehicle.vehicleNumber": regex },
+      ];
+    }
+
+    // Only the fields the list screen actually renders. No populate —
+    // formatRentalItem on the client never reads the populated
+    // vehicle.vehicleId or createdBy fields, so joining them was pure
+    // wasted query cost.
+    const projection = {
+      "customer.fullName": 1,
+      "customer.mobileNumber": 1,
+      "vehicle.vehicleName": 1,
+      "vehicle.vehicleNumber": 1,
+      "trip.pickupDateTime": 1,
+      "trip.dropDateTime": 1,
+      "payment.billSummary.balanceAmount": 1,
+      "payment.balanceAmount": 1,
+      "images.vehicleFront": 1,
+      createdAt: 1,
+    };
+
+    const [data, total] = await Promise.all([
+      Handover.find(match, projection)
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .lean(),
+      Handover.countDocuments(match),
+    ]);
 
     return res.status(200).json({
       success: true,
-      count: activeHandovers.length,
-      data: activeHandovers,
+      data,
+      page,
+      limit,
+      total,
+      hasMore: skip + data.length < total,
+      tab,
     });
   } catch (error) {
     console.log("ACTIVE HANDOVER ERROR:", error);
