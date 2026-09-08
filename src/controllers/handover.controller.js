@@ -6,6 +6,8 @@ import VehicleReturn from "../models/vehicleReturn.model.js";
 import Booking from "../models/booking.model.js";
 import PaymentHistory from "../models/paymentHistory.model.js";
 
+const PAGE_SIZE_DEFAULT = 10;
+const MAX_PAGE_LIMIT = 30;
 //extra function helper
 const IST_TZ = "Asia/Kolkata";
 // recieved list
@@ -43,6 +45,31 @@ async function countNonCompleted(baseMatch, dateFilter) {
   ]);
   return result[0]?.count || 0;
 }
+
+/* =========================================================
+   HELPERS
+========================================================= */
+
+const escapeRegex = (str) => String(str).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+const startOfDay = (date) => {
+  const d = new Date(date);
+  d.setHours(0, 0, 0, 0);
+  return d;
+};
+
+const endOfDay = (date) => {
+  const d = new Date(date);
+  d.setHours(23, 59, 59, 999);
+  return d;
+};
+
+const parseDateParam = (value) => {
+  if (!value) return null;
+  const d = new Date(value);
+  return Number.isNaN(d.getTime()) ? null : d;
+};
+
 // ==========================================
 // Draft contoller
 // ==========================================
