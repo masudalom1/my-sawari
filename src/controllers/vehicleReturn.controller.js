@@ -158,16 +158,38 @@ export const receiveVehicle = async (req, res) => {
     const normalizedPaymentMode = ALLOWED_PAYMENT_MODES.includes(paymentMode)
       ? paymentMode
       : "Cash";
-    const normalizedUpiLast4 = String(upiLast4 || "").trim();
+    let normalizedUpiLast4 = [];
+
+    try {
+      normalizedUpiLast4 =
+        typeof upiLast4 === "string" ? JSON.parse(upiLast4) : upiLast4;
+
+      if (!Array.isArray(normalizedUpiLast4)) {
+        normalizedUpiLast4 = [];
+      }
+
+      normalizedUpiLast4 = normalizedUpiLast4
+        .map((value) => String(value).trim())
+        .filter(Boolean);
+    } catch (error) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid UPI last 4 digits format",
+      });
+    }
 
     const isUpiPayment =
       normalizedPaymentMode === "PhonePe" ||
       (normalizedPaymentMode === "Mixed" && parsedPaymentBreakdown.phonePe > 0);
 
-    if (isUpiPayment && !/^\d{4}$/.test(normalizedUpiLast4)) {
+    if (
+      isUpiPayment &&
+      (normalizedUpiLast4.length === 0 ||
+        normalizedUpiLast4.some((value) => !/^\d{4}$/.test(value)))
+    ) {
       return res.status(400).json({
         success: false,
-        message: "Please enter valid UPI last 4 digits",
+        message: "Please provide valid UPI last 4 digits",
       });
     }
 
@@ -497,7 +519,6 @@ export const receiveVehicle = async (req, res) => {
           },
 
           amount: collected,
-          upiLast4: isUpiPayment ? normalizedUpiLast4 : "",
 
           paymentMethod: (() => {
             const mode = String(normalizedPaymentMode || "cash").toLowerCase();
@@ -512,7 +533,8 @@ export const receiveVehicle = async (req, res) => {
             return paymentMethodMap[mode] || "cash";
           })(),
 
-          upiLast4: isUpiPayment ? normalizedUpiLast4 : "",
+          // Multiple UPI references
+          upiLast4: isUpiPayment ? normalizedUpiLast4 : [],
 
           paymentBreakdown: parsedPaymentBreakdown,
 
