@@ -1457,6 +1457,46 @@ export const saveSingleHandoverImage = async (req, res) => {
     });
   }
 };
+export const getHandoverImages = async (req, res) => {
+  try {
+    const { handoverId } = req.params;
+
+    if (!handoverId) {
+      return res.status(400).json({
+        success: false,
+        message: "Handover ID is required",
+      });
+    }
+
+    const handover = await Handover.findById(handoverId).select(
+      "images bookingStatus hasUploadedImages"
+    );
+
+    if (!handover) {
+      return res.status(404).json({
+        success: false,
+        message: "Handover not found",
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: "Handover images fetched successfully",
+      data: {
+        images: handover.images || {},
+        bookingStatus: handover.bookingStatus,
+        hasUploadedImages: handover.hasUploadedImages,
+      },
+    });
+  } catch (error) {
+    console.error("Get Handover Images Error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Failed to fetch handover images",
+    });
+  }
+};
 // active rental screen new
 export const getActiveHandover = async (req, res) => {
   try {

@@ -10,6 +10,7 @@ import {
   getActiveHandovers,
   getAllHandovers,
   getHandoverById,
+  getHandoverImages,
   getHandovers,
   getLatestDraftHandover,
   getReceiveCarList,
@@ -35,6 +36,7 @@ router.put("/upload-images/:handoverId",protect,handoverUpload,uploadHandoverIma
 router.post("/image",protect,singleImageUpload,uploadSingleImage);
 router.put("/save-images/:handoverId",protect,saveHandoverImages);
 router.put("/save-single-image/:handoverId",protect,saveSingleHandoverImage);
+router.get("/images/:handoverId",protect,getHandoverImages);
 
 router.get("/active-handovers",protect,getActiveHandovers);
 router.get("/single/:id",protect,getSingleHandover);
