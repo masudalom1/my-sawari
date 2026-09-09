@@ -1315,6 +1315,148 @@ export const saveHandoverImages = async (req, res) => {
     });
   }
 };
+//immediate save image 
+export const saveSingleHandoverImage = async (req, res) => {
+  try {
+    const { handoverId } = req.params;
+    const { key, url } = req.body;
+
+    if (!handoverId) {
+      return res.status(400).json({
+        success: false,
+        message: "Handover ID is required",
+      });
+    }
+
+    if (!key) {
+      return res.status(400).json({
+        success: false,
+        message: "Image key is required",
+      });
+    }
+
+    if (!url || typeof url !== "string" || url.trim() === "") {
+      return res.status(400).json({
+        success: false,
+        message: "Image URL is required",
+      });
+    }
+
+    const ALLOWED_IMAGES = [
+      "customerPhoto",
+      "customerProfileImage",
+      "customerWithVehicle",
+      "idCardFront",
+      "idCardBack",
+      "vehicleFront",
+      "vehicleRear",
+      "vehicleLeft",
+      "vehicleRight",
+
+      // Optional
+      "drivingLicenseFront",
+      "drivingLicenseBack",
+      "toolkit",
+      "spareTyre",
+      "odometer",
+      "fuelGauge",
+      "interior",
+      "roofTop",
+    ];
+
+    if (!ALLOWED_IMAGES.includes(key)) {
+      return res.status(400).json({
+        success: false,
+        message: `Invalid image key: ${key}`,
+      });
+    }
+
+    const REQUIRED_IMAGES = [
+      "customerPhoto",
+      "customerProfileImage",
+      "customerWithVehicle",
+      "idCardFront",
+      "idCardBack",
+      "vehicleFront",
+      "vehicleRear",
+      "vehicleLeft",
+      "vehicleRight",
+    ];
+
+    const handover = await Handover.findById(handoverId);
+
+    if (!handover) {
+      return res.status(404).json({
+        success: false,
+        message: "Handover not found",
+      });
+    }
+
+    // Immediately save this single image
+    handover.images = handover.images || {};
+    handover.images[key] = url.trim();
+
+    // Recalculate required image progress
+    const uploadedCount = REQUIRED_IMAGES.filter((imageKey) => {
+      const value = handover.images[imageKey];
+
+      return typeof value === "string" && value.trim() !== "";
+    }).length;
+
+    const totalRequired = REQUIRED_IMAGES.length;
+
+    const allImagesUploaded = uploadedCount === totalRequired;
+
+    const progress = Math.round(
+      (uploadedCount / totalRequired) * 100
+    );
+
+    // Keep your existing flow
+    handover.hasUploadedImages = allImagesUploaded;
+
+    if (allImagesUploaded) {
+      handover.bookingStatus = "confirmed";
+    } else {
+      handover.bookingStatus = "draft";
+    }
+
+    await handover.save();
+
+    return res.status(200).json({
+      success: true,
+      message: "Image saved successfully",
+      data: {
+        _id: handover._id,
+        key,
+        url: handover.images[key],
+        bookingStatus: handover.bookingStatus,
+        hasUploadedImages: handover.hasUploadedImages,
+        uploadedCount,
+        totalRequired,
+        progress,
+        remainingImages: REQUIRED_IMAGES.filter((imageKey) => {
+          const value = handover.images[imageKey];
+
+          return !(
+            typeof value === "string" &&
+            value.trim() !== ""
+          );
+        }),
+      },
+    });
+  } catch (error) {
+    console.error("Save Single Handover Image Error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Failed to save image",
+      error:
+        process.env.NODE_ENV === "development"
+          ? error.message
+          : undefined,
+    });
+  }
+};
 // active rental screen new
 export const getActiveHandover = async (req, res) => {
   try {

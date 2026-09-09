@@ -16,6 +16,7 @@ import {
   getRentalDetails,
   getSingleHandover,
   saveHandoverImages,
+  saveSingleHandoverImage,
   updateDraftHandover,
   updateDraftImages,
   updateHandover,
@@ -33,6 +34,7 @@ router.post("/create", handoverUpload, createHandover);
 router.put("/upload-images/:handoverId",protect,handoverUpload,uploadHandoverImages,);
 router.post("/image",protect,singleImageUpload,uploadSingleImage);
 router.put("/save-images/:handoverId",protect,saveHandoverImages);
+router.put("/save-single-image/:handoverId",protect,saveSingleHandoverImage);
 
 router.get("/active-handovers",protect,getActiveHandovers);
 router.get("/single/:id",protect,getSingleHandover);
