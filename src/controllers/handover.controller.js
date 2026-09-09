@@ -1315,7 +1315,7 @@ export const saveHandoverImages = async (req, res) => {
     });
   }
 };
-//immediate save image 
+//immediate save image
 export const saveSingleHandoverImage = async (req, res) => {
   try {
     const { handoverId } = req.params;
@@ -1407,9 +1407,7 @@ export const saveSingleHandoverImage = async (req, res) => {
 
     const allImagesUploaded = uploadedCount === totalRequired;
 
-    const progress = Math.round(
-      (uploadedCount / totalRequired) * 100
-    );
+    const progress = Math.round((uploadedCount / totalRequired) * 100);
 
     // Keep your existing flow
     handover.hasUploadedImages = allImagesUploaded;
@@ -1437,10 +1435,7 @@ export const saveSingleHandoverImage = async (req, res) => {
         remainingImages: REQUIRED_IMAGES.filter((imageKey) => {
           const value = handover.images[imageKey];
 
-          return !(
-            typeof value === "string" &&
-            value.trim() !== ""
-          );
+          return !(typeof value === "string" && value.trim() !== "");
         }),
       },
     });
@@ -1450,10 +1445,7 @@ export const saveSingleHandoverImage = async (req, res) => {
     return res.status(500).json({
       success: false,
       message: "Failed to save image",
-      error:
-        process.env.NODE_ENV === "development"
-          ? error.message
-          : undefined,
+      error: process.env.NODE_ENV === "development" ? error.message : undefined,
     });
   }
 };
@@ -1469,7 +1461,7 @@ export const getHandoverImages = async (req, res) => {
     }
 
     const handover = await Handover.findById(handoverId).select(
-      "images bookingStatus hasUploadedImages"
+      "images bookingStatus hasUploadedImages",
     );
 
     if (!handover) {
@@ -2353,15 +2345,40 @@ export const updateRentals = async (req, res) => {
     // silently at handover.save() / PaymentHistory.create().
     // ==========================================================
 
-    let sanitizedUpiLast4 = "";
+    let sanitizedUpiLast4 = [];
 
     if (paymentMethod === "phonepe" && Number(amountReceivedNow) > 0) {
-      sanitizedUpiLast4 = String(upiLast4 || "").trim();
+      let references = upiLast4;
 
-      if (!/^\d{4}$/.test(sanitizedUpiLast4)) {
+      // Support old frontend: "1234"
+      if (typeof references === "string") {
+        try {
+          // Support new frontend: '["1234","5678"]'
+          references = JSON.parse(references);
+        } catch {
+          // Old frontend single value
+          references = [references];
+        }
+      }
+
+      // Safety
+      if (!Array.isArray(references)) {
+        references = [references];
+      }
+
+      sanitizedUpiLast4 = references
+        .map((value) => String(value || "").trim())
+        .filter(Boolean);
+
+      // Validate every reference
+      const invalidReference = sanitizedUpiLast4.some(
+        (value) => !/^\d{4}$/.test(value),
+      );
+
+      if (sanitizedUpiLast4.length === 0 || invalidReference) {
         return res.status(400).json({
           success: false,
-          message: "Please provide a valid 4-digit PhonePe reference number",
+          message: "Please provide valid 4-digit PhonePe reference numbers",
         });
       }
     }
