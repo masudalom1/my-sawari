@@ -2902,17 +2902,48 @@ export const updateRental = async (req, res) => {
 
     // ==========================================================
     // VALIDATE UPI LAST 4 DIGITS
+    //
+    // FIX: The frontend now supports multiple PhonePe references per
+    // payment and sends them as a JSON-stringified array via FormData
+    // (e.g. '["1234","5678"]'), since FormData can only carry strings.
+    // sanitizedUpiLast4 is now always an ARRAY of 4-digit strings —
+    // every place that reads it below (handover.payment.upiLast4,
+    // PaymentHistory.upiLast4) must store it as an array too.
     // ==========================================================
 
-    let sanitizedUpiLast4 = "";
+    let sanitizedUpiLast4 = [];
 
     if (paymentMethod === "phonepe" && Number(amountReceivedNow) > 0) {
-      sanitizedUpiLast4 = String(upiLast4 || "").trim();
+      let parsedUpiLast4 = upiLast4;
 
-      if (!/^\d{4}$/.test(sanitizedUpiLast4)) {
+      // Parse the JSON array string back into a real array. Falls back
+      // to wrapping the raw value in an array if it isn't valid JSON,
+      // so an older client still sending a bare 4-digit string keeps
+      // working without a hard break.
+      if (typeof parsedUpiLast4 === "string") {
+        try {
+          parsedUpiLast4 = JSON.parse(parsedUpiLast4);
+        } catch {
+          parsedUpiLast4 = [parsedUpiLast4];
+        }
+      }
+
+      if (!Array.isArray(parsedUpiLast4)) {
+        parsedUpiLast4 = [parsedUpiLast4];
+      }
+
+      sanitizedUpiLast4 = parsedUpiLast4
+        .map((value) => String(value || "").trim())
+        .filter(Boolean);
+
+      const allValid =
+        sanitizedUpiLast4.length > 0 &&
+        sanitizedUpiLast4.every((value) => /^\d{4}$/.test(value));
+
+      if (!allValid) {
         return res.status(400).json({
           success: false,
-          message: "Please provide a valid 4-digit PhonePe reference number",
+          message: "Please provide valid 4-digit PhonePe reference number(s)",
         });
       }
     }
@@ -3271,7 +3302,10 @@ export const updateRental = async (req, res) => {
         handover.payment.paymentBreakdown.phonePe =
           (Number(handover.payment.paymentBreakdown.phonePe) || 0) + received;
 
-        // Keep latest UPI reference
+        // Keep the latest set of UPI references from this update.
+        // FIX: sanitizedUpiLast4 is now an array — handover.payment.upiLast4
+        // must be typed [String] in the Handover schema for this to save
+        // correctly (see schema note below).
         handover.payment.upiLast4 = sanitizedUpiLast4;
       } else if (paymentMethod === "razorpay") {
         handover.payment.paymentBreakdown.razorpay =
@@ -3452,6 +3486,8 @@ ${updateNote}`
 
           paymentMethod: paymentMethod || "phonepe",
 
+          // FIX: array of 4-digit strings, matching PaymentHistory's
+          // upiLast4: [String] schema field.
           upiLast4: sanitizedUpiLast4,
 
           paymentBreakdown: {
