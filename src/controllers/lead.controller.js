@@ -1060,6 +1060,19 @@ export const getLeadHistory = async (req, res) => {
 export const getBookingsDashboard = async (req, res) => {
   try {
     // ==========================
+    // QUERY PARAMS
+    // ==========================
+    const {
+      tab = "All",
+      search = "",
+      page = 1,
+      limit = 20,
+    } = req.query;
+
+    const pageNum = Math.max(parseInt(page, 10) || 1, 1);
+    const limitNum = Math.max(parseInt(limit, 10) || 20, 1);
+
+    // ==========================
     // IST DATE HELPERS
     // ==========================
     const getISTDateString = (date) =>
@@ -1154,15 +1167,21 @@ export const getBookingsDashboard = async (req, res) => {
 
     const dashboard = bookings.map((booking) => {
       let status = "Booking Confirmed";
+      // `bucket` drives TAB FILTERING below. It's kept separate from the
+      // human-readable `status` string so tab matching never depends on
+      // exact label text (labels can change; buckets stay stable).
+      let bucket = "confirmed";
 
       // ==========================
       // COMPLETED / CANCELLED
       // ==========================
       if (booking.status === "completed") {
         status = "Completed";
+        bucket = "completed";
         stats.completed++;
       } else if (booking.status === "cancelled") {
         status = "Cancelled";
+        bucket = "cancelled";
         stats.cancelled++;
       }
 
@@ -1174,6 +1193,7 @@ export const getBookingsDashboard = async (req, res) => {
         booking.status === "vehicle_handover"
       ) {
         status = "Active Rental";
+        bucket = "active";
         stats.activeRentals++;
       }
 
@@ -1192,16 +1212,20 @@ export const getBookingsDashboard = async (req, res) => {
 
         if (pickupDate < today) {
           status = "Pending Handover";
+          bucket = "pending";
           stats.pendingHandover++;
         } else if (pickupDate === today) {
           status = "Today's Pickup";
+          bucket = "today";
           stats.todayPickup++;
           stats.upcoming++;
         } else if (pickupDate === tomorrow) {
           status = "Tomorrow's Pickup";
+          bucket = "tomorrow";
           stats.tomorrowPickup++;
           stats.upcoming++;
         } else {
+          bucket = "upcoming";
           stats.upcoming++;
         }
       }
@@ -1273,6 +1297,9 @@ export const getBookingsDashboard = async (req, res) => {
           booking.lead?.bookingConfirmedAt || booking.createdAt,
 
         status,
+        // internal-only field used for tab filtering below; not required by
+        // the UI, but harmless to leave on the payload.
+        bucket,
 
         bookingStatus: booking.status,
 
@@ -1311,10 +1338,75 @@ export const getBookingsDashboard = async (req, res) => {
       };
     });
 
+    // ==========================
+    // SEARCH (applied before tab split so stats reflect the search scope,
+    // but not the currently selected tab)
+    // ==========================
+    const searchTerm = String(search || "").trim().toLowerCase();
+    const searched = searchTerm
+      ? dashboard.filter((b) => {
+          const haystack = [
+            b.customerName,
+            b.mobileNumber,
+            b.alternateMobileNumber,
+            b.bookingCode,
+            b.vehicleName,
+            b.vehicleNumber,
+            b.destination,
+          ]
+            .filter(Boolean)
+            .join(" ")
+            .toLowerCase();
+          return haystack.includes(searchTerm);
+        })
+      : dashboard;
+
+    // ==========================
+    // TAB FILTERING
+    // ==========================
+    const TAB_BUCKETS = {
+      All: null, // no filter
+      Pending: ["pending"],
+      "Today's Pickup": ["today"],
+      "Tomorrow's Pickup": ["tomorrow"],
+      // "Upcoming" = every open booking that isn't overdue: today,
+      // tomorrow, and further-out confirmed pickups.
+      Upcoming: ["today", "tomorrow", "upcoming"],
+      "Active Rental": ["active"],
+      Completed: ["completed"],
+      Cancelled: ["cancelled"],
+    };
+
+    const allowedBuckets = Object.prototype.hasOwnProperty.call(
+      TAB_BUCKETS,
+      tab,
+    )
+      ? TAB_BUCKETS[tab]
+      : null; // unknown tab name -> behave like "All" rather than erroring
+
+    const tabFiltered = allowedBuckets
+      ? searched.filter((b) => allowedBuckets.includes(b.bucket))
+      : searched;
+
+    // ==========================
+    // PAGINATION
+    // ==========================
+    const total = tabFiltered.length;
+    const startIndex = (pageNum - 1) * limitNum;
+    const endIndex = startIndex + limitNum;
+    const pageItems = tabFiltered.slice(startIndex, endIndex);
+    const hasMore = endIndex < total;
+
     return res.status(200).json({
       success: true,
       stats,
-      bookings: dashboard,
+      bookings: pageItems,
+      pagination: {
+        page: pageNum,
+        limit: limitNum,
+        total,
+        hasMore,
+      },
     });
   } catch (error) {
     console.error("===== BOOKING DASHBOARD ERROR =====");
