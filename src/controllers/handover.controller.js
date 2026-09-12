@@ -1628,6 +1628,11 @@ export const getSingleHandover = async (req, res) => {
   try {
     const { id } = req.params;
 
+    // .lean() returns plain JS objects instead of full Mongoose documents —
+    // skips getters/virtuals/change-tracking overhead. This is a read-only
+    // detail view, so it's a safe, pure speed win. IMPORTANT: this does NOT
+    // change the response shape at all, so the other screen consuming this
+    // same endpoint keeps working exactly as before.
     const handover = await Handover.findOne({
       _id: id,
       isDeleted: false,
@@ -1635,9 +1640,8 @@ export const getSingleHandover = async (req, res) => {
       .populate("createdBy", "fullName email mobileNumber role")
       .populate("vehicle.vehicleId")
       .populate("returnDetails.returnedBy", "fullName email mobileNumber role")
-      // NEW: populate the creator of each extension bill so the frontend
-      // can show "extended by <name>" without a second lookup.
-      .populate("extensionBills.createdBy", "fullName email mobileNumber role");
+      .populate("extensionBills.createdBy", "fullName email mobileNumber role")
+      .lean();
 
     if (!handover) {
       return res.status(404).json({
@@ -1648,9 +1652,13 @@ export const getSingleHandover = async (req, res) => {
 
     const vehicleReturn = await VehicleReturn.findOne({
       handover: handover._id,
-    }).populate("receivedBy", "fullName email mobileNumber role");
+    })
+      .populate("receivedBy", "fullName email mobileNumber role")
+      .lean();
 
-    const data = handover.toObject();
+    // With .lean(), `handover` is already a plain object — no .toObject()
+    // needed (and calling it on a lean object would throw).
+    const data = { ...handover };
 
     // FIX: build the bill the frontend renders straight from the stored
     // payment.billSummary — the single already-computed, already-saved
@@ -1686,7 +1694,7 @@ export const getSingleHandover = async (req, res) => {
       },
     };
 
-    // NEW: shape extensionBills for the client — newest first, with the
+    // shape extensionBills for the client — newest first, with the
     // populated creator trimmed down to just what the UI needs, and a
     // rollup summary so the screen doesn't have to reduce() on its own.
     const extensionBills = (handover.extensionBills || [])
