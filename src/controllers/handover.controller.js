@@ -2290,7 +2290,14 @@ export const getRentalDetails = async (req, res) => {
   try {
     const { id } = req.params;
 
-    const handover = await Handover.findById(id);
+    // FIX (perf): .lean() returns a plain JS object instead of a full
+    // Mongoose document — skips hydration/getters/virtuals we don't use
+    // here, which is a meaningful win on a document this size. If
+    // buildBillSummaryResponse() (or anything else below) relies on
+    // Mongoose instance methods, virtuals, or Document-only behavior,
+    // switch those call sites to work with the plain object first —
+    // .lean() objects don't have them.
+    const handover = await Handover.findById(id).lean();
 
     if (!handover || handover.isDeleted) {
       return res.status(404).json({
@@ -2351,6 +2358,7 @@ export const getRentalDetails = async (req, res) => {
     });
   }
 };
+
 
 export const getBillSummary = async (req, res) => {
   try {
