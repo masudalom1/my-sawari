@@ -1855,6 +1855,7 @@ export const getSingleHandover = async (req, res) => {
   }
 };
 
+
 export const getReceiveCarList = async (req, res) => {
   try {
     const {
@@ -1892,9 +1893,6 @@ export const getReceiveCarList = async (req, res) => {
     const completedSince = new Date();
     completedSince.setDate(completedSince.getDate() - Number(completedDays));
 
-    // Date filter PER TAB — this is the actual speed fix: instead of pulling
-    // every non-cancelled handover and bucketing in JS, each tab now hits
-    // Mongo with a narrow, indexable range on trip.dropDateTime.
     let dateFilter = {};
     if (tab === "today") {
       dateFilter = {
@@ -1907,23 +1905,44 @@ export const getReceiveCarList = async (req, res) => {
     } else if (tab === "overdue") {
       dateFilter = { "trip.dropDateTime": { $lt: today.startUTC } };
     }
-    // "all" and "completed" intentionally get no date filter here — "all"
-    // needs the full span, and "completed" is queried from VehicleReturn
-    // directly below. Both are fine to be relatively heavier since they
-    // load quietly in the background, never blocking the first paint.
+
+    // ==========================================================
+    // Badge counts are completely independent of the main list
+    // query below — kick them off now (don't await yet) so they
+    // run concurrently with everything else instead of adding a
+    // second serial round-trip at the end.
+    // ==========================================================
+    const countsPromise = Promise.all([
+      countNonCompleted(baseMatch, {
+        "trip.dropDateTime": { $gte: today.startUTC, $lt: today.endUTC },
+      }),
+      countNonCompleted(baseMatch, {}),
+      countNonCompleted(baseMatch, {
+        "trip.dropDateTime": { $gte: tomorrow.startUTC, $lt: tomorrow.endUTC },
+      }),
+      countNonCompleted(baseMatch, {
+        "trip.dropDateTime": { $lt: today.startUTC },
+      }),
+      VehicleReturn.countDocuments({
+        returnStatus: "completed",
+        receivingTime: { $gte: completedSince },
+      }),
+    ]).then(([todayCount, allCount, tomorrowCount, overdueCount, completedCount]) => ({
+      today: todayCount,
+      all: allCount,
+      tomorrow: tomorrowCount,
+      overdue: overdueCount,
+      completed: completedCount,
+    }));
 
     let data = [];
     let total = 0;
     let hasMore = false;
-    let handoverDocs = [];
-    let completedMap = new Map();
 
     if (tab === "completed") {
-      /* ==========================
-         COMPLETED TAB — query VehicleReturn directly (it's the smaller,
-         purpose-built collection), paginate there, then fetch only the
-         matching Handover docs by id.
-      ========================== */
+      // Unchanged: this path was already lean — it paginates on the small
+      // VehicleReturn collection first and only ever populates the Handover
+      // docs for that one page.
       const returnMatch = {
         returnStatus: "completed",
         receivingTime: { $gte: completedSince },
@@ -1941,10 +1960,15 @@ export const getReceiveCarList = async (req, res) => {
         .limit(limitNum)
         .lean();
 
-      completedMap = new Map(returnsPage.map((r) => [String(r.handover), r]));
+      const completedMap = new Map(
+        returnsPage.map((r) => [String(r.handover), r]),
+      );
       const ids = returnsPage.map((r) => r.handover);
 
-      handoverDocs = await Handover.find({ ...baseMatch, _id: { $in: ids } })
+      const handoverDocs = await Handover.find({
+        ...baseMatch,
+        _id: { $in: ids },
+      })
         .select(
           "vehicle trip customer createdAt bookingId assignedDriver createdBy payment",
         )
@@ -1965,22 +1989,25 @@ export const getReceiveCarList = async (req, res) => {
       );
 
       hasMore = (pageNum - 1) * limitNum + returnsPage.length < total;
+      data = buildResponseRows(handoverDocs, completedMap);
     } else {
-      /* ==========================
-         DATE-SCOPED / "all" TABS — query Handover directly, narrowed by
-         dateFilter when we have one (today/tomorrow/overdue), then exclude
-         anything that already has a completed return, then paginate.
-      ========================== */
+      // ==========================================================
+      // STAGE 1 — cheap pass over the tab's date window.
+      //
+      // Previously this fetched EVERY candidate with full population
+      // (vehicle images, assignedDriver, createdBy, bookingId) and only
+      // used ~7 of them after slicing in JS — the populate cost was being
+      // paid for rows that were immediately thrown away. Here we only
+      // populate the two refs actually needed to filter/search/sort
+      // correctly (vehicle name/number, drop location), and skip images /
+      // driver / creator entirely at this stage.
+      // ==========================================================
       const candidates = await Handover.find({ ...baseMatch, ...dateFilter })
-        .select(
-          "vehicle trip customer createdAt bookingId assignedDriver createdBy payment",
-        )
+        .select("vehicle trip customer createdAt bookingId")
         .populate({
           path: "vehicle.vehicleId",
-          select: "vehicleName vehicleNumber images",
+          select: "vehicleName vehicleNumber",
         })
-        .populate("createdBy", "fullName role")
-        .populate("assignedDriver", "fullName mobileNumber profileImage role")
         .populate({ path: "bookingId", select: "drop" })
         .sort({ "trip.dropDateTime": 1 })
         .lean();
@@ -2027,73 +2054,41 @@ export const getReceiveCarList = async (req, res) => {
 
       total = notCompleted.length;
       const start = (pageNum - 1) * limitNum;
-      handoverDocs = notCompleted.slice(start, start + limitNum);
-      hasMore = start + handoverDocs.length < total;
+      const pageSlice = notCompleted.slice(start, start + limitNum);
+      hasMore = start + pageSlice.length < total;
+      const pageIds = pageSlice.map((h) => h._id);
+
+      // ==========================================================
+      // STAGE 2 — full populate, but ONLY for the ids on this page.
+      // ==========================================================
+      let handoverDocs = [];
+      if (pageIds.length) {
+        handoverDocs = await Handover.find({ _id: { $in: pageIds } })
+          .select(
+            "vehicle trip customer createdAt bookingId assignedDriver createdBy payment",
+          )
+          .populate({
+            path: "vehicle.vehicleId",
+            select: "vehicleName vehicleNumber images",
+          })
+          .populate("createdBy", "fullName role")
+          .populate(
+            "assignedDriver",
+            "fullName mobileNumber profileImage role",
+          )
+          .populate({ path: "bookingId", select: "drop" })
+          .lean();
+
+        const order = new Map(pageIds.map((id, i) => [String(id), i]));
+        handoverDocs.sort(
+          (a, b) => order.get(String(a._id)) - order.get(String(b._id)),
+        );
+      }
+
+      data = buildResponseRows(handoverDocs, new Map());
     }
 
-    data = handoverDocs.map((h) => {
-      const returnInfo = completedMap.get(String(h._id));
-      return {
-        ...h,
-        dropLocation: h.bookingId?.drop?.location || "Office",
-        dropCharge: h.bookingId?.drop?.charge || 0,
-        createdByUser: h.createdBy
-          ? { fullName: h.createdBy.fullName, role: h.createdBy.role }
-          : null,
-        returnStatus: returnInfo ? "completed" : null,
-        returnDetails: returnInfo
-          ? {
-              receivedBy: returnInfo.receivedBy
-                ? {
-                    fullName: returnInfo.receivedBy.fullName,
-                    role: returnInfo.receivedBy.role,
-                  }
-                : null,
-              receivingTime: returnInfo.receivingTime || null,
-              scheduledReturnTime: returnInfo.scheduledReturnTime || null,
-              timeStatus: returnInfo.timeStatus || "On Time",
-              delayText: returnInfo.delayText || "0 minutes",
-              settlementDetails: returnInfo.settlementDetails || {},
-            }
-          : null,
-      };
-    });
-
-    /* ==========================
-       BADGE COUNTS — cheap, count-only aggregations run in parallel.
-       These never hydrate full documents, so they stay fast even though
-       "all"/"overdue" span a wider date range.
-    ========================== */
-    const [todayCount, tomorrowCount, overdueCount, completedCount] =
-      await Promise.all([
-        countNonCompleted(baseMatch, {
-          "trip.dropDateTime": { $gte: today.startUTC, $lt: today.endUTC },
-        }),
-        countNonCompleted(baseMatch, {
-          "trip.dropDateTime": {
-            $gte: tomorrow.startUTC,
-            $lt: tomorrow.endUTC,
-          },
-        }),
-        countNonCompleted(baseMatch, {
-          "trip.dropDateTime": { $lt: today.startUTC },
-        }),
-        VehicleReturn.countDocuments({
-          returnStatus: "completed",
-          receivingTime: { $gte: completedSince },
-        }),
-      ]);
-    // "all" = everything non-completed regardless of date; approximate it
-    // from a 4th cheap count rather than a full scan.
-    const allCount = await countNonCompleted(baseMatch, {});
-
-    const counts = {
-      today: todayCount,
-      all: allCount,
-      tomorrow: tomorrowCount,
-      overdue: overdueCount,
-      completed: completedCount,
-    };
+    const counts = await countsPromise;
 
     return res.status(200).json({
       success: true,
@@ -2113,6 +2108,38 @@ export const getReceiveCarList = async (req, res) => {
     });
   }
 };
+
+// Shared row-shaping logic, pulled out so both the "completed" branch and
+// the "not completed" branch build the exact same response shape as before.
+function buildResponseRows(handoverDocs, completedMap) {
+  return handoverDocs.map((h) => {
+    const returnInfo = completedMap.get(String(h._id));
+    return {
+      ...h,
+      dropLocation: h.bookingId?.drop?.location || "Office",
+      dropCharge: h.bookingId?.drop?.charge || 0,
+      createdByUser: h.createdBy
+        ? { fullName: h.createdBy.fullName, role: h.createdBy.role }
+        : null,
+      returnStatus: returnInfo ? "completed" : null,
+      returnDetails: returnInfo
+        ? {
+            receivedBy: returnInfo.receivedBy
+              ? {
+                  fullName: returnInfo.receivedBy.fullName,
+                  role: returnInfo.receivedBy.role,
+                }
+              : null,
+            receivingTime: returnInfo.receivingTime || null,
+            scheduledReturnTime: returnInfo.scheduledReturnTime || null,
+            timeStatus: returnInfo.timeStatus || "On Time",
+            delayText: returnInfo.delayText || "0 minutes",
+            settlementDetails: returnInfo.settlementDetails || {},
+          }
+        : null,
+    };
+  });
+}
 
 // ACTIVE RENTAL EDIT APIS
 function buildBillSummaryResponse(handover) {
