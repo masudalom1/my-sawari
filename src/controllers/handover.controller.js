@@ -1629,10 +1629,9 @@ export const getSingleHandover = async (req, res) => {
     const { id } = req.params;
 
     // .lean() returns plain JS objects instead of full Mongoose documents —
-    // skips getters/virtuals/change-tracking overhead. This is a read-only
-    // detail view, so it's a safe, pure speed win. IMPORTANT: this does NOT
-    // change the response shape at all, so the other screen consuming this
-    // same endpoint keeps working exactly as before.
+    // skips getters/virtuals/change-tracking overhead. Read-only detail view,
+    // so this is a safe, pure speed win and does NOT change the response
+    // shape, so the other screen consuming this same endpoint is unaffected.
     const handover = await Handover.findOne({
       _id: id,
       isDeleted: false,
@@ -1641,6 +1640,9 @@ export const getSingleHandover = async (req, res) => {
       .populate("vehicle.vehicleId")
       .populate("returnDetails.returnedBy", "fullName email mobileNumber role")
       .populate("extensionBills.createdBy", "fullName email mobileNumber role")
+      // NEW: who performed each vehicle swap, so the exchange history can
+      // show a name instead of just an id.
+      .populate("vehicleHistory.changedBy", "fullName email mobileNumber role")
       .lean();
 
     if (!handover) {
@@ -1739,46 +1741,83 @@ export const getSingleHandover = async (req, res) => {
       ),
     };
 
+    // ── GALLERY ──────────────────────────────────────────────────────────
+    // Every single image field that actually exists on the Handover model's
+    // `images` subdocument. Previously this list only had 9 of the ~17
+    // fields — drivingLicenseFront/Back, toolkit, spareTyre, odometer,
+    // fuelGauge, interior and roofTop were being silently dropped.
+    const img = handover.images || {};
+
     data.gallery = {
       handover: [
-        {
-          label: "Customer Photo",
-          image: handover.images?.customerPhoto || "",
-        },
-        {
-          label: "Customer Profile",
-          image: handover.images?.customerProfileImage || "",
-        },
-        {
-          label: "Customer With Vehicle",
-          image: handover.images?.customerWithVehicle || "",
-        },
-        {
-          label: "ID Card Front",
-          image: handover.images?.idCardFront || "",
-        },
-        {
-          label: "ID Card Back",
-          image: handover.images?.idCardBack || "",
-        },
-        {
-          label: "Vehicle Front",
-          image: handover.images?.vehicleFront || "",
-        },
-        {
-          label: "Vehicle Rear",
-          image: handover.images?.vehicleRear || "",
-        },
-        {
-          label: "Vehicle Left",
-          image: handover.images?.vehicleLeft || "",
-        },
-        {
-          label: "Vehicle Right",
-          image: handover.images?.vehicleRight || "",
-        },
+        { label: "Customer Photo", image: img.customerPhoto || "" },
+        { label: "Customer Profile", image: img.customerProfileImage || "" },
+        { label: "Customer With Vehicle", image: img.customerWithVehicle || "" },
+        { label: "ID Card Front", image: img.idCardFront || "" },
+        { label: "ID Card Back", image: img.idCardBack || "" },
+        { label: "Driving License Front", image: img.drivingLicenseFront || "" },
+        { label: "Driving License Back", image: img.drivingLicenseBack || "" },
+        { label: "Toolkit", image: img.toolkit || "" },
+        { label: "Spare Tyre", image: img.spareTyre || "" },
+        { label: "Odometer", image: img.odometer || "" },
+        { label: "Fuel Gauge", image: img.fuelGauge || "" },
+        { label: "Interior", image: img.interior || "" },
+        { label: "Roof Top", image: img.roofTop || "" },
+        { label: "Vehicle Front", image: img.vehicleFront || "" },
+        { label: "Vehicle Rear", image: img.vehicleRear || "" },
+        { label: "Vehicle Left", image: img.vehicleLeft || "" },
+        { label: "Vehicle Right", image: img.vehicleRight || "" },
       ].filter((item) => item.image),
     };
+
+    // NEW: damage photographed AT HANDOVER TIME (pre-existing damage noted
+    // before the customer took the vehicle out) — a completely separate
+    // thing from VehicleReturn.damageImages (damage noted when it came
+    // back). `images.damageImages` on the Handover model was never exposed
+    // before.
+    data.gallery.handoverDamageImages = (img.damageImages || [])
+      .filter(Boolean)
+      .map((image, index) => ({
+        label: `Pre-existing Damage ${index + 1}`,
+        image,
+      }));
+
+    // NEW: vehicle swap/exchange history. Each entry already carries its own
+    // exchangeImages (front/rear/left/right/additional) taken when the
+    // replacement vehicle was handed over — none of this was surfaced
+    // before.
+    data.gallery.vehicleExchanges = (handover.vehicleHistory || []).map(
+      (entry, index) => {
+        const ex = entry.exchangeImages || {};
+        return {
+          index,
+          changedAt: entry.changedAt,
+          reason: entry.reason || "",
+          changedBy: entry.changedBy
+            ? {
+                _id: entry.changedBy._id,
+                fullName: entry.changedBy.fullName,
+                role: entry.changedBy.role,
+              }
+            : null,
+          oldVehicle: {
+            vehicleName: entry.oldVehicle?.vehicleName || "",
+            vehicleNumber: entry.oldVehicle?.vehicleNumber || "",
+          },
+          newVehicle: {
+            vehicleName: entry.newVehicle?.vehicleName || "",
+            vehicleNumber: entry.newVehicle?.vehicleNumber || "",
+          },
+          images: [
+            { label: "Front", image: ex.vehicleFront || "" },
+            { label: "Rear", image: ex.vehicleRear || "" },
+            { label: "Left", image: ex.vehicleLeft || "" },
+            { label: "Right", image: ex.vehicleRight || "" },
+            { label: "Additional", image: ex.additional || "" },
+          ].filter((item) => item.image),
+        };
+      },
+    );
 
     if (vehicleReturn) {
       data.vehicleReturn = {
@@ -1828,30 +1867,20 @@ export const getSingleHandover = async (req, res) => {
       };
 
       data.gallery.returnImages = [
-        {
-          label: "Return Front",
-          image: vehicleReturn.images?.vehicleFront || "",
-        },
-        {
-          label: "Return Rear",
-          image: vehicleReturn.images?.vehicleRear || "",
-        },
-        {
-          label: "Return Left",
-          image: vehicleReturn.images?.vehicleLeft || "",
-        },
-        {
-          label: "Return Right",
-          image: vehicleReturn.images?.vehicleRight || "",
-        },
+        { label: "Return Front", image: vehicleReturn.images?.vehicleFront || "" },
+        { label: "Return Rear", image: vehicleReturn.images?.vehicleRear || "" },
+        { label: "Return Left", image: vehicleReturn.images?.vehicleLeft || "" },
+        { label: "Return Right", image: vehicleReturn.images?.vehicleRight || "" },
       ].filter((item) => item.image);
 
-      data.gallery.damageImages = (vehicleReturn.damageImages || []).map(
-        (img, index) => ({
-          label: `Damage ${index + 1}`,
-          image: img,
-        }),
-      );
+      // Renamed label to "Return Damage" (was just "Damage") now that the
+      // handover-time damage gallery exists too, so the two aren't confused.
+      data.gallery.damageImages = (vehicleReturn.damageImages || [])
+        .filter(Boolean)
+        .map((image, index) => ({
+          label: `Return Damage ${index + 1}`,
+          image,
+        }));
     } else {
       data.vehicleReturn = null;
       data.gallery.returnImages = [];
