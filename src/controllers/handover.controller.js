@@ -1596,9 +1596,18 @@ export const getActiveHandovers = async (req, res) => {
       handoverStatus: "active",
       isDeleted: false,
     })
-      .populate("vehicle.vehicleId")
+      // Only pull the fields the app actually renders instead of full
+      // vehicle/user documents — smaller payload, faster to serialize.
+      .populate("vehicle.vehicleId", "vehicleName vehicleNumber")
       .populate("createdBy", "fullName")
-      .sort({ createdAt: -1 });
+      // .lean() skips hydrating full Mongoose documents (getters, virtuals,
+      // change tracking) since this is a read-only list response — this
+      // alone is typically the single biggest speedup for a GET-list route.
+      .select(
+        "customer vehicle trip payment images handoverStatus isDeleted createdAt",
+      )
+      .sort({ createdAt: -1 })
+      .lean();
 
     return res.status(200).json({
       success: true,
@@ -2112,40 +2121,6 @@ export const getReceiveCarList = async (req, res) => {
   }
 };
 
-// Shared row-shaping logic, pulled out so both the "completed" branch and
-// the "not completed" branch build the exact same response shape as before.
-function buildResponseRows(handoverDocs, completedMap) {
-  return handoverDocs.map((h) => {
-    const returnInfo = completedMap.get(String(h._id));
-    return {
-      ...h,
-      dropLocation: h.bookingId?.drop?.location || "Office",
-      dropCharge: h.bookingId?.drop?.charge || 0,
-      createdByUser: h.createdBy
-        ? { fullName: h.createdBy.fullName, role: h.createdBy.role }
-        : null,
-      returnStatus: returnInfo ? "completed" : null,
-      returnDetails: returnInfo
-        ? {
-            receivedBy: returnInfo.receivedBy
-              ? {
-                  fullName: returnInfo.receivedBy.fullName,
-                  role: returnInfo.receivedBy.role,
-                }
-              : null,
-            receivingTime: returnInfo.receivingTime || null,
-            scheduledReturnTime: returnInfo.scheduledReturnTime || null,
-            timeStatus: returnInfo.timeStatus || "On Time",
-            delayText: returnInfo.delayText || "0 minutes",
-            settlementDetails: returnInfo.settlementDetails || {},
-          }
-        : null,
-    };
-  });
-}
-
-// Shared row-shaping logic, pulled out so both the "completed" branch and
-// the "not completed" branch build the exact same response shape as before.
 function buildResponseRows(handoverDocs, completedMap) {
   return handoverDocs.map((h) => {
     const returnInfo = completedMap.get(String(h._id));
