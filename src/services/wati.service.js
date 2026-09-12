@@ -135,7 +135,7 @@ export const sendBookingCreatedMessage = async (mobileNumber) => {
     const mobile = formatPhone(mobileNumber);
 
     const payload = {
-      template_name: "booking_created",
+      template_name: "booking_confirmation_message",
       broadcast_name: `booking_created_${Date.now()}`,
     };
 
