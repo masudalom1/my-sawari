@@ -1855,7 +1855,6 @@ export const getSingleHandover = async (req, res) => {
   }
 };
 
-
 export const getReceiveCarList = async (req, res) => {
   try {
     const {
@@ -1864,6 +1863,7 @@ export const getReceiveCarList = async (req, res) => {
       limit = 7,
       search = "",
       completedDays = 90,
+      includeCounts = "true",
     } = req.query;
 
     const pageNum = Math.max(parseInt(page, 10) || 1, 1);
@@ -1906,34 +1906,37 @@ export const getReceiveCarList = async (req, res) => {
       dateFilter = { "trip.dropDateTime": { $lt: today.startUTC } };
     }
 
-    // ==========================================================
-    // Badge counts are completely independent of the main list
-    // query below — kick them off now (don't await yet) so they
-    // run concurrently with everything else instead of adding a
-    // second serial round-trip at the end.
-    // ==========================================================
-    const countsPromise = Promise.all([
-      countNonCompleted(baseMatch, {
-        "trip.dropDateTime": { $gte: today.startUTC, $lt: today.endUTC },
-      }),
-      countNonCompleted(baseMatch, {}),
-      countNonCompleted(baseMatch, {
-        "trip.dropDateTime": { $gte: tomorrow.startUTC, $lt: tomorrow.endUTC },
-      }),
-      countNonCompleted(baseMatch, {
-        "trip.dropDateTime": { $lt: today.startUTC },
-      }),
-      VehicleReturn.countDocuments({
-        returnStatus: "completed",
-        receivingTime: { $gte: completedSince },
-      }),
-    ]).then(([todayCount, allCount, tomorrowCount, overdueCount, completedCount]) => ({
-      today: todayCount,
-      all: allCount,
-      tomorrow: tomorrowCount,
-      overdue: overdueCount,
-      completed: completedCount,
-    }));
+
+    const wantCounts = String(includeCounts) !== "false";
+    const countsPromise = wantCounts
+      ? Promise.all([
+          countNonCompleted(baseMatch, {
+            "trip.dropDateTime": { $gte: today.startUTC, $lt: today.endUTC },
+          }),
+          countNonCompleted(baseMatch, {}),
+          countNonCompleted(baseMatch, {
+            "trip.dropDateTime": {
+              $gte: tomorrow.startUTC,
+              $lt: tomorrow.endUTC,
+            },
+          }),
+          countNonCompleted(baseMatch, {
+            "trip.dropDateTime": { $lt: today.startUTC },
+          }),
+          VehicleReturn.countDocuments({
+            returnStatus: "completed",
+            receivingTime: { $gte: completedSince },
+          }),
+        ]).then(
+          ([todayCount, allCount, tomorrowCount, overdueCount, completedCount]) => ({
+            today: todayCount,
+            all: allCount,
+            tomorrow: tomorrowCount,
+            overdue: overdueCount,
+            completed: completedCount,
+          }),
+        )
+      : Promise.resolve(null);
 
     let data = [];
     let total = 0;
@@ -2108,6 +2111,38 @@ export const getReceiveCarList = async (req, res) => {
     });
   }
 };
+
+// Shared row-shaping logic, pulled out so both the "completed" branch and
+// the "not completed" branch build the exact same response shape as before.
+function buildResponseRows(handoverDocs, completedMap) {
+  return handoverDocs.map((h) => {
+    const returnInfo = completedMap.get(String(h._id));
+    return {
+      ...h,
+      dropLocation: h.bookingId?.drop?.location || "Office",
+      dropCharge: h.bookingId?.drop?.charge || 0,
+      createdByUser: h.createdBy
+        ? { fullName: h.createdBy.fullName, role: h.createdBy.role }
+        : null,
+      returnStatus: returnInfo ? "completed" : null,
+      returnDetails: returnInfo
+        ? {
+            receivedBy: returnInfo.receivedBy
+              ? {
+                  fullName: returnInfo.receivedBy.fullName,
+                  role: returnInfo.receivedBy.role,
+                }
+              : null,
+            receivingTime: returnInfo.receivingTime || null,
+            scheduledReturnTime: returnInfo.scheduledReturnTime || null,
+            timeStatus: returnInfo.timeStatus || "On Time",
+            delayText: returnInfo.delayText || "0 minutes",
+            settlementDetails: returnInfo.settlementDetails || {},
+          }
+        : null,
+    };
+  });
+}
 
 // Shared row-shaping logic, pulled out so both the "completed" branch and
 // the "not completed" branch build the exact same response shape as before.
