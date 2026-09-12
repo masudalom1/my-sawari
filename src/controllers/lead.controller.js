@@ -1057,7 +1057,7 @@ export const getLeadHistory = async (req, res) => {
 };
 
 // v1.0
-export const getBookingsDashboard = async (req, res) => {
+export const getBookingsDashboards = async (req, res) => {
   try {
     // ==========================
     // QUERY PARAMS
@@ -1434,7 +1434,7 @@ export const invalidateBookingsCache = () => dashboardCache.clear();
 const getISTDateString = (date) =>
   new Date(date).toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" });
 
-export const getBookingsDashboards = async (req, res) => {
+export const getBookingsDashboardss = async (req, res) => {
   try {
     const page = Math.max(parseInt(req.query.page) || 1, 1);
     const limit = Math.min(parseInt(req.query.limit) || 20, 50); // hard cap
@@ -1762,6 +1762,410 @@ export const getBookingsDashboards = async (req, res) => {
     return res.status(500).json({ success: false, message: "Unable to fetch bookings.", error: error.message });
   }
 };
+// v1.2
+//new booking api start [get]
+const OPEN_STATUSES_EXCLUDED = ["completed", "cancelled", "active", "vehicle_handover"];
+
+const TAB_BUCKETS = {
+  All: null,
+  Pending: ["pending"],
+  "Today's Pickup": ["today"],
+  "Tomorrow's Pickup": ["tomorrow"],
+  Upcoming: ["today", "tomorrow", "upcoming"],
+  "Active Rental": ["active"],
+  Completed: ["completed"],
+  Cancelled: ["cancelled"],
+};
+
+
+const escapeRegex = (str) => str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+const STATS_CACHE_TTL_MS = 8000;
+const statsCache = new Map();
+
+const getCachedStats = (key) => {
+  const hit = statsCache.get(key);
+  if (hit && hit.expiresAt > Date.now()) return hit.data;
+  return null;
+};
+
+const setCachedStats = (key, data) => {
+  statsCache.set(key, { data, expiresAt: Date.now() + STATS_CACHE_TTL_MS });
+  if (statsCache.size > 200) {
+    const now = Date.now();
+    for (const [k, v] of statsCache) {
+      if (v.expiresAt <= now) statsCache.delete(k);
+    }
+  }
+};
+
+const EMPTY_STATS = {
+  totalBookings: 0,
+  pendingHandover: 0,
+  todayPickup: 0,
+  tomorrowPickup: 0,
+  upcoming: 0,
+  activeRentals: 0,
+  completed: 0,
+  cancelled: 0,
+};
+
+const bucketCountsToStats = (bucketCounts) => {
+  const get = (b) => bucketCounts[b] || 0;
+  const today = get("today");
+  const tomorrow = get("tomorrow");
+  const upcomingOnly = get("upcoming");
+  return {
+    totalBookings: Object.values(bucketCounts).reduce((a, b) => a + b, 0),
+    pendingHandover: get("pending"),
+    todayPickup: today,
+    tomorrowPickup: tomorrow,
+    upcoming: today + tomorrow + upcomingOnly,
+    activeRentals: get("active"),
+    completed: get("completed"),
+    cancelled: get("cancelled"),
+  };
+};
+
+const bucketingStages = (today, tomorrow) => [
+  {
+    $addFields: {
+      pickupDateStr: {
+        $cond: [
+          { $ifNull: ["$fromDate", false] },
+          {
+            $dateToString: {
+              format: "%Y-%m-%d",
+              date: "$fromDate",
+              timezone: "Asia/Kolkata",
+            },
+          },
+          null,
+        ],
+      },
+    },
+  },
+  {
+    $addFields: {
+      bucket: {
+        $switch: {
+          branches: [
+            { case: { $eq: ["$status", "completed"] }, then: "completed" },
+            { case: { $eq: ["$status", "cancelled"] }, then: "cancelled" },
+            {
+              case: { $in: ["$status", ["active", "vehicle_handover"]] },
+              then: "active",
+            },
+            {
+              case: {
+                $and: [
+                  { $not: [{ $in: ["$status", OPEN_STATUSES_EXCLUDED] }] },
+                  { $ne: ["$pickupDateStr", null] },
+                  { $lt: ["$pickupDateStr", today] },
+                ],
+              },
+              then: "pending",
+            },
+            {
+              case: {
+                $and: [
+                  { $not: [{ $in: ["$status", OPEN_STATUSES_EXCLUDED] }] },
+                  { $eq: ["$pickupDateStr", today] },
+                ],
+              },
+              then: "today",
+            },
+            {
+              case: {
+                $and: [
+                  { $not: [{ $in: ["$status", OPEN_STATUSES_EXCLUDED] }] },
+                  { $eq: ["$pickupDateStr", tomorrow] },
+                ],
+              },
+              then: "tomorrow",
+            },
+            {
+              case: {
+                $and: [
+                  { $not: [{ $in: ["$status", OPEN_STATUSES_EXCLUDED] }] },
+                  { $ne: ["$pickupDateStr", null] },
+                ],
+              },
+              then: "upcoming",
+            },
+          ],
+          default: "confirmed",
+        },
+      },
+      displayStatus: {
+        $switch: {
+          branches: [
+            { case: { $eq: ["$status", "completed"] }, then: "Completed" },
+            { case: { $eq: ["$status", "cancelled"] }, then: "Cancelled" },
+            {
+              case: { $in: ["$status", ["active", "vehicle_handover"]] },
+              then: "Active Rental",
+            },
+          ],
+          default: "Booking Confirmed",
+        },
+      },
+    },
+  },
+];
+
+export const getBookingsDashboard = async (req, res) => {
+  try {
+    const { tab = "All", search = "", page = 1, limit = 20 } = req.query;
+
+    const pageNum = Math.max(parseInt(page, 10) || 1, 1);
+    const limitNum = Math.max(parseInt(limit, 10) || 20, 1);
+
+    const now = new Date();
+    const today = getISTDateString(now);
+    const tomorrowDate = new Date(now);
+    tomorrowDate.setDate(tomorrowDate.getDate() + 1);
+    const tomorrow = getISTDateString(tomorrowDate);
+
+    const searchTerm = String(search || "").trim();
+    const matchStage = { isDeleted: false };
+
+    let searchMatch = null;
+    if (searchTerm) {
+      const regex = new RegExp(escapeRegex(searchTerm), "i");
+      searchMatch = {
+        $or: [
+          { customerName: regex },
+          { mobileNumber: regex },
+          { alternateMobileNumber: regex },
+          { bookingCode: regex },
+          { vehicleName: regex },
+          { vehicleNumber: regex },
+          { destination: regex },
+        ],
+      };
+    }
+
+    const baseMatchStages = [
+      { $match: matchStage },
+      ...(searchMatch ? [{ $match: searchMatch }] : []),
+    ];
+
+    const statsCacheKey = `${today}|${searchTerm.toLowerCase()}`;
+    let stats = getCachedStats(statsCacheKey);
+
+    if (!stats) {
+      const statsPipeline = [
+        ...baseMatchStages,
+        { $project: { status: 1, fromDate: 1 } },
+        ...bucketingStages(today, tomorrow),
+        { $group: { _id: "$bucket", count: { $sum: 1 } } },
+      ];
+
+      const statsRows = await Booking.aggregate(statsPipeline);
+      const bucketCounts = {};
+      statsRows.forEach((r) => {
+        bucketCounts[r._id] = r.count;
+      });
+      stats = bucketCountsToStats(bucketCounts);
+      setCachedStats(statsCacheKey, stats);
+    }
+
+    const allowedBuckets = Object.prototype.hasOwnProperty.call(TAB_BUCKETS, tab)
+      ? TAB_BUCKETS[tab]
+      : null;
+
+    const startIndex = (pageNum - 1) * limitNum;
+
+    const pagePipeline = [
+      ...baseMatchStages,
+      ...bucketingStages(today, tomorrow),
+      ...(allowedBuckets ? [{ $match: { bucket: { $in: allowedBuckets } } }] : []),
+      { $sort: { createdAt: -1 } },
+      {
+        $facet: {
+          data: [
+            { $skip: startIndex },
+            { $limit: limitNum },
+            { $project: { _id: 1 } },
+          ],
+          totalCount: [{ $count: "count" }],
+        },
+      },
+    ];
+
+    const [pageResult] = await Booking.aggregate(pagePipeline);
+    const orderedIds = (pageResult?.data || []).map((d) => d._id);
+    const total = pageResult?.totalCount?.[0]?.count || 0;
+    const hasMore = startIndex + orderedIds.length < total;
+
+    if (orderedIds.length === 0) {
+      return res.status(200).json({
+        success: true,
+        stats,
+        bookings: [],
+        pagination: { page: pageNum, limit: limitNum, total, hasMore },
+      });
+    }
+
+    const pageDocs = await Booking.find({ _id: { $in: orderedIds } })
+      .select(
+        [
+          "bookingCode",
+          "lead",
+          "customerName",
+          "mobileNumber",
+          "alternateMobileNumber",
+          "occupation",
+          "destination",
+          "aadhaarNumber",
+          "drivingLicenseNumber",
+          "tripType",
+          "fromDate",
+          "toDate",
+          "pickupTime",
+          "dropTime",
+          "totalDays",
+          "residents",
+          "payment",
+          "vehicleId",
+          "vehicleName",
+          "vehicleNumber",
+          "vehicleColor",
+          "status",
+          "handover",
+          "vehicleReturn",
+          "pickupDropRequired",
+          "serviceType",
+          "pickup",
+          "drop",
+          "assignedDriver",
+          "createdBy",
+          "pickupDropNotes",
+          "createdAt",
+        ].join(" "),
+      )
+      .populate({
+        path: "lead",
+        select: "leadId priority source vehicleType bookingConfirmedAt leadOwner",
+        populate: { path: "leadOwner", select: "name fullName" },
+      })
+      .populate({ path: "vehicleId", select: "vehicleName vehicleNumber color" })
+      .populate({ path: "createdBy", select: "name fullName" })
+      .populate({ path: "assignedDriver", select: "fullName name mobileNumber" })
+      .lean();
+
+    const byId = new Map(pageDocs.map((doc) => [String(doc._id), doc]));
+    const orderedDocs = orderedIds
+      .map((id) => byId.get(String(id)))
+      .filter(Boolean);
+
+    const bookings = orderedDocs.map((booking) => {
+      let status = "Booking Confirmed";
+      const isOpenBooking = !OPEN_STATUSES_EXCLUDED.includes(booking.status);
+
+      if (booking.status === "completed") status = "Completed";
+      else if (booking.status === "cancelled") status = "Cancelled";
+      else if (["active", "vehicle_handover"].includes(booking.status))
+        status = "Active Rental";
+      else if (booking.fromDate && isOpenBooking) {
+        const pickupDate = getISTDateString(booking.fromDate);
+        if (pickupDate < today) status = "Pending Handover";
+        else if (pickupDate === today) status = "Today's Pickup";
+        else if (pickupDate === tomorrow) status = "Tomorrow's Pickup";
+      }
+
+      return {
+        _id: booking._id,
+        bookingId: booking._id,
+        bookingCode: booking.bookingCode,
+        leadId: booking.lead?.leadId || "",
+        customerName: booking.customerName,
+        mobileNumber: booking.mobileNumber,
+        alternateMobileNumber: booking.alternateMobileNumber,
+        occupation: booking.occupation,
+        destination: booking.destination,
+        aadhaarNumber: booking.aadhaarNumber,
+        drivingLicenseNumber: booking.drivingLicenseNumber,
+        tripType: booking.tripType,
+        pickupDate: booking.fromDate,
+        dropDate: booking.toDate,
+        fromDate: booking.fromDate,
+        toDate: booking.toDate,
+        pickupTime: booking.pickupTime,
+        dropTime: booking.dropTime,
+        tripDays: booking.totalDays,
+        totalDays: booking.totalDays,
+        residents: booking.residents,
+        quotationAmount: booking.payment?.totalAmount || 0,
+        bookingAmount: booking.payment?.bookingAmountPaid || 0,
+        discountAmount: booking.payment?.discountAmount || 0,
+        fastagBalance: booking.payment?.fastagAmount || 0,
+        securityDeposit: booking.payment?.securityDeposit || 0,
+        payment: booking.payment || null,
+        vehicleId: booking.vehicleId?._id || null,
+        vehicleName: booking.vehicleId?.vehicleName || booking.vehicleName,
+        vehicleNumber: booking.vehicleId?.vehicleNumber || booking.vehicleNumber,
+        vehicleColor: booking.vehicleId?.color || booking.vehicleColor,
+        vehicleType: booking.lead?.vehicleType || "",
+        priority: booking.lead?.priority || "medium",
+        source: booking.lead?.source || "",
+        leadOwner:
+          booking.lead?.leadOwner?.fullName ||
+          booking.lead?.leadOwner?.name ||
+          booking.createdBy?.fullName ||
+          booking.createdBy?.name ||
+          "",
+        bookingConfirmedAt: booking.lead?.bookingConfirmedAt || booking.createdAt,
+        status,
+        bookingStatus: booking.status,
+        handoverCompleted: booking.status !== "confirmed",
+        handover: booking.handover,
+        vehicleReturn: booking.vehicleReturn,
+        pickupDropRequired: booking.pickupDropRequired,
+        serviceType: booking.serviceType,
+        pickup: booking.pickup,
+        drop: booking.drop,
+        assignedDriver: booking.assignedDriver
+          ? {
+              _id: booking.assignedDriver._id,
+              fullName:
+                booking.assignedDriver.fullName || booking.assignedDriver.name || "",
+              mobileNumber: booking.assignedDriver.mobileNumber || "",
+            }
+          : null,
+        pickupDropNotes: booking.pickupDropNotes,
+        createdBy: booking.createdBy
+          ? {
+              _id: booking.createdBy._id,
+              name: booking.createdBy.fullName || booking.createdBy.name || "",
+            }
+          : null,
+        createdAt: booking.createdAt,
+      };
+    });
+
+    return res.status(200).json({
+      success: true,
+      stats,
+      bookings,
+      pagination: { page: pageNum, limit: limitNum, total, hasMore },
+    });
+  } catch (error) {
+    console.error("===== BOOKING DASHBOARD ERROR =====");
+    console.error(error);
+    console.error(error.stack);
+
+    return res.status(500).json({
+      success: false,
+      message: "Unable to fetch bookings.",
+      error: error.message,
+    });
+  }
+};
+
+export const invalidateBookingStatsCache = () => statsCache.clear();
+//new booking api ending [get]
 
 export const createLeadBooking = async (req, res, next) => {
   try {
