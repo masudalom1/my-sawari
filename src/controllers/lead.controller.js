@@ -1850,13 +1850,11 @@ export const getBookingsDashboardss = async (req, res) => {
     return res.status(200).json(payload);
   } catch (error) {
     console.error("BOOKING DASHBOARD ERROR:", error);
-    return res
-      .status(500)
-      .json({
-        success: false,
-        message: "Unable to fetch bookings.",
-        error: error.message,
-      });
+    return res.status(500).json({
+      success: false,
+      message: "Unable to fetch bookings.",
+      error: error.message,
+    });
   }
 };
 // v1.2
@@ -3899,6 +3897,25 @@ export const createBookings = async (req, res, next) => {
     // ============================================================
 
     await session.commitTransaction();
+
+    // ============================================================
+    // SEND BOOKING WHATSAPP
+    // ============================================================
+
+    try {
+      const whatsappResult = await sendBookingCreatedMessage(
+        booking.mobileNumber,
+      );
+
+      console.log("Booking WhatsApp Result:", whatsappResult);
+    } catch (whatsappError) {
+      console.error(
+        "Booking WhatsApp Error:",
+        whatsappError?.response?.data ||
+          whatsappError?.message ||
+          whatsappError,
+      );
+    }
 
     // ============================================================
     // POPULATE VEHICLE
