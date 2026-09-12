@@ -4,6 +4,7 @@ import LeadHistory from "../models/leadHistory.model.js";
 import Booking from "../models/booking.model.js";
 import Vehicle from "../models/vehicle.model.js";
 import PaymentHistory from "../models/paymentHistory.model.js";
+import { sendBookingCreatedMessage } from "../services/wati.service.js";
 
 export const createLead = async (req, res) => {
   try {
@@ -1062,12 +1063,7 @@ export const getBookingsDashboards = async (req, res) => {
     // ==========================
     // QUERY PARAMS
     // ==========================
-    const {
-      tab = "All",
-      search = "",
-      page = 1,
-      limit = 20,
-    } = req.query;
+    const { tab = "All", search = "", page = 1, limit = 20 } = req.query;
 
     const pageNum = Math.max(parseInt(page, 10) || 1, 1);
     const limitNum = Math.max(parseInt(limit, 10) || 20, 1);
@@ -1342,7 +1338,9 @@ export const getBookingsDashboards = async (req, res) => {
     // SEARCH (applied before tab split so stats reflect the search scope,
     // but not the currently selected tab)
     // ==========================
-    const searchTerm = String(search || "").trim().toLowerCase();
+    const searchTerm = String(search || "")
+      .trim()
+      .toLowerCase();
     const searched = searchTerm
       ? dashboard.filter((b) => {
           const haystack = [
@@ -1487,7 +1485,9 @@ export const getBookingsDashboardss = async (req, res) => {
                 pipeline: [{ $project: { name: 1, fullName: 1 } }],
               },
             },
-            { $unwind: { path: "$leadOwner", preserveNullAndEmptyArrays: true } },
+            {
+              $unwind: { path: "$leadOwner", preserveNullAndEmptyArrays: true },
+            },
           ],
         },
       },
@@ -1499,7 +1499,9 @@ export const getBookingsDashboardss = async (req, res) => {
           localField: "vehicleId",
           foreignField: "_id",
           as: "vehicleId",
-          pipeline: [{ $project: { vehicleName: 1, vehicleNumber: 1, color: 1 } }],
+          pipeline: [
+            { $project: { vehicleName: 1, vehicleNumber: 1, color: 1 } },
+          ],
         },
       },
       { $unwind: { path: "$vehicleId", preserveNullAndEmptyArrays: true } },
@@ -1524,7 +1526,9 @@ export const getBookingsDashboardss = async (req, res) => {
           pipeline: [{ $project: { fullName: 1, name: 1, mobileNumber: 1 } }],
         },
       },
-      { $unwind: { path: "$assignedDriver", preserveNullAndEmptyArrays: true } },
+      {
+        $unwind: { path: "$assignedDriver", preserveNullAndEmptyArrays: true },
+      },
 
       // ---- derived status computed once, in the DB, not per-request in JS on every doc ----
       {
@@ -1532,11 +1536,26 @@ export const getBookingsDashboardss = async (req, res) => {
           pickupDateStr: {
             $cond: [
               { $ifNull: ["$fromDate", false] },
-              { $dateToString: { format: "%Y-%m-%d", date: "$fromDate", timezone: "Asia/Kolkata" } },
+              {
+                $dateToString: {
+                  format: "%Y-%m-%d",
+                  date: "$fromDate",
+                  timezone: "Asia/Kolkata",
+                },
+              },
               null,
             ],
           },
-          isOpenBooking: { $not: [{ $in: ["$status", ["completed", "cancelled", "active", "vehicle_handover"]] }] },
+          isOpenBooking: {
+            $not: [
+              {
+                $in: [
+                  "$status",
+                  ["completed", "cancelled", "active", "vehicle_handover"],
+                ],
+              },
+            ],
+          },
         },
       },
       {
@@ -1546,17 +1565,36 @@ export const getBookingsDashboardss = async (req, res) => {
               branches: [
                 { case: { $eq: ["$status", "completed"] }, then: "Completed" },
                 { case: { $eq: ["$status", "cancelled"] }, then: "Cancelled" },
-                { case: { $in: ["$status", ["active", "vehicle_handover"]] }, then: "Active Rental" },
                 {
-                  case: { $and: ["$isOpenBooking", { $ne: ["$pickupDateStr", null] }, { $lt: ["$pickupDateStr", today] }] },
+                  case: { $in: ["$status", ["active", "vehicle_handover"]] },
+                  then: "Active Rental",
+                },
+                {
+                  case: {
+                    $and: [
+                      "$isOpenBooking",
+                      { $ne: ["$pickupDateStr", null] },
+                      { $lt: ["$pickupDateStr", today] },
+                    ],
+                  },
                   then: "Pending Handover",
                 },
                 {
-                  case: { $and: ["$isOpenBooking", { $eq: ["$pickupDateStr", today] }] },
+                  case: {
+                    $and: [
+                      "$isOpenBooking",
+                      { $eq: ["$pickupDateStr", today] },
+                    ],
+                  },
                   then: "Today's Pickup",
                 },
                 {
-                  case: { $and: ["$isOpenBooking", { $eq: ["$pickupDateStr", tomorrow] }] },
+                  case: {
+                    $and: [
+                      "$isOpenBooking",
+                      { $eq: ["$pickupDateStr", tomorrow] },
+                    ],
+                  },
                   then: "Tomorrow's Pickup",
                 },
               ],
@@ -1576,8 +1614,10 @@ export const getBookingsDashboardss = async (req, res) => {
 
     // ---- tab filter (server-side, on the already-computed status) ----
     const tabMatch = [];
-    if (tab === "Pending") tabMatch.push({ $match: { computedStatus: "Pending Handover" } });
-    else if (tab === "Upcoming") tabMatch.push({ $match: { isUpcoming: true } });
+    if (tab === "Pending")
+      tabMatch.push({ $match: { computedStatus: "Pending Handover" } });
+    else if (tab === "Upcoming")
+      tabMatch.push({ $match: { isUpcoming: true } });
     else if (tab !== "All") tabMatch.push({ $match: { computedStatus: tab } });
 
     // ---- search filter (server-side, across the fields the UI searches) ----
@@ -1610,12 +1650,52 @@ export const getBookingsDashboardss = async (req, res) => {
               $group: {
                 _id: null,
                 totalBookings: { $sum: 1 },
-                pendingHandover: { $sum: { $cond: [{ $eq: ["$computedStatus", "Pending Handover"] }, 1, 0] } },
-                todayPickup: { $sum: { $cond: [{ $eq: ["$computedStatus", "Today's Pickup"] }, 1, 0] } },
-                tomorrowPickup: { $sum: { $cond: [{ $eq: ["$computedStatus", "Tomorrow's Pickup"] }, 1, 0] } },
-                activeRentals: { $sum: { $cond: [{ $eq: ["$computedStatus", "Active Rental"] }, 1, 0] } },
-                completed: { $sum: { $cond: [{ $eq: ["$computedStatus", "Completed"] }, 1, 0] } },
-                cancelled: { $sum: { $cond: [{ $eq: ["$computedStatus", "Cancelled"] }, 1, 0] } },
+                pendingHandover: {
+                  $sum: {
+                    $cond: [
+                      { $eq: ["$computedStatus", "Pending Handover"] },
+                      1,
+                      0,
+                    ],
+                  },
+                },
+                todayPickup: {
+                  $sum: {
+                    $cond: [
+                      { $eq: ["$computedStatus", "Today's Pickup"] },
+                      1,
+                      0,
+                    ],
+                  },
+                },
+                tomorrowPickup: {
+                  $sum: {
+                    $cond: [
+                      { $eq: ["$computedStatus", "Tomorrow's Pickup"] },
+                      1,
+                      0,
+                    ],
+                  },
+                },
+                activeRentals: {
+                  $sum: {
+                    $cond: [
+                      { $eq: ["$computedStatus", "Active Rental"] },
+                      1,
+                      0,
+                    ],
+                  },
+                },
+                completed: {
+                  $sum: {
+                    $cond: [{ $eq: ["$computedStatus", "Completed"] }, 1, 0],
+                  },
+                },
+                cancelled: {
+                  $sum: {
+                    $cond: [{ $eq: ["$computedStatus", "Cancelled"] }, 1, 0],
+                  },
+                },
                 upcoming: { $sum: { $cond: ["$isUpcoming", 1, 0] } },
               },
             },
@@ -1735,13 +1815,19 @@ export const getBookingsDashboardss = async (req, res) => {
       assignedDriver: booking.assignedDriver
         ? {
             _id: booking.assignedDriver._id,
-            fullName: booking.assignedDriver.fullName || booking.assignedDriver.name || "",
+            fullName:
+              booking.assignedDriver.fullName ||
+              booking.assignedDriver.name ||
+              "",
             mobileNumber: booking.assignedDriver.mobileNumber || "",
           }
         : null,
       pickupDropNotes: booking.pickupDropNotes,
       createdBy: booking.createdBy
-        ? { _id: booking.createdBy._id, name: booking.createdBy.fullName || booking.createdBy.name || "" }
+        ? {
+            _id: booking.createdBy._id,
+            name: booking.createdBy.fullName || booking.createdBy.name || "",
+          }
         : null,
       createdAt: booking.createdAt,
     }));
@@ -1750,7 +1836,12 @@ export const getBookingsDashboardss = async (req, res) => {
       success: true,
       stats,
       bookings: dashboard,
-      pagination: { page, limit, total, hasMore: skip + dashboard.length < total },
+      pagination: {
+        page,
+        limit,
+        total,
+        hasMore: skip + dashboard.length < total,
+      },
     };
 
     dashboardCache.set(cacheKey, { ts: Date.now(), payload });
@@ -1759,12 +1850,23 @@ export const getBookingsDashboardss = async (req, res) => {
     return res.status(200).json(payload);
   } catch (error) {
     console.error("BOOKING DASHBOARD ERROR:", error);
-    return res.status(500).json({ success: false, message: "Unable to fetch bookings.", error: error.message });
+    return res
+      .status(500)
+      .json({
+        success: false,
+        message: "Unable to fetch bookings.",
+        error: error.message,
+      });
   }
 };
 // v1.2
 //new booking api start [get]
-const OPEN_STATUSES_EXCLUDED = ["completed", "cancelled", "active", "vehicle_handover"];
+const OPEN_STATUSES_EXCLUDED = [
+  "completed",
+  "cancelled",
+  "active",
+  "vehicle_handover",
+];
 
 const TAB_BUCKETS = {
   All: null,
@@ -1776,7 +1878,6 @@ const TAB_BUCKETS = {
   Completed: ["completed"],
   Cancelled: ["cancelled"],
 };
-
 
 const escapeRegex = (str) => str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
@@ -1971,7 +2072,10 @@ export const getBookingsDashboard = async (req, res) => {
       setCachedStats(statsCacheKey, stats);
     }
 
-    const allowedBuckets = Object.prototype.hasOwnProperty.call(TAB_BUCKETS, tab)
+    const allowedBuckets = Object.prototype.hasOwnProperty.call(
+      TAB_BUCKETS,
+      tab,
+    )
       ? TAB_BUCKETS[tab]
       : null;
 
@@ -1980,7 +2084,9 @@ export const getBookingsDashboard = async (req, res) => {
     const pagePipeline = [
       ...baseMatchStages,
       ...bucketingStages(today, tomorrow),
-      ...(allowedBuckets ? [{ $match: { bucket: { $in: allowedBuckets } } }] : []),
+      ...(allowedBuckets
+        ? [{ $match: { bucket: { $in: allowedBuckets } } }]
+        : []),
       { $sort: { createdAt: -1 } },
       {
         $facet: {
@@ -2047,12 +2153,19 @@ export const getBookingsDashboard = async (req, res) => {
       )
       .populate({
         path: "lead",
-        select: "leadId priority source vehicleType bookingConfirmedAt leadOwner",
+        select:
+          "leadId priority source vehicleType bookingConfirmedAt leadOwner",
         populate: { path: "leadOwner", select: "name fullName" },
       })
-      .populate({ path: "vehicleId", select: "vehicleName vehicleNumber color" })
+      .populate({
+        path: "vehicleId",
+        select: "vehicleName vehicleNumber color",
+      })
       .populate({ path: "createdBy", select: "name fullName" })
-      .populate({ path: "assignedDriver", select: "fullName name mobileNumber" })
+      .populate({
+        path: "assignedDriver",
+        select: "fullName name mobileNumber",
+      })
       .lean();
 
     const byId = new Map(pageDocs.map((doc) => [String(doc._id), doc]));
@@ -2105,7 +2218,8 @@ export const getBookingsDashboard = async (req, res) => {
         payment: booking.payment || null,
         vehicleId: booking.vehicleId?._id || null,
         vehicleName: booking.vehicleId?.vehicleName || booking.vehicleName,
-        vehicleNumber: booking.vehicleId?.vehicleNumber || booking.vehicleNumber,
+        vehicleNumber:
+          booking.vehicleId?.vehicleNumber || booking.vehicleNumber,
         vehicleColor: booking.vehicleId?.color || booking.vehicleColor,
         vehicleType: booking.lead?.vehicleType || "",
         priority: booking.lead?.priority || "medium",
@@ -2116,7 +2230,8 @@ export const getBookingsDashboard = async (req, res) => {
           booking.createdBy?.fullName ||
           booking.createdBy?.name ||
           "",
-        bookingConfirmedAt: booking.lead?.bookingConfirmedAt || booking.createdAt,
+        bookingConfirmedAt:
+          booking.lead?.bookingConfirmedAt || booking.createdAt,
         status,
         bookingStatus: booking.status,
         handoverCompleted: booking.status !== "confirmed",
@@ -2130,7 +2245,9 @@ export const getBookingsDashboard = async (req, res) => {
           ? {
               _id: booking.assignedDriver._id,
               fullName:
-                booking.assignedDriver.fullName || booking.assignedDriver.name || "",
+                booking.assignedDriver.fullName ||
+                booking.assignedDriver.name ||
+                "",
               mobileNumber: booking.assignedDriver.mobileNumber || "",
             }
           : null,
@@ -2476,6 +2593,21 @@ export const createLeadBooking = async (req, res, next) => {
           "leadId customerName mobileNumber vehicleType fromDate toDate totalDays",
       },
     ]);
+
+    try {
+      await sendBookingCreatedMessage(booking.mobileNumber);
+
+      console.log("Booking WhatsApp message sent successfully");
+    } catch (whatsappError) {
+      console.error(
+        "Booking WhatsApp Error:",
+        whatsappError?.response?.data ||
+          whatsappError?.message ||
+          whatsappError,
+      );
+
+      // Do not fail booking if WhatsApp fails
+    }
 
     return res.status(201).json({
       success: true,

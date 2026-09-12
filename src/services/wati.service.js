@@ -129,3 +129,61 @@ export const sendBookingConfirmation = async ({
     };
   }
 };
+
+export const sendBookingCreatedMessage = async (mobileNumber) => {
+  try {
+    const mobile = formatPhone(mobileNumber);
+
+    const payload = {
+      template_name: "booking_created",
+      broadcast_name: `booking_created_${Date.now()}`,
+    };
+
+    console.log("========== WATI BOOKING MESSAGE ==========");
+    console.log("Mobile:", mobile);
+    console.log("Payload:", JSON.stringify(payload, null, 2));
+
+    const response = await axios.post(
+      `${API_URL}/${TENANT_ID}/api/v2/sendTemplateMessage?whatsappNumber=${mobile}`,
+      payload,
+      {
+        headers: {
+          Authorization: `Bearer ${API_TOKEN}`,
+          "Content-Type": "application/json",
+        },
+      }
+    );
+
+    console.log("========== WATI SUCCESS ==========");
+    console.log(
+      JSON.stringify(response.data, null, 2)
+    );
+
+    return {
+      success: true,
+      data: response.data,
+    };
+  } catch (error) {
+    console.log("========== WATI ERROR ==========");
+
+    console.log("Status:", error?.response?.status);
+
+    console.log(
+      "Response:",
+      JSON.stringify(
+        error?.response?.data,
+        null,
+        2
+      )
+    );
+
+    console.log("Message:", error.message);
+
+    return {
+      success: false,
+      error:
+        error?.response?.data ||
+        error.message,
+    };
+  }
+};
