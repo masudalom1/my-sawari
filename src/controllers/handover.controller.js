@@ -2955,7 +2955,8 @@ ${updateNote}`
     });
   }
 };
-export const updateRental = async (req, res) => {
+//v1.1
+export const updateRentall = async (req, res) => {
   try {
     const { id } = req.params;
 
@@ -3134,6 +3135,702 @@ export const updateRental = async (req, res) => {
       const invalidExchangeImages = Object.entries(exchangeImages)
         .filter(([, url]) => !url)
         .map(([field]) => field);
+
+      if (invalidExchangeImages.length > 0) {
+        return res.status(400).json({
+          success: false,
+          message: "Failed to upload vehicle exchange photos",
+          invalidImages: invalidExchangeImages,
+        });
+      }
+
+      // --------------------------------------------------------
+      // OLD VEHICLE -> AVAILABLE
+      // --------------------------------------------------------
+
+      await Vehicle.findByIdAndUpdate(oldVehicleId, {
+        status: "available",
+      });
+
+      // --------------------------------------------------------
+      // NEW VEHICLE -> RENT
+      // --------------------------------------------------------
+
+      await Vehicle.findByIdAndUpdate(vehicle._id, {
+        status: "rent",
+      });
+
+      // --------------------------------------------------------
+      // VEHICLE CHANGE HISTORY
+      // --------------------------------------------------------
+
+      handover.vehicleHistory.push({
+        oldVehicle: {
+          vehicleId: oldVehicleId,
+          vehicleName: oldVehicleName,
+          vehicleNumber: oldVehicleNumber,
+        },
+
+        newVehicle: {
+          vehicleId: vehicle._id,
+          vehicleName: vehicle.vehicleName,
+          vehicleNumber: vehicle.vehicleNumber,
+        },
+
+        // IMPORTANT:
+        // These photos belong to THIS exchange,
+        // not the original handover.
+        exchangeImages,
+
+        changedBy: req.user._id,
+
+        changedAt: new Date(),
+
+        reason: reasonForChange || "",
+      });
+
+      // --------------------------------------------------------
+      // UPDATE CURRENT VEHICLE
+      // --------------------------------------------------------
+
+      handover.vehicle.vehicleId = vehicle._id;
+
+      handover.vehicle.vehicleName = vehicle.vehicleName;
+
+      handover.vehicle.vehicleNumber = vehicle.vehicleNumber;
+
+      handover.vehicle.vehicleColor = vehicle.color || "";
+    }
+
+    // ==========================================================
+    // UPDATE DROP DATE / TIME
+    //
+    // This updates:
+    // 1. Handover dropDateTime
+    // 2. Handover numberOfDays
+    // 3. Extension bill history
+    // 4. Cumulative totalFare
+    // ==========================================================
+
+    if (dropDateTime !== undefined) {
+      const previousDropDateTime = new Date(handover.trip.dropDateTime);
+
+      const previousNumberOfDays = Number(handover.trip.numberOfDays) || 1;
+
+      const newDrop = new Date(dropDateTime);
+
+      // --------------------------------------------------------
+      // VALIDATE NEW DATE
+      // --------------------------------------------------------
+
+      if (Number.isNaN(newDrop.getTime())) {
+        return res.status(400).json({
+          success: false,
+          message: "Invalid drop date/time",
+        });
+      }
+
+      const dropChanged = previousDropDateTime.getTime() !== newDrop.getTime();
+
+      if (dropChanged) {
+        const pickup = new Date(handover.trip.pickupDateTime);
+
+        // ------------------------------------------------------
+        // VALIDATE PICKUP DATE
+        // ------------------------------------------------------
+
+        if (Number.isNaN(pickup.getTime())) {
+          return res.status(400).json({
+            success: false,
+            message: "Invalid pickup date/time",
+          });
+        }
+
+        // ------------------------------------------------------
+        // PREVENT DROP BEFORE PICKUP
+        // ------------------------------------------------------
+
+        if (newDrop.getTime() < pickup.getTime()) {
+          return res.status(400).json({
+            success: false,
+            message: "Drop date/time cannot be before pickup date/time",
+          });
+        }
+
+        // ------------------------------------------------------
+        // CALCULATE NEW RENTAL DAYS
+        // ------------------------------------------------------
+
+        const newNumberOfDays = Math.max(
+          1,
+          Math.ceil(
+            (newDrop.getTime() - pickup.getTime()) / (1000 * 60 * 60 * 24),
+          ),
+        );
+
+        const extraDays = newNumberOfDays - previousNumberOfDays;
+
+        const extensionAmount = Number(extensionPrice) || 0;
+
+        // ------------------------------------------------------
+        // UPDATE HANDOVER TRIP
+        // ------------------------------------------------------
+
+        handover.trip.dropDateTime = newDrop;
+
+        handover.trip.numberOfDays = newNumberOfDays;
+
+        // ------------------------------------------------------
+        // UPDATE CUMULATIVE TOTAL FARE
+        // ------------------------------------------------------
+
+        handover.payment.totalFare =
+          (Number(handover.payment.totalFare) || 0) + extensionAmount;
+
+        // ------------------------------------------------------
+        // CREATE EXTENSION BILL HISTORY
+        // ------------------------------------------------------
+
+        handover.extensionBills.push({
+          billNumber: handover.extensionBills.length + 1,
+
+          previousDropDateTime,
+
+          newDropDateTime: newDrop,
+
+          previousNumberOfDays,
+
+          newNumberOfDays,
+
+          extraDays,
+
+          extensionAmount,
+
+          amountCollected: Number(amountReceivedNow) || 0,
+
+          totalFareAfterThisBill: handover.payment.totalFare,
+
+          reason: reasonForChange || "",
+
+          createdBy: req.user._id,
+
+          createdAt: new Date(),
+        });
+      }
+    }
+
+    // ==========================================================
+    // UPDATE OTHER PAYMENT FIELDS
+    // ==========================================================
+
+    if (fastagCharges !== undefined) {
+      handover.payment.fastTagPayableAmount = Number(fastagCharges) || 0;
+    }
+
+    if (securityDeposit !== undefined) {
+      handover.payment.securityDeposit = Number(securityDeposit) || 0;
+    }
+
+    if (extraCharges !== undefined) {
+      handover.payment.extraCharges = Number(extraCharges) || 0;
+    }
+
+    if (discountAmount !== undefined) {
+      handover.payment.discountAmount = Number(discountAmount) || 0;
+    }
+
+    if (paymentMethod) {
+      handover.payment.paymentMethod = paymentMethod;
+    }
+
+    // ==========================================================
+    // GET PICKUP / DROP CHARGES
+    // ==========================================================
+
+    const pickupCharge =
+      Number(handover.payment.billSummary?.pickupCharge) || 0;
+
+    const dropCharge = Number(handover.payment.billSummary?.dropCharge) || 0;
+
+    // ==========================================================
+    // CALCULATE TOTAL AMOUNT
+    // ==========================================================
+
+    handover.payment.totalAmount = Math.max(
+      0,
+
+      (Number(handover.payment.totalFare) || 0) +
+        (Number(handover.payment.fastTagPayableAmount) || 0) +
+        pickupCharge +
+        dropCharge +
+        (Number(handover.payment.securityDeposit) || 0) +
+        (Number(handover.payment.extraCharges) || 0) -
+        (Number(handover.payment.discountAmount) || 0),
+    );
+
+    // ==========================================================
+    // PAYMENT RECEIVED NOW
+    // ==========================================================
+
+    if (amountReceivedNow !== undefined) {
+      const received = Number(amountReceivedNow) || 0;
+
+      handover.payment.amountReceivedNow =
+        (Number(handover.payment.amountReceivedNow) || 0) + received;
+
+      if (paymentMethod === "cash") {
+        handover.payment.paymentBreakdown.cash =
+          (Number(handover.payment.paymentBreakdown.cash) || 0) + received;
+      } else if (paymentMethod === "phonepe") {
+        handover.payment.paymentBreakdown.phonePe =
+          (Number(handover.payment.paymentBreakdown.phonePe) || 0) + received;
+
+        // Keep the latest set of UPI references from this update.
+        // FIX: sanitizedUpiLast4 is now an array — handover.payment.upiLast4
+        // must be typed [String] in the Handover schema for this to save
+        // correctly (see schema note below).
+        handover.payment.upiLast4 = sanitizedUpiLast4;
+      } else if (paymentMethod === "razorpay") {
+        handover.payment.paymentBreakdown.razorpay =
+          (Number(handover.payment.paymentBreakdown.razorpay) || 0) + received;
+      }
+    }
+
+    // ==========================================================
+    // CALCULATE TOTAL PAID
+    // ==========================================================
+
+    const totalPaidSoFar =
+      (Number(handover.payment.bookingAmountPaid) || 0) +
+      (Number(handover.payment.amountReceivedNow) || 0);
+
+    // ==========================================================
+    // UPDATE BILL SUMMARY
+    // ==========================================================
+
+    handover.payment.billSummary = {
+      totalFare: Number(handover.payment.totalFare) || 0,
+
+      fastTagPayable: Number(handover.payment.fastTagPayableAmount) || 0,
+
+      pickupCharge,
+
+      dropCharge,
+
+      securityDeposit: Number(handover.payment.securityDeposit) || 0,
+
+      extraCharges: Number(handover.payment.extraCharges) || 0,
+
+      discountAmount: Number(handover.payment.discountAmount) || 0,
+
+      totalAmount: handover.payment.totalAmount,
+
+      bookingAmountPaid: Number(handover.payment.bookingAmountPaid) || 0,
+
+      amountReceivedNow: Number(handover.payment.amountReceivedNow) || 0,
+
+      totalCollected: totalPaidSoFar,
+
+      balanceAmount: Math.max(0, handover.payment.totalAmount - totalPaidSoFar),
+    };
+
+    // ==========================================================
+    // UPDATE NOTES
+    // ==========================================================
+
+    if (reasonForChange?.trim()) {
+      const updateNote = `
+[Rental Updated - ${new Date().toLocaleString()}]
+Reason: ${reasonForChange}
+`;
+
+      handover.notes = `${handover.notes || ""}
+${updateNote}`
+        .trim()
+        .slice(-500);
+    }
+
+    // ==========================================================
+    // SYNC BOOKING
+    // ==========================================================
+
+    if (handover.bookingId) {
+      const booking = await Booking.findById(handover.bookingId);
+
+      if (booking) {
+        // ------------------------------------------------------
+        // DROP DATE + TIME
+        // ------------------------------------------------------
+
+        const updatedDropDateTime = new Date(handover.trip.dropDateTime);
+
+        if (Number.isNaN(updatedDropDateTime.getTime())) {
+          return res.status(400).json({
+            success: false,
+            message: "Invalid drop date/time for booking",
+          });
+        }
+
+        // Booking.toDate
+        booking.toDate = updatedDropDateTime;
+
+        // Booking.dropTime
+        booking.dropTime = formatDropTime(updatedDropDateTime);
+
+        // Booking.totalDays
+        booking.totalDays = Math.max(
+          1,
+          Number(handover.trip.numberOfDays) || 1,
+        );
+
+        // ------------------------------------------------------
+        // SYNC VEHICLE
+        // ------------------------------------------------------
+
+        if (handover.vehicle) {
+          booking.vehicleId = handover.vehicle.vehicleId;
+
+          booking.vehicleName =
+            handover.vehicle.vehicleName || booking.vehicleName;
+
+          booking.vehicleNumber =
+            handover.vehicle.vehicleNumber || booking.vehicleNumber;
+
+          booking.vehicleColor =
+            handover.vehicle.vehicleColor || booking.vehicleColor;
+        }
+
+        // ------------------------------------------------------
+        // SYNC PAYMENT
+        // ------------------------------------------------------
+
+        booking.payment.vehicleRent = Number(handover.payment.totalFare) || 0;
+
+        booking.payment.fastagAmount =
+          Number(handover.payment.fastTagPayableAmount) || 0;
+
+        booking.payment.discountAmount =
+          Number(handover.payment.discountAmount) || 0;
+
+        booking.payment.securityDeposit =
+          Number(handover.payment.securityDeposit) || 0;
+
+        // ------------------------------------------------------
+        // BOOKING TOTAL
+        // ------------------------------------------------------
+
+        booking.payment.totalAmount = Math.max(
+          0,
+
+          (Number(booking.payment.vehicleRent) || 0) +
+            (Number(booking.payment.pickupCharge) || 0) +
+            (Number(booking.payment.dropCharge) || 0) +
+            (Number(booking.payment.fastagAmount) || 0),
+        );
+
+        await booking.save();
+      }
+    }
+
+    // ==========================================================
+    // SAVE HANDOVER
+    // ==========================================================
+
+    await handover.save();
+
+    // ==========================================================
+    // PAYMENT HISTORY
+    // ==========================================================
+
+    if (Number(amountReceivedNow) > 0) {
+      try {
+        await PaymentHistory.create({
+          company: handover.company,
+
+          bookingId: handover.bookingId,
+
+          handoverId: handover._id,
+
+          customer: {
+            fullName: handover.customer?.fullName || "",
+
+            mobileNumber: handover.customer?.mobileNumber || "",
+          },
+
+          vehicle: {
+            vehicleId: handover.vehicle?.vehicleId || null,
+
+            vehicleName: handover.vehicle?.vehicleName || "",
+
+            vehicleNumber: handover.vehicle?.vehicleNumber || "",
+          },
+
+          amount: Number(amountReceivedNow),
+
+          paymentMethod: paymentMethod || "phonepe",
+
+          // FIX: array of 4-digit strings, matching PaymentHistory's
+          // upiLast4: [String] schema field.
+          upiLast4: sanitizedUpiLast4,
+
+          paymentBreakdown: {
+            cash: paymentMethod === "cash" ? Number(amountReceivedNow) : 0,
+
+            phonePe:
+              paymentMethod === "phonepe" ? Number(amountReceivedNow) : 0,
+
+            razorpay:
+              paymentMethod === "razorpay" ? Number(amountReceivedNow) : 0,
+          },
+
+          type: "extension",
+
+          note: reasonForChange?.trim()
+            ? `Rental payment - ${reasonForChange.trim()}`
+            : "Payment received during rental update",
+
+          createdBy: req.user._id,
+        });
+      } catch (paymentHistoryError) {
+        // Payment history failure must not
+        // break the rental update.
+
+        console.error(
+          "Payment History Creation Error:",
+          paymentHistoryError?.message || paymentHistoryError,
+        );
+      }
+    }
+
+    // ==========================================================
+    // SUCCESS RESPONSE
+    // ==========================================================
+
+    return res.status(200).json({
+      success: true,
+
+      message: "Rental updated successfully",
+
+      data: {
+        handover,
+
+        billSummary: buildBillSummaryResponse(handover),
+      },
+    });
+  } catch (error) {
+    console.error("UPDATE RENTAL ERROR:", error);
+
+    return res.status(500).json({
+      success: false,
+
+      message: error.message || "Failed to update rental",
+    });
+  }
+};
+//v1.2
+export const updateRental = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const {
+      vehicleId,
+      dropDateTime,
+      extensionPrice,
+      fastagCharges,
+      securityDeposit,
+      extraCharges,
+      discountAmount,
+      amountReceivedNow,
+      paymentMethod,
+      reasonForChange,
+      upiLast4,
+    } = req.body;
+
+    // ==========================================================
+    // HELPER
+    // Get Cloudinary URL from uploaded file
+    //
+    // FIX: fall back to secure_url/url in case the storage engine
+    // version doesn't populate `.path` (defensive — your current
+    // multer-storage-cloudinary version does use `.path`, but this
+    // keeps things safe if that ever changes).
+    // ==========================================================
+
+    const getUploadedImage = (files, field) => {
+      const file = files?.[field]?.[0];
+      if (!file) return "";
+      return file.path || file.secure_url || file.url || "";
+    };
+
+    // ==========================================================
+    // VALIDATE UPI LAST 4 DIGITS
+    //
+    // FIX: The frontend now supports multiple PhonePe references per
+    // payment and sends them as a JSON-stringified array via FormData
+    // (e.g. '["1234","5678"]'), since FormData can only carry strings.
+    // sanitizedUpiLast4 is now always an ARRAY of 4-digit strings —
+    // every place that reads it below (handover.payment.upiLast4,
+    // PaymentHistory.upiLast4) must store it as an array too.
+    // ==========================================================
+
+    let sanitizedUpiLast4 = [];
+
+    if (paymentMethod === "phonepe" && Number(amountReceivedNow) > 0) {
+      let parsedUpiLast4 = upiLast4;
+
+      // Parse the JSON array string back into a real array. Falls back
+      // to wrapping the raw value in an array if it isn't valid JSON,
+      // so an older client still sending a bare 4-digit string keeps
+      // working without a hard break.
+      if (typeof parsedUpiLast4 === "string") {
+        try {
+          parsedUpiLast4 = JSON.parse(parsedUpiLast4);
+        } catch {
+          parsedUpiLast4 = [parsedUpiLast4];
+        }
+      }
+
+      if (!Array.isArray(parsedUpiLast4)) {
+        parsedUpiLast4 = [parsedUpiLast4];
+      }
+
+      sanitizedUpiLast4 = parsedUpiLast4
+        .map((value) => String(value || "").trim())
+        .filter(Boolean);
+
+      const allValid =
+        sanitizedUpiLast4.length > 0 &&
+        sanitizedUpiLast4.every((value) => /^\d{4}$/.test(value));
+
+      if (!allValid) {
+        return res.status(400).json({
+          success: false,
+          message: "Please provide valid 4-digit PhonePe reference number(s)",
+        });
+      }
+    }
+
+    // ==========================================================
+    // FIND ACTIVE RENTAL
+    // ==========================================================
+
+    const handover = await Handover.findOne({
+      _id: id,
+      isDeleted: false,
+      handoverStatus: "active",
+    });
+
+    if (!handover) {
+      return res.status(404).json({
+        success: false,
+        message: "Active rental not found",
+      });
+    }
+
+    // ==========================================================
+    // VEHICLE EXCHANGE
+    // ==========================================================
+
+    const isVehicleExchange =
+      vehicleId &&
+      handover.vehicle?.vehicleId &&
+      vehicleId.toString() !== handover.vehicle.vehicleId.toString();
+
+    if (isVehicleExchange) {
+      // --------------------------------------------------------
+      // OLD VEHICLE DETAILS
+      // --------------------------------------------------------
+
+      const oldVehicleId = handover.vehicle.vehicleId;
+      const oldVehicleName = handover.vehicle.vehicleName;
+      const oldVehicleNumber = handover.vehicle.vehicleNumber;
+
+      // --------------------------------------------------------
+      // FIND NEW VEHICLE
+      // --------------------------------------------------------
+
+      const vehicle = await Vehicle.findById(vehicleId);
+
+      if (!vehicle || vehicle.isDeleted) {
+        return res.status(404).json({
+          success: false,
+          message: "Vehicle not found",
+        });
+      }
+
+      // --------------------------------------------------------
+      // CHECK VEHICLE STATUS
+      // --------------------------------------------------------
+
+      if (!["available", "rent"].includes(vehicle.status)) {
+        return res.status(400).json({
+          success: false,
+          message: "Vehicle is not available",
+        });
+      }
+
+      // --------------------------------------------------------
+      // VALIDATE REQUIRED EXCHANGE PHOTOS
+      //
+      // NOTE: "additional" is intentionally NOT in this list — it's
+      // optional on the frontend (no required asterisk), so it must
+      // not be enforced here.
+      // --------------------------------------------------------
+
+      const requiredExchangePhotos = [
+        "vehicleFront",
+        "vehicleRear",
+        "vehicleLeft",
+        "vehicleRight",
+      ];
+
+      const missingPhotos = requiredExchangePhotos.filter(
+        (field) => !req.files?.[field]?.length,
+      );
+
+      if (missingPhotos.length > 0) {
+        return res.status(400).json({
+          success: false,
+          message: "All four vehicle exchange photos are required",
+          missingPhotos,
+        });
+      }
+
+      // --------------------------------------------------------
+      // GET CLOUDINARY URLS
+      // --------------------------------------------------------
+
+      const exchangeImages = {
+        vehicleFront: getUploadedImage(req.files, "vehicleFront"),
+
+        vehicleRear: getUploadedImage(req.files, "vehicleRear"),
+
+        vehicleLeft: getUploadedImage(req.files, "vehicleLeft"),
+
+        vehicleRight: getUploadedImage(req.files, "vehicleRight"),
+
+        // Optional — may legitimately be "" if the user skipped it.
+        additional: getUploadedImage(req.files, "additional"),
+      };
+
+      // --------------------------------------------------------
+      // EXTRA SAFETY CHECK
+      //
+      // FIX: This previously validated ALL FIVE entries in
+      // exchangeImages (via Object.entries), which incorrectly
+      // included the optional "additional" field. Since users are
+      // allowed to skip "additional", that photo's URL is often
+      // legitimately empty — causing this check to always fail and
+      // return "Failed to upload vehicle exchange photos" even when
+      // all four required photos uploaded successfully.
+      //
+      // Now this only checks the four REQUIRED fields, matching
+      // `requiredExchangePhotos` above.
+      // --------------------------------------------------------
+
+      const invalidExchangeImages = requiredExchangePhotos.filter(
+        (field) => !exchangeImages[field],
+      );
 
       if (invalidExchangeImages.length > 0) {
         return res.status(400).json({
