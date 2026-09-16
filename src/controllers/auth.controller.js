@@ -344,3 +344,62 @@ export const resetPassword = asyncHandler(
     });
   }
 );
+
+export const updateEmployeeRole = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { role } = req.body;
+
+    if (!role || !USER_ROLES.includes(role)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid or missing role",
+      });
+    }
+
+    // Prevent a non-super-admin from ever reaching this (belt & suspenders,
+    // route-level middleware already enforces this)
+    if (req.user.role !== "SUPER_ADMIN") {
+      return res.status(403).json({
+        success: false,
+        message: "Only Super Admin can change roles",
+      });
+    }
+
+    const targetUser = await User.findById(id);
+    if (!targetUser) {
+      return res.status(404).json({
+        success: false,
+        message: "Employee not found",
+      });
+    }
+
+    // Prevent demoting/changing another SUPER_ADMIN by accident (optional safety rule)
+    if (targetUser.role === "SUPER_ADMIN" && targetUser._id.toString() !== req.user._id.toString()) {
+      return res.status(403).json({
+        success: false,
+        message: "Cannot change another Super Admin's role",
+      });
+    }
+
+    targetUser.role = role;
+    await targetUser.save();
+
+    return res.status(200).json({
+      success: true,
+      message: "Role updated successfully",
+      data: {
+        _id: targetUser._id,
+        fullName: targetUser.fullName,
+        email: targetUser.email,
+        role: targetUser.role,
+      },
+    });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: "Failed to update role",
+      error: error.message,
+    });
+  }
+};
