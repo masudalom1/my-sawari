@@ -4096,6 +4096,38 @@ export const updateBooking = async (req, res, next) => {
       });
     }
 
+    // Snapshot the vehicle currently on the booking BEFORE we overwrite it
+    // below, so we can log a history entry if it's actually being changed.
+    const previousVehicle = {
+      vehicleId: booking.vehicleId,
+      vehicleName: booking.vehicleName,
+      vehicleNumber: booking.vehicleNumber,
+    };
+
+    const isVehicleChanged =
+      previousVehicle.vehicleId &&
+      previousVehicle.vehicleId.toString() !== vehicle._id.toString();
+
+    if (isVehicleChanged) {
+      booking.vehicleHistory = booking.vehicleHistory || [];
+      booking.vehicleHistory.push({
+        fromVehicle: {
+          vehicleId: previousVehicle.vehicleId,
+          vehicleName: previousVehicle.vehicleName,
+          vehicleNumber: previousVehicle.vehicleNumber,
+        },
+        toVehicle: {
+          vehicleId: vehicle._id,
+          vehicleName: vehicle.vehicleName,
+          vehicleNumber: vehicle.vehicleNumber,
+        },
+        changedBy: req.user?._id,
+        note: `Vehicle changed from ${previousVehicle.vehicleName || "Unknown"} (${
+          previousVehicle.vehicleNumber || "N/A"
+        }) to ${vehicle.vehicleName} (${vehicle.vehicleNumber})`,
+      });
+    }
+
     // =========================
     // DATES
     // =========================

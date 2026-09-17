@@ -258,6 +258,32 @@ const bookingSchema = new mongoose.Schema(
         default: "pending",
       },
     },
+    vehicleHistory: [
+      {
+        fromVehicle: {
+          vehicleId: { type: mongoose.Schema.Types.ObjectId, ref: "Vehicle" },
+          vehicleName: { type: String, default: "" },
+          vehicleNumber: { type: String, default: "" },
+        },
+        toVehicle: {
+          vehicleId: { type: mongoose.Schema.Types.ObjectId, ref: "Vehicle" },
+          vehicleName: { type: String, default: "" },
+          vehicleNumber: { type: String, default: "" },
+        },
+        changedBy: {
+          type: mongoose.Schema.Types.ObjectId,
+          ref: "User",
+        },
+        changedAt: {
+          type: Date,
+          default: Date.now,
+        },
+        note: {
+          type: String,
+          trim: true,
+        },
+      },
+    ],
 
     // =========================
     // PICKUP / DROP SERVICE
