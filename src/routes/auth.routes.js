@@ -2,7 +2,7 @@ import express from "express";
 
 import authMiddleware from "../middlewares/auth.middleware.js";
 import restrictTo from "../middlewares/restrictTo.middleware.js";
-import { createEmployee, getCurrentUser, loginUser, logoutUser, refreshAccessToken, registerUser, resetPassword, updateEmployeeRole } from "../controllers/auth.controller.js";
+import { createEmployee, getAllEmployees, getCurrentUser, loginUser, logoutUser, refreshAccessToken, registerUser, resetPassword, updateEmployeeRole } from "../controllers/auth.controller.js";
 
 const router = express.Router();
 
@@ -14,6 +14,7 @@ router.post("/refresh-token", refreshAccessToken);
 router.get("/me", authMiddleware, getCurrentUser);
 
 router.post("/reset-password",resetPassword);
+router.get("/employees",authMiddleware,restrictTo("SUPER_ADMIN"),getAllEmployees);
 router.patch("/employees/:id/role",authMiddleware,restrictTo("SUPER_ADMIN"),updateEmployeeRole);
 
 export default router;

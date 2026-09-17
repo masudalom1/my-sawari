@@ -403,3 +403,22 @@ export const updateEmployeeRole = async (req, res) => {
     });
   }
 };
+
+export const getAllEmployees = asyncHandler(async (req, res) => {
+  const requester = req.user;
+
+  // Scope to the same business, exclude the requester themself and soft-deleted users
+  const employees = await User.find({
+    businessName: requester.businessName,
+    _id: { $ne: requester._id },
+    deletedAt: null,
+  })
+    .select("fullName email mobileNumber role accountStatus createdAt")
+    .sort({ createdAt: -1 });
+
+  res.status(200).json({
+    success: true,
+    message: "Employees fetched successfully",
+    data: employees,
+  });
+});
