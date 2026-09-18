@@ -76,15 +76,22 @@ const vehicleSchema = new mongoose.Schema(
 
     vehicleType: {
       type: String,
-      enum: [
-        "SUV",
-        "Sedan",
-        "Hatchback",
-        "Luxury",
-        "Tempo Traveller",
-        "Mini Bus",
-        "Bus",
-      ],
+      enum: {
+        values: [
+          "SUV",
+          "Sedan",
+          "Hatchback",
+          "Luxury",
+          "Tempo Traveller",
+          "Mini Bus",
+          "Bus",
+        ],
+        message: "vehicleType must be a valid car body type",
+      },
+      required: function () {
+        return this.category === "car";
+      },
+      default: undefined,
     },
 
     fuelType: {
