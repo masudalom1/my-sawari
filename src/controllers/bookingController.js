@@ -172,7 +172,6 @@ export const getBookingDetails = async (req, res) => {
     });
   }
 };
-
 export const getBookingById = async (req, res) => {
   try {
     const { id } = req.params;
@@ -209,7 +208,6 @@ export const getBookingById = async (req, res) => {
     });
   }
 };
-
 export const getDrivers = async (req, res) => {
   try {
     const users = await User.find({})

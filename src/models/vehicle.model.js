@@ -76,7 +76,6 @@ const vehicleSchema = new mongoose.Schema(
 
     vehicleType: {
       type: String,
-      required: true,
       enum: [
         "SUV",
         "Sedan",
