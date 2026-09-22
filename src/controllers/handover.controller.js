@@ -4265,77 +4265,149 @@ ${updateNote}`
 
     // ==========================================================
     // PAYMENT HISTORY
+    // Create a separate payment record for every new payment
+    // received during rental extension/update.
     // ==========================================================
 
-    if (Number(amountReceivedNow) > 0) {
+    const receivedAmount = Number(amountReceivedNow) || 0;
+
+    if (receivedAmount > 0) {
       try {
-        await PaymentHistory.create({
+        // --------------------------------------------------------
+        // NORMALIZE PAYMENT METHOD
+        // --------------------------------------------------------
+
+        const finalPaymentMethod = paymentMethod || "cash";
+
+        // --------------------------------------------------------
+        // CREATE PAYMENT HISTORY
+        // --------------------------------------------------------
+
+        const paymentHistory = await PaymentHistory.create({
           company: handover.company,
 
-          bookingId: handover.bookingId,
+          bookingId: handover.bookingId || null,
 
           handoverId: handover._id,
 
+          // ------------------------------------------------------
+          // CUSTOMER
+          // ------------------------------------------------------
+
           customer: {
             fullName: handover.customer?.fullName || "",
-
             mobileNumber: handover.customer?.mobileNumber || "",
           },
 
+          // ------------------------------------------------------
+          // VEHICLE
+          // ------------------------------------------------------
+
           vehicle: {
             vehicleId: handover.vehicle?.vehicleId || null,
-
             vehicleName: handover.vehicle?.vehicleName || "",
-
             vehicleNumber: handover.vehicle?.vehicleNumber || "",
           },
+
+          // ------------------------------------------------------
+          // BOOKING / RENTAL PERIOD
+          // IMPORTANT:
+          // Use the UPDATED handover dates so extension history
+          // contains the latest fromDate and toDate.
+          // ------------------------------------------------------
+
           booking: {
-            fromDate: trip.pickupDateTime,
-            toDate: trip.dropDateTime,
-            bookingAmount: Number(payment?.totalAmount) || 0,
+            fromDate: handover.trip?.pickupDateTime || null,
+
+            toDate: handover.trip?.dropDateTime || null,
+
+            bookingAmount: Number(handover.payment?.totalAmount) || 0,
           },
 
-          amount: Number(amountReceivedNow),
+          // ------------------------------------------------------
+          // PAYMENT
+          // ------------------------------------------------------
 
-          paymentMethod: paymentMethod || "phonepe",
+          amount: receivedAmount,
 
-          // FIX: array of 4-digit strings, matching PaymentHistory's
-          // upiLast4: [String] schema field.
-          upiLast4: sanitizedUpiLast4,
+          paymentMethod: finalPaymentMethod,
+
+          // PhonePe UPI reference(s)
+          upiLast4: finalPaymentMethod === "phonepe" ? sanitizedUpiLast4 : [],
+
+          // ------------------------------------------------------
+          // PAYMENT BREAKDOWN
+          // ------------------------------------------------------
 
           paymentBreakdown: {
-            cash: paymentMethod === "cash" ? Number(amountReceivedNow) : 0,
+            cash: finalPaymentMethod === "cash" ? receivedAmount : 0,
 
-            phonePe:
-              paymentMethod === "phonepe" ? Number(amountReceivedNow) : 0,
+            phonePe: finalPaymentMethod === "phonepe" ? receivedAmount : 0,
 
-            razorpay:
-              paymentMethod === "razorpay" ? Number(amountReceivedNow) : 0,
+            razorpay: finalPaymentMethod === "razorpay" ? receivedAmount : 0,
           },
+
+          // ------------------------------------------------------
+          // PAYMENT TYPE
+          // ------------------------------------------------------
 
           type: "extension",
 
-          note: reasonForChange?.trim()
-            ? `Rental payment - ${reasonForChange.trim()}`
-            : "Payment received during rental update",
+          // ------------------------------------------------------
+          // NOTE
+          // ------------------------------------------------------
 
-          createdBy: req.user._id,
+          note: reasonForChange?.trim()
+            ? `Rental extension payment - ${reasonForChange.trim()}`
+            : "Payment received during rental extension",
+
+          // ------------------------------------------------------
+          // CREATED BY
+          // ------------------------------------------------------
+
+          createdBy: req.user?._id || null,
         });
-        await Vehicle.updateOne(
-          { _id: selectedVehicle._id },
-          { $push: { payments: paymentHistory._id } },
-        );
+
+        // --------------------------------------------------------
+        // CONNECT PAYMENT HISTORY TO VEHICLE
+        // --------------------------------------------------------
+
+        const currentVehicleId = handover.vehicle?.vehicleId;
+
+        if (currentVehicleId && paymentHistory?._id) {
+          await Vehicle.findByIdAndUpdate(
+            currentVehicleId,
+            {
+              $push: {
+                payments: paymentHistory._id,
+              },
+            },
+            {
+              new: false,
+            },
+          );
+        }
+
+        console.log("Payment History Created:", paymentHistory._id.toString());
       } catch (paymentHistoryError) {
-        // Payment history failure must not
-        // break the rental update.
+        // --------------------------------------------------------
+        // IMPORTANT:
+        // Do NOT silently hide this error.
+        // Rental update can continue, but we need the exact reason
+        // in the server logs.
+        // --------------------------------------------------------
+
+        console.error("PAYMENT HISTORY CREATION ERROR:", paymentHistoryError);
 
         console.error(
-          "Payment History Creation Error:",
-          paymentHistoryError?.message || paymentHistoryError,
+          "PAYMENT HISTORY ERROR MESSAGE:",
+          paymentHistoryError?.message,
         );
+
+        // We don't throw here because the rental itself has already
+        // been updated successfully.
       }
     }
-
     // ==========================================================
     // SUCCESS RESPONSE
     // ==========================================================
