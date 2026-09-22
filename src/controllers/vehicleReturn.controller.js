@@ -498,58 +498,159 @@ export const receiveVehicle = async (req, res) => {
       returnStatus: "completed",
     });
 
-    if (collected > 0) {
+    /* ==========================================================
+   PAYMENT HISTORY
+   Create a separate payment record for money collected
+   during vehicle return.
+========================================================== */
+
+    const receivedAmount = Number(amountCollected) || 0;
+
+    if (receivedAmount > 0) {
       try {
-        await PaymentHistory.create({
+        // --------------------------------------------------------
+        // NORMALIZE PAYMENT METHOD
+        // --------------------------------------------------------
+
+        const finalPaymentMethod = (() => {
+          const mode = String(normalizedPaymentMode || "Cash").toLowerCase();
+
+          const paymentMethodMap = {
+            cash: "cash",
+            phonepe: "phonepe",
+            razorpay: "razorpay",
+            mixed: "mixed",
+          };
+
+          return paymentMethodMap[mode] || "cash";
+        })();
+
+        // --------------------------------------------------------
+        // CREATE PAYMENT HISTORY
+        // --------------------------------------------------------
+
+        const paymentHistory = await PaymentHistory.create({
           company: companyId,
 
-          bookingId: handover.bookingId,
+          bookingId: handover.bookingId || null,
 
           handoverId: handover._id,
+
+          // ------------------------------------------------------
+          // CUSTOMER
+          // ------------------------------------------------------
 
           customer: {
             fullName: handover.customer?.fullName || "",
             mobileNumber: handover.customer?.mobileNumber || "",
           },
 
+          // ------------------------------------------------------
+          // VEHICLE
+          // ------------------------------------------------------
+
           vehicle: {
             vehicleId: vehicle._id,
+
             vehicleName: vehicle.vehicleName || "",
+
             vehicleNumber: vehicle.vehicleNumber || "",
           },
 
-          amount: collected,
+          // ------------------------------------------------------
+          // RENTAL / BOOKING PERIOD
+          // IMPORTANT:
+          // Store the actual rental period with every payment.
+          // ------------------------------------------------------
 
-          paymentMethod: (() => {
-            const mode = String(normalizedPaymentMode || "cash").toLowerCase();
+          booking: {
+            fromDate: handover.trip?.pickupDateTime || null,
 
-            const paymentMethodMap = {
-              cash: "cash",
-              phonepe: "phonepe",
-              razorpay: "razorpay",
-              mixed: "mixed",
-            };
+            toDate: handover.trip?.dropDateTime || null,
 
-            return paymentMethodMap[mode] || "cash";
-          })(),
+            bookingAmount: Number(handover.payment?.totalAmount) || 0,
+          },
 
-          // Multiple UPI references
+          // ------------------------------------------------------
+          // PAYMENT AMOUNT
+          // ------------------------------------------------------
+
+          amount: receivedAmount,
+
+          // ------------------------------------------------------
+          // PAYMENT METHOD
+          // ------------------------------------------------------
+
+          paymentMethod: finalPaymentMethod,
+
+          // ------------------------------------------------------
+          // PHONEPE UPI REFERENCES
+          // ------------------------------------------------------
+
           upiLast4: isUpiPayment ? normalizedUpiLast4 : [],
 
-          paymentBreakdown: parsedPaymentBreakdown,
+          // ------------------------------------------------------
+          // PAYMENT BREAKDOWN
+          // ------------------------------------------------------
+
+          paymentBreakdown: {
+            cash: Number(parsedPaymentBreakdown?.cash) || 0,
+
+            phonePe: Number(parsedPaymentBreakdown?.phonePe) || 0,
+
+            razorpay: Number(parsedPaymentBreakdown?.razorpay) || 0,
+          },
+
+          // ------------------------------------------------------
+          // PAYMENT TYPE
+          // ------------------------------------------------------
 
           type: "receive",
+
+          // ------------------------------------------------------
+          // NOTE
+          // ------------------------------------------------------
 
           note:
             balanceReason?.trim() || "Payment received during vehicle return",
 
-          createdBy: req.user._id,
+          // ------------------------------------------------------
+          // CREATED BY
+          // ------------------------------------------------------
+
+          createdBy: req.user?._id || null,
         });
+
+        // --------------------------------------------------------
+        // CONNECT PAYMENT HISTORY TO VEHICLE
+        // --------------------------------------------------------
+
+        if (vehicle?._id && paymentHistory?._id) {
+          await Vehicle.findByIdAndUpdate(vehicle._id, {
+            $push: {
+              payments: paymentHistory._id,
+            },
+          });
+        }
+
+        console.log(
+          "Vehicle Return Payment History Created:",
+          paymentHistory._id.toString(),
+        );
       } catch (paymentHistoryError) {
-        // Payment history must NEVER break vehicle receiving.
+        // --------------------------------------------------------
+        // IMPORTANT:
+        // Don't silently hide the actual error.
+        // --------------------------------------------------------
+
         console.error(
-          "Receive Payment History Creation Error:",
-          paymentHistoryError?.message || paymentHistoryError,
+          "RECEIVE PAYMENT HISTORY CREATION ERROR:",
+          paymentHistoryError,
+        );
+
+        console.error(
+          "PAYMENT HISTORY ERROR MESSAGE:",
+          paymentHistoryError?.message,
         );
       }
     }
