@@ -73,7 +73,12 @@ const vehicleSchema = new mongoose.Schema(
       trim: true,
       index: true,
     },
-
+    payments: [
+      {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "PaymentHistory",
+      },
+    ],
     vehicleType: {
       type: String,
       enum: {
