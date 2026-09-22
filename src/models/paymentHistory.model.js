@@ -105,12 +105,7 @@ const paymentHistorySchema = new mongoose.Schema(
       enum: ["cash", "phonepe", "razorpay", "mixed"],
       default: "cash",
     },
-
-    // Multiple UPI references can be recorded against a single payment
-    // (e.g. a customer split one PhonePe payment across two transactions,
-    // or a "mixed" payment includes more than one UPI transfer).
-    // Each entry must be exactly 4 digits; empty/invalid entries are
-    // filtered out before saving (see controller).
+    
     upiLast4: {
       type: [String],
       default: [],

@@ -2943,58 +2943,65 @@ export const createBookings = async (req, res, next) => {
     // PAYMENT HISTORY
     // ============================================================
 
+      // ============================================================
+    // PAYMENT HISTORY + VEHICLE PAYMENT ID
+    // ============================================================
+
     if (advancePaid > 0) {
-      try {
-        await PaymentHistory.create(
-          [
-            {
-              company: companyId,
-
-              bookingId: booking._id,
-
-              customer: {
-                fullName: customerName.trim(),
-
-                mobileNumber: mobileNumber.trim(),
-              },
-
-              vehicle: {
-                vehicleId: vehicle._id,
-
-                vehicleName: vehicle.vehicleName,
-
-                vehicleNumber: vehicle.vehicleNumber,
-              },
-
-              amount: advancePaid,
-
-              paymentMethod,
-              upiLast4:
-                paymentMethod === "phonepe" && normalizedUpiLast4
-                  ? [normalizedUpiLast4]
-                  : [],
-              paymentBreakdown: {
-                cash: Number(breakdown.cash) || 0,
-
-                phonePe: Number(breakdown.phonePe) || 0,
-
-                razorpay: Number(breakdown.razorpay) || 0,
-              },
-
-              type: "booking",
-
-              note: "Booking advance payment",
-
-              createdBy: req.user._id,
-            },
-          ],
+      const [paymentHistory] = await PaymentHistory.create(
+        [
           {
-            session,
+            company: companyId,
+
+            bookingId: booking._id,
+
+            customer: {
+              fullName: customerName.trim(),
+
+              mobileNumber: mobileNumber.trim(),
+            },
+
+            vehicle: {
+              vehicleId: vehicle._id,
+
+              vehicleName: vehicle.vehicleName,
+
+              vehicleNumber: vehicle.vehicleNumber,
+            },
+
+            amount: advancePaid,
+
+            paymentMethod,
+
+            upiLast4:
+              paymentMethod === "phonepe" && normalizedUpiLast4
+                ? [normalizedUpiLast4]
+                : [],
+
+            paymentBreakdown: {
+              cash: Number(breakdown.cash) || 0,
+
+              phonePe: Number(breakdown.phonePe) || 0,
+
+              razorpay: Number(breakdown.razorpay) || 0,
+            },
+
+            type: "booking",
+
+            note: "Booking advance payment",
+
+            createdBy: req.user._id,
           },
-        );
-      } catch (paymentHistoryError) {
-        console.error("Payment History Creation Error:", paymentHistoryError);
-      }
+        ],
+        { session },
+      );
+
+      // Store only the PaymentHistory id on the vehicle.
+      await Vehicle.updateOne(
+        { _id: vehicle._id },
+        { $push: { payments: paymentHistory._id } },
+        { session },
+      );
     }
 
     // ============================================================
