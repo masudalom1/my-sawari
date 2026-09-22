@@ -2943,7 +2943,7 @@ export const createBookings = async (req, res, next) => {
     // PAYMENT HISTORY
     // ============================================================
 
-      // ============================================================
+    // ============================================================
     // PAYMENT HISTORY + VEHICLE PAYMENT ID
     // ============================================================
 
@@ -2967,6 +2967,13 @@ export const createBookings = async (req, res, next) => {
               vehicleName: vehicle.vehicleName,
 
               vehicleNumber: vehicle.vehicleNumber,
+            },
+            booking: {
+              fromDate: finalFromDate,
+
+              toDate: finalToDate,
+
+              bookingAmount: advancePaid,
             },
 
             amount: advancePaid,

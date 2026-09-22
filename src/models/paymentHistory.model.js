@@ -90,7 +90,21 @@ const paymentHistorySchema = new mongoose.Schema(
         default: "",
       },
     },
-
+    booking: {
+      fromDate: {
+        type: Date,
+        default: null,
+      },
+      toDate: {
+        type: Date,
+        default: null,
+      },
+      bookingAmount: {
+        type: Number,
+        default: 0,
+        min: 0,
+      },
+    },
     // ==========================
     // PAYMENT
     // ==========================
@@ -105,15 +119,13 @@ const paymentHistorySchema = new mongoose.Schema(
       enum: ["cash", "phonepe", "razorpay", "mixed"],
       default: "cash",
     },
-    
+
     upiLast4: {
       type: [String],
       default: [],
       validate: {
         validator: function (arr) {
-          return (
-            Array.isArray(arr) && arr.every((v) => /^\d{4}$/.test(v))
-          );
+          return Array.isArray(arr) && arr.every((v) => /^\d{4}$/.test(v));
         },
         message: "Each UPI last 4 digits entry must contain exactly 4 numbers",
       },
