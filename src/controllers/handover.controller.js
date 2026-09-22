@@ -880,6 +880,11 @@ export const createHandover = async (req, res, next) => {
             vehicleName: selectedVehicle.vehicleName,
             vehicleNumber: selectedVehicle.vehicleNumber,
           },
+          booking: {
+            fromDate: trip.pickupDateTime,
+            toDate: trip.dropDateTime,
+            bookingAmount: Number(payment?.bookingAmountPaid) || 0,
+          },
 
           amount: Number(payment.amountReceivedNow),
 
@@ -897,6 +902,11 @@ export const createHandover = async (req, res, next) => {
           note: "Payment received during vehicle handover",
 
           createdBy: req.user._id,
+        });
+        await Vehicle.findByIdAndUpdate(selectedVehicle._id, {
+          $addToSet: {
+            payments: paymentHistory._id,
+          },
         });
       } catch (paymentHistoryError) {
         // Do NOT break the handover flow if payment history fails.
@@ -1752,10 +1762,16 @@ export const getSingleHandover = async (req, res) => {
       handover: [
         { label: "Customer Photo", image: img.customerPhoto || "" },
         { label: "Customer Profile", image: img.customerProfileImage || "" },
-        { label: "Customer With Vehicle", image: img.customerWithVehicle || "" },
+        {
+          label: "Customer With Vehicle",
+          image: img.customerWithVehicle || "",
+        },
         { label: "ID Card Front", image: img.idCardFront || "" },
         { label: "ID Card Back", image: img.idCardBack || "" },
-        { label: "Driving License Front", image: img.drivingLicenseFront || "" },
+        {
+          label: "Driving License Front",
+          image: img.drivingLicenseFront || "",
+        },
         { label: "Driving License Back", image: img.drivingLicenseBack || "" },
         { label: "Toolkit", image: img.toolkit || "" },
         { label: "Spare Tyre", image: img.spareTyre || "" },
@@ -1867,10 +1883,22 @@ export const getSingleHandover = async (req, res) => {
       };
 
       data.gallery.returnImages = [
-        { label: "Return Front", image: vehicleReturn.images?.vehicleFront || "" },
-        { label: "Return Rear", image: vehicleReturn.images?.vehicleRear || "" },
-        { label: "Return Left", image: vehicleReturn.images?.vehicleLeft || "" },
-        { label: "Return Right", image: vehicleReturn.images?.vehicleRight || "" },
+        {
+          label: "Return Front",
+          image: vehicleReturn.images?.vehicleFront || "",
+        },
+        {
+          label: "Return Rear",
+          image: vehicleReturn.images?.vehicleRear || "",
+        },
+        {
+          label: "Return Left",
+          image: vehicleReturn.images?.vehicleLeft || "",
+        },
+        {
+          label: "Return Right",
+          image: vehicleReturn.images?.vehicleRight || "",
+        },
       ].filter((item) => item.image);
 
       // Renamed label to "Return Damage" (was just "Damage") now that the
@@ -1952,7 +1980,6 @@ export const getReceiveCarList = async (req, res) => {
       dateFilter = { "trip.dropDateTime": { $lt: today.startUTC } };
     }
 
-
     const wantCounts = String(includeCounts) !== "false";
     const countsPromise = wantCounts
       ? Promise.all([
@@ -1974,7 +2001,13 @@ export const getReceiveCarList = async (req, res) => {
             receivingTime: { $gte: completedSince },
           }),
         ]).then(
-          ([todayCount, allCount, tomorrowCount, overdueCount, completedCount]) => ({
+          ([
+            todayCount,
+            allCount,
+            tomorrowCount,
+            overdueCount,
+            completedCount,
+          ]) => ({
             today: todayCount,
             all: allCount,
             tomorrow: tomorrowCount,
@@ -2121,10 +2154,7 @@ export const getReceiveCarList = async (req, res) => {
             select: "vehicleName vehicleNumber images",
           })
           .populate("createdBy", "fullName role")
-          .populate(
-            "assignedDriver",
-            "fullName mobileNumber profileImage role",
-          )
+          .populate("assignedDriver", "fullName mobileNumber profileImage role")
           .populate({ path: "bookingId", select: "drop" })
           .lean();
 
@@ -2358,7 +2388,6 @@ export const getRentalDetails = async (req, res) => {
     });
   }
 };
-
 
 export const getBillSummary = async (req, res) => {
   try {
@@ -4260,6 +4289,11 @@ ${updateNote}`
 
             vehicleNumber: handover.vehicle?.vehicleNumber || "",
           },
+          booking: {
+            fromDate: trip.pickupDateTime,
+            toDate: trip.dropDateTime,
+            bookingAmount: Number(payment?.totalAmount) || 0,
+          },
 
           amount: Number(amountReceivedNow),
 
@@ -4287,6 +4321,10 @@ ${updateNote}`
 
           createdBy: req.user._id,
         });
+        await Vehicle.updateOne(
+          { _id: selectedVehicle._id },
+          { $push: { payments: paymentHistory._id } },
+        );
       } catch (paymentHistoryError) {
         // Payment history failure must not
         // break the rental update.
