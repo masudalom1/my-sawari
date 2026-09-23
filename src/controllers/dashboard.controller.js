@@ -147,10 +147,13 @@ export const getPaymentsForImport = async (req, res) => {
     }
  
     // ---------------------------------------
-    // Step 2: are any payments linked to vehicles (vehicle.payments)?
-    // Only vehicles that actually have payments are loaded.
+    // Step 2: are any payments linked to active vehicles (vehicle.payments)?
+    // Only vehicles that are NOT deleted and actually have payments are loaded.
     // ---------------------------------------
-    const vehicles = await Vehicle.find({ "payments.0": { $exists: true } })
+    const vehicles = await Vehicle.find({
+      isDeleted: false,
+      "payments.0": { $exists: true },
+    })
       .select("_id payments")
       .lean();
  
@@ -168,7 +171,7 @@ export const getPaymentsForImport = async (req, res) => {
       return res.status(200).json({
         success: true,
         hasPayments: false,
-        message: "Payments exist, but none are linked to a vehicle (vehicle.payments is empty)",
+        message: "Payments exist, but none are linked to an active vehicle (vehicle.payments is empty or the vehicles are deleted)",
         count: 0,
         payments: [],
       });
@@ -227,11 +230,9 @@ export const getPaymentsForImport = async (req, res) => {
     const formattedPayments = payments.map((payment) => ({
       _id: payment._id,
  
-      vehicleId:
-        paymentToVehicle.get(String(payment._id)) ||
-        (payment.vehicle?.vehicleId ? String(payment.vehicle.vehicleId) : null),
+      vehicleId: paymentToVehicle.get(String(payment._id)),
  
-      // snapshot, used when the vehicle has since been deleted
+      // snapshot of the vehicle at the time of payment
       vehicle: {
         vehicleName: payment.vehicle?.vehicleName || "",
         vehicleNumber: payment.vehicle?.vehicleNumber || "",
