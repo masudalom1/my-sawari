@@ -131,7 +131,28 @@ export const getPaymentsForImport = async (req, res) => {
   try {
     const { from, to } = req.query;
  
-    const vehicles = await Vehicle.find({}).select("_id payments").lean();
+    // ---------------------------------------
+    // Step 1: are there any payments at all?
+    // ---------------------------------------
+    const anyPayment = await PaymentHistory.exists({});
+ 
+    if (!anyPayment) {
+      return res.status(200).json({
+        success: true,
+        hasPayments: false,
+        message: "No payments have been recorded yet",
+        count: 0,
+        payments: [],
+      });
+    }
+ 
+    // ---------------------------------------
+    // Step 2: are any payments linked to vehicles (vehicle.payments)?
+    // Only vehicles that actually have payments are loaded.
+    // ---------------------------------------
+    const vehicles = await Vehicle.find({ "payments.0": { $exists: true } })
+      .select("_id payments")
+      .lean();
  
     const paymentToVehicle = new Map();
     const paymentIds = [];
@@ -144,9 +165,18 @@ export const getPaymentsForImport = async (req, res) => {
     }
  
     if (paymentIds.length === 0) {
-      return res.status(200).json({ success: true, count: 0, payments: [] });
+      return res.status(200).json({
+        success: true,
+        hasPayments: false,
+        message: "Payments exist, but none are linked to a vehicle (vehicle.payments is empty)",
+        count: 0,
+        payments: [],
+      });
     }
  
+    // ---------------------------------------
+    // Step 3: payments are available, fetch them
+    // ---------------------------------------
     const filter = { _id: { $in: paymentIds } };
  
     if (from || to) {
@@ -236,6 +266,11 @@ export const getPaymentsForImport = async (req, res) => {
  
     return res.status(200).json({
       success: true,
+      hasPayments: true,
+      message:
+        formattedPayments.length === 0
+          ? "No payments in the selected date range"
+          : "Payments fetched successfully",
       count: formattedPayments.length,
       payments: formattedPayments,
     });
