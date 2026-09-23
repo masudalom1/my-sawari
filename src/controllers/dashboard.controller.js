@@ -126,6 +126,128 @@ export const getBookingsForImport = async (req, res) => {
     });
   }
 };
+export const getPaymentsForImport = async (req, res) => {
+  try {
+    const { from, to } = req.query;
+ 
+    const vehicles = await Vehicle.find({}).select("_id payments").lean();
+ 
+    const paymentToVehicle = new Map();
+    const paymentIds = [];
+ 
+    for (const vehicle of vehicles) {
+      for (const paymentId of vehicle.payments || []) {
+        paymentToVehicle.set(String(paymentId), String(vehicle._id));
+        paymentIds.push(paymentId);
+      }
+    }
+ 
+    if (paymentIds.length === 0) {
+      return res.status(200).json({ success: true, count: 0, payments: [] });
+    }
+ 
+    const filter = { _id: { $in: paymentIds } };
+ 
+    if (from || to) {
+      filter.createdAt = {};
+ 
+      if (from) {
+        const fromDate = new Date(`${from}T00:00:00.000+05:30`);
+        if (Number.isNaN(fromDate.getTime())) {
+          return res.status(400).json({ success: false, message: "Invalid 'from' date. Use YYYY-MM-DD." });
+        }
+        filter.createdAt.$gte = fromDate;
+      }
+ 
+      if (to) {
+        const toDate = new Date(`${to}T23:59:59.999+05:30`);
+        if (Number.isNaN(toDate.getTime())) {
+          return res.status(400).json({ success: false, message: "Invalid 'to' date. Use YYYY-MM-DD." });
+        }
+        filter.createdAt.$lte = toDate;
+      }
+    }
+ 
+    const payments = await PaymentHistory.find(filter)
+      .select(
+        `
+        _id
+        amount
+        type
+        paymentMethod
+        paymentBreakdown
+        upiLast4
+        isCollected
+        collectedAmount
+        collectedPhonePe
+        collectionHistory.amount
+        collectionHistory.channel
+        bookingId
+        booking
+        customer
+        vehicle
+        note
+        createdAt
+      `,
+      )
+      .sort({ createdAt: 1 })
+      .lean();
+ 
+    const formattedPayments = payments.map((payment) => ({
+      _id: payment._id,
+ 
+      vehicleId:
+        paymentToVehicle.get(String(payment._id)) ||
+        (payment.vehicle?.vehicleId ? String(payment.vehicle.vehicleId) : null),
+ 
+      // snapshot, used when the vehicle has since been deleted
+      vehicle: {
+        vehicleName: payment.vehicle?.vehicleName || "",
+        vehicleNumber: payment.vehicle?.vehicleNumber || "",
+      },
+ 
+      amount: payment.amount || 0,
+      type: payment.type,
+      paymentMethod: payment.paymentMethod,
+      paymentBreakdown: payment.paymentBreakdown || {},
+      upiLast4: payment.upiLast4 || [],
+ 
+      isCollected: !!payment.isCollected,
+      collectedAmount: payment.collectedAmount || 0,
+      collectedPhonePe: payment.collectedPhonePe || 0,
+      collectionHistory: payment.collectionHistory || [],
+ 
+      bookingId: payment.bookingId || null,
+      booking: {
+        fromDate: payment.booking?.fromDate || null,
+        toDate: payment.booking?.toDate || null,
+        bookingAmount: payment.booking?.bookingAmount || 0,
+      },
+ 
+      customer: {
+        fullName: payment.customer?.fullName || "",
+        mobileNumber: payment.customer?.mobileNumber || "",
+      },
+ 
+      note: payment.note || "",
+      createdAt: payment.createdAt,
+    }));
+ 
+    return res.status(200).json({
+      success: true,
+      count: formattedPayments.length,
+      payments: formattedPayments,
+    });
+  } catch (error) {
+    console.error("Get payments for import error:", error);
+ 
+    return res.status(500).json({
+      success: false,
+      message: "Failed to fetch payment details",
+      error: error.message,
+    });
+  }
+};
 export const createMaintenance = async (req, res, next) => {
   try {
     const { vehicle, startDate, endDate } = req.body;
