@@ -130,12 +130,12 @@ export const getBookingsForImport = async (req, res) => {
 export const getPaymentsForImport = async (req, res) => {
   try {
     const { from, to } = req.query;
- 
-    // ---------------------------------------
-    // Step 1: are there any payments at all?
-    // ---------------------------------------
+
+    // =========================================================
+    // STEP 1: Check if any payments exist at all
+    // =========================================================
     const anyPayment = await PaymentHistory.exists({});
- 
+
     if (!anyPayment) {
       return res.status(200).json({
         success: true,
@@ -145,66 +145,109 @@ export const getPaymentsForImport = async (req, res) => {
         payments: [],
       });
     }
- 
-    // ---------------------------------------
-    // Step 2: are any payments linked to active vehicles (vehicle.payments)?
-    // Only vehicles that are NOT deleted and actually have payments are loaded.
-    // ---------------------------------------
+
+    // =========================================================
+    // STEP 2: Get ONLY active/non-deleted vehicles
+    // =========================================================
     const vehicles = await Vehicle.find({
-      isDeleted: false,
+      isDeleted: { $ne: true },
       "payments.0": { $exists: true },
     })
-      .select("_id payments")
+      .select("_id vehicleName vehicleNumber payments")
       .lean();
- 
+
+    // =========================================================
+    // STEP 3: Create payment -> active vehicle mapping
+    // =========================================================
     const paymentToVehicle = new Map();
-    const paymentIds = [];
- 
+    const activePaymentIds = [];
+
     for (const vehicle of vehicles) {
       for (const paymentId of vehicle.payments || []) {
-        paymentToVehicle.set(String(paymentId), String(vehicle._id));
-        paymentIds.push(paymentId);
+        const paymentIdString = String(paymentId);
+
+        paymentToVehicle.set(paymentIdString, {
+          vehicleId: String(vehicle._id),
+          vehicleName: vehicle.vehicleName || "",
+          vehicleNumber: vehicle.vehicleNumber || "",
+        });
+
+        activePaymentIds.push(paymentId);
       }
     }
- 
-    if (paymentIds.length === 0) {
+
+    // =========================================================
+    // STEP 4: No payments belong to active vehicles
+    // =========================================================
+    if (activePaymentIds.length === 0) {
       return res.status(200).json({
         success: true,
         hasPayments: false,
-        message: "Payments exist, but none are linked to an active vehicle (vehicle.payments is empty or the vehicles are deleted)",
+        message:
+          "Payments exist, but none are linked to an active vehicle",
         count: 0,
         payments: [],
       });
     }
- 
-    // ---------------------------------------
-    // Step 3: payments are available, fetch them
-    // ---------------------------------------
-    const filter = { _id: { $in: paymentIds } };
- 
+
+    // Remove duplicate payment IDs
+    const uniquePaymentIds = [
+      ...new Map(
+        activePaymentIds.map((id) => [String(id), id]),
+      ).values(),
+    ];
+
+    // =========================================================
+    // STEP 5: Build PaymentHistory filter
+    // =========================================================
+    const filter = {
+      _id: {
+        $in: uniquePaymentIds,
+      },
+    };
+
+    // =========================================================
+    // STEP 6: Date filter
+    // =========================================================
     if (from || to) {
       filter.createdAt = {};
- 
+
       if (from) {
-        const fromDate = new Date(`${from}T00:00:00.000+05:30`);
+        const fromDate = new Date(
+          `${from}T00:00:00.000+05:30`,
+        );
+
         if (Number.isNaN(fromDate.getTime())) {
-          return res.status(400).json({ success: false, message: "Invalid 'from' date. Use YYYY-MM-DD." });
+          return res.status(400).json({
+            success: false,
+            message: "Invalid 'from' date. Use YYYY-MM-DD.",
+          });
         }
+
         filter.createdAt.$gte = fromDate;
       }
- 
+
       if (to) {
-        const toDate = new Date(`${to}T23:59:59.999+05:30`);
+        const toDate = new Date(
+          `${to}T23:59:59.999+05:30`,
+        );
+
         if (Number.isNaN(toDate.getTime())) {
-          return res.status(400).json({ success: false, message: "Invalid 'to' date. Use YYYY-MM-DD." });
+          return res.status(400).json({
+            success: false,
+            message: "Invalid 'to' date. Use YYYY-MM-DD.",
+          });
         }
+
         filter.createdAt.$lte = toDate;
       }
     }
- 
+
+    // =========================================================
+    // STEP 7: Fetch payments
+    // =========================================================
     const payments = await PaymentHistory.find(filter)
-      .select(
-        `
+      .select(`
         _id
         amount
         type
@@ -222,62 +265,105 @@ export const getPaymentsForImport = async (req, res) => {
         vehicle
         note
         createdAt
-      `,
-      )
+      `)
       .sort({ createdAt: 1 })
       .lean();
- 
-    const formattedPayments = payments.map((payment) => ({
-      _id: payment._id,
- 
-      vehicleId: paymentToVehicle.get(String(payment._id)),
- 
-      // snapshot of the vehicle at the time of payment
-      vehicle: {
-        vehicleName: payment.vehicle?.vehicleName || "",
-        vehicleNumber: payment.vehicle?.vehicleNumber || "",
-      },
- 
-      amount: payment.amount || 0,
-      type: payment.type,
-      paymentMethod: payment.paymentMethod,
-      paymentBreakdown: payment.paymentBreakdown || {},
-      upiLast4: payment.upiLast4 || [],
- 
-      isCollected: !!payment.isCollected,
-      collectedAmount: payment.collectedAmount || 0,
-      collectedPhonePe: payment.collectedPhonePe || 0,
-      collectionHistory: payment.collectionHistory || [],
- 
-      bookingId: payment.bookingId || null,
-      booking: {
-        fromDate: payment.booking?.fromDate || null,
-        toDate: payment.booking?.toDate || null,
-        bookingAmount: payment.booking?.bookingAmount || 0,
-      },
- 
-      customer: {
-        fullName: payment.customer?.fullName || "",
-        mobileNumber: payment.customer?.mobileNumber || "",
-      },
- 
-      note: payment.note || "",
-      createdAt: payment.createdAt,
-    }));
- 
+
+    // =========================================================
+    // STEP 8: Format ONLY payments belonging to active vehicles
+    // =========================================================
+    const formattedPayments = payments
+      .filter((payment) => {
+        // Very important:
+        // If payment is not mapped to an active vehicle,
+        // DO NOT RETURN IT.
+        return paymentToVehicle.has(String(payment._id));
+      })
+      .map((payment) => {
+        const activeVehicle = paymentToVehicle.get(
+          String(payment._id),
+        );
+
+        return {
+          _id: payment._id,
+
+          // Current active vehicle
+          vehicleId: activeVehicle.vehicleId,
+
+          vehicle: {
+            vehicleName: activeVehicle.vehicleName,
+            vehicleNumber: activeVehicle.vehicleNumber,
+          },
+
+          amount: payment.amount || 0,
+
+          type: payment.type,
+
+          paymentMethod: payment.paymentMethod,
+
+          paymentBreakdown: payment.paymentBreakdown || {},
+
+          upiLast4: payment.upiLast4 || [],
+
+          isCollected: !!payment.isCollected,
+
+          collectedAmount: payment.collectedAmount || 0,
+
+          collectedPhonePe: payment.collectedPhonePe || 0,
+
+          collectionHistory:
+            payment.collectionHistory || [],
+
+          bookingId: payment.bookingId || null,
+
+          booking: {
+            fromDate:
+              payment.booking?.fromDate || null,
+
+            toDate:
+              payment.booking?.toDate || null,
+
+            bookingAmount:
+              payment.booking?.bookingAmount || 0,
+          },
+
+          customer: {
+            fullName:
+              payment.customer?.fullName || "",
+
+            mobileNumber:
+              payment.customer?.mobileNumber || "",
+          },
+
+          note: payment.note || "",
+
+          createdAt: payment.createdAt,
+        };
+      });
+
+    // =========================================================
+    // STEP 9: Final response
+    // =========================================================
     return res.status(200).json({
       success: true,
-      hasPayments: true,
+
+      hasPayments: formattedPayments.length > 0,
+
       message:
         formattedPayments.length === 0
-          ? "No payments in the selected date range"
+          ? "No payments found for active vehicles in the selected date range"
           : "Payments fetched successfully",
+
       count: formattedPayments.length,
+
       payments: formattedPayments,
     });
   } catch (error) {
-    console.error("Get payments for import error:", error);
- 
+    console.error(
+      "Get payments for import error:",
+      error,
+    );
+
     return res.status(500).json({
       success: false,
       message: "Failed to fetch payment details",
