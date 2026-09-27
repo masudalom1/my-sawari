@@ -368,19 +368,22 @@ export const getSingleVehicle = async (req, res, next) => {
   }
 };
 
+const DISPLAY_NAME_MAX_LENGTH = 100;
+ 
 export const updateVehicle = async (req, res, next) => {
   try {
     const vehicle = await Vehicle.findById(req.params.id);
-
+ 
     if (!vehicle || vehicle.isDeleted) {
       return res.status(404).json({
         success: false,
         message: "Vehicle not found",
       });
     }
-
+ 
     const allowedFields = [
       "vehicleName",
+      "displayName",
       "vehicleNumber",
       "manufacturer",
       "model",
@@ -400,7 +403,26 @@ export const updateVehicle = async (req, res, next) => {
       "fitnessValidUpto",
       "notes",
     ];
-
+ 
+    // -----------------------------------------
+    // Display name validation (optional field)
+    // An empty string is allowed so employees can clear it.
+    // -----------------------------------------
+    if (req.body.displayName !== undefined && req.body.displayName !== null) {
+      const incomingDisplayName = String(req.body.displayName).trim();
+ 
+      if (incomingDisplayName.length > DISPLAY_NAME_MAX_LENGTH) {
+        return res.status(400).json({
+          success: false,
+          message: `Display name cannot exceed ${DISPLAY_NAME_MAX_LENGTH} characters`,
+        });
+      }
+ 
+      req.body.displayName = incomingDisplayName; // normalize whitespace
+    } else if (req.body.displayName === null) {
+      req.body.displayName = "";
+    }
+ 
     // -----------------------------------------
     // Category validation (must run BEFORE assignment)
     // -----------------------------------------
@@ -415,31 +437,37 @@ export const updateVehicle = async (req, res, next) => {
         message: "Category must be either bike or car",
       });
     }
-
+ 
     const effectiveCategory = req.body.category ?? vehicle.category;
-
+ 
     // -----------------------------------------
     // vehicleType validation (must run BEFORE assignment)
     // -----------------------------------------
     const carVehicleTypes = [
-      "SUV", "Sedan", "Hatchback", "Luxury", "Tempo Traveller", "Mini Bus", "Bus",
+      "SUV",
+      "Sedan",
+      "Hatchback",
+      "Luxury",
+      "Tempo Traveller",
+      "Mini Bus",
+      "Bus",
     ];
-
+ 
     if (req.body.vehicleType !== undefined) {
       const incomingType = String(req.body.vehicleType).trim();
-
+ 
       if (effectiveCategory === "car") {
         const matched = carVehicleTypes.find(
-          (t) => t.toLowerCase() === incomingType.toLowerCase()
+          (t) => t.toLowerCase() === incomingType.toLowerCase(),
         );
-
+ 
         if (!matched) {
           return res.status(400).json({
             success: false,
             message: `vehicleType must be one of: ${carVehicleTypes.join(", ")}. Received: "${incomingType}"`,
           });
         }
-
+ 
         req.body.vehicleType = matched; // normalize casing
       } else {
         return res.status(400).json({
@@ -448,7 +476,7 @@ export const updateVehicle = async (req, res, next) => {
         });
       }
     }
-
+ 
     // -----------------------------------------
     // Update fields (now safe — bad values already rejected above)
     // -----------------------------------------
@@ -457,30 +485,30 @@ export const updateVehicle = async (req, res, next) => {
         vehicle[field] = req.body[field];
       }
     });
-
+ 
     // -----------------------------------------
     // Vehicle number normalization
     // -----------------------------------------
     if (vehicle.vehicleNumber) {
       vehicle.vehicleNumber = vehicle.vehicleNumber.toUpperCase().trim();
     }
-
+ 
     // -----------------------------------------
     // Status
     // -----------------------------------------
     if (req.body.status !== undefined) {
       const allowedStatuses = ["available", "rent", "service"];
-
+ 
       if (!allowedStatuses.includes(req.body.status)) {
         return res.status(400).json({
           success: false,
           message: "Status must be available, rent, or service",
         });
       }
-
+ 
       vehicle.status = req.body.status;
     }
-
+ 
     // -----------------------------------------
     // Add new images
     // -----------------------------------------
@@ -489,12 +517,12 @@ export const updateVehicle = async (req, res, next) => {
         url: `/uploads/vehicles/${file.filename}`,
         publicId: null,
       }));
-
+ 
       vehicle.images.push(...newImages);
     }
-
+ 
     await vehicle.save();
-
+ 
     return res.status(200).json({
       success: true,
       message: "Vehicle updated successfully",

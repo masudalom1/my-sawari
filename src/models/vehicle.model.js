@@ -36,6 +36,15 @@ const vehicleSchema = new mongoose.Schema(
       trim: true,
     },
 
+    // Friendly name employees can set/change (e.g. "Airport Innova 1").
+    // Optional - falls back to vehicleName wherever it's shown.
+    displayName: {
+      type: String,
+      trim: true,
+      maxlength: [100, "Display name cannot exceed 100 characters"],
+      default: "",
+    },
+
     vehicleNumber: {
       type: String,
       required: true,

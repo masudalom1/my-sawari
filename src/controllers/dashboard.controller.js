@@ -44,7 +44,6 @@ export const getVehiclesForImport = async (req, res) => {
     });
   }
 };
-
 export const getBookingsForImport = async (req, res) => {
   try {
     const bookings = await Booking.find({
