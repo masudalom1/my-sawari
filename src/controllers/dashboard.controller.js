@@ -4,272 +4,6 @@ import Vehicle from "../models/vehicle.model.js";
 import Booking from "../models/booking.model.js";
 import PaymentHistory from "../models/paymentHistory.model.js";
 
-
-// =====================================================================
-// DASHBOARD STATS
-// Paste this at the bottom of controllers/dashboard.controller.js.
-// Vehicle, Booking and Maintenance are already imported at the top of
-// that file, so no new imports are needed.
-// =====================================================================
-
-const IST_OFFSET_MS = 330 * 60 * 1000; // UTC+05:30
-const DAY_MS = 24 * 60 * 60 * 1000;
-
-// Rental business day runs 8 AM -> 8 AM next day (same as the frontend).
-const BUSINESS_DAY_START_HOUR = 8;
-
-// Booking statuses that mean the vehicle has physically left the yard.
-const ON_RENT_STATUSES = ["vehicle_handover", "active"];
-
-// Same fallback the frontend uses for legacy vehicles with no category.
-const BIKE_KEYWORDS = [
-  "hunter",
-  "avenis",
-  "ntorq",
-  "activa",
-  "splendor",
-  "pulsar",
-  "classic",
-  "scooty",
-  "jupiter",
-];
-
-function resolveCategory(vehicle) {
-  if (vehicle.category === "car" || vehicle.category === "bike") {
-    return vehicle.category;
-  }
-  const name = (vehicle.vehicleName || "").toLowerCase();
-  return BIKE_KEYWORDS.some((k) => name.includes(k)) ? "bike" : "car";
-}
-
-// Calendar parts of a Date as seen in IST (works whatever TZ the server uses).
-function getISTParts(date) {
-  const shifted = new Date(date.getTime() + IST_OFFSET_MS);
-  return {
-    year: shifted.getUTCFullYear(),
-    month: shifted.getUTCMonth(),
-    day: shifted.getUTCDate(),
-    hour: shifted.getUTCHours(),
-  };
-}
-
-// Build a real Date for an IST wall-clock time.
-function makeISTDate(year, month, day, hour = 0, minute = 0) {
-  return new Date(Date.UTC(year, month, day, hour, minute) - IST_OFFSET_MS);
-}
-
-// Accepts "09:00 AM", "9:00am", "14:30".
-function parseTimeString(value) {
-  if (!value || typeof value !== "string") return null;
-  const text = value.trim();
-
-  let match = text.match(/^(\d{1,2}):(\d{2})\s*(AM|PM)$/i);
-  if (match) {
-    let hour = Number(match[1]);
-    const minute = Number(match[2]);
-    const period = match[3].toUpperCase();
-    if (hour < 1 || hour > 12 || minute > 59) return null;
-    if (period === "PM" && hour !== 12) hour += 12;
-    if (period === "AM" && hour === 12) hour = 0;
-    return { hour, minute };
-  }
-
-  match = text.match(/^(\d{1,2}):(\d{2})$/);
-  if (match) {
-    const hour = Number(match[1]);
-    const minute = Number(match[2]);
-    if (hour > 23 || minute > 59) return null;
-    return { hour, minute };
-  }
-
-  return null;
-}
-
-// fromDate/toDate hold the day, pickupTime/dropTime hold the time.
-function combineISTDateAndTime(dateValue, timeValue, fallback) {
-  const base = new Date(dateValue);
-  if (Number.isNaN(base.getTime())) return null;
-  const { year, month, day } = getISTParts(base);
-  const time = parseTimeString(timeValue) || fallback;
-  return makeISTDate(year, month, day, time.hour, time.minute);
-}
-
-// Today's business window in IST. Before 8 AM we are still in
-// yesterday's business day. Optional ?date=YYYY-MM-DD picks a specific day.
-function getBusinessDayWindow(dateParam, now) {
-  let start;
-
-  if (dateParam) {
-    const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dateParam);
-    if (!match) return null;
-    start = makeISTDate(
-      Number(match[1]),
-      Number(match[2]) - 1,
-      Number(match[3]),
-      BUSINESS_DAY_START_HOUR,
-    );
-  } else {
-    const p = getISTParts(now);
-    const day = p.hour < BUSINESS_DAY_START_HOUR ? p.day - 1 : p.day;
-    start = makeISTDate(p.year, p.month, day, BUSINESS_DAY_START_HOUR);
-  }
-
-  return { start, end: new Date(start.getTime() + DAY_MS) };
-}
-
-export const getDashboardStats = async (req, res) => {
-  try {
-    const now = new Date();
-    const window = getBusinessDayWindow(req.query.date, now);
-
-    if (!window) {
-      return res.status(400).json({
-        success: false,
-        message: "Invalid 'date'. Use YYYY-MM-DD.",
-      });
-    }
-
-    const { start: dayStart, end: dayEnd } = window;
-
-    // -----------------------------------
-    // 1. Active (non-deleted) vehicles
-    // -----------------------------------
-    const vehicles = await Vehicle.find({ isDeleted: false })
-      .select("_id vehicleName category")
-      .lean();
-
-    const vehicleIds = vehicles.map((v) => v._id);
-    const vehicleIdSet = new Set(vehicleIds.map(String));
-    const categoryById = new Map(
-      vehicles.map((v) => [String(v._id), resolveCategory(v)]),
-    );
-
-    // -----------------------------------
-    // 2. Bookings that could touch today
-    //    (2-day padding because the exact start/end needs pickupTime /
-    //    dropTime, which are strings — the precise check happens below)
-    //    + every booking currently handed over, even if overdue.
-    // -----------------------------------
-    const PAD_MS = 2 * DAY_MS;
-
-    const bookings = await Booking.find({
-      isDeleted: false,
-      status: { $ne: "cancelled" },
-      vehicleId: { $in: vehicleIds },
-      $or: [
-        {
-          fromDate: { $lt: new Date(dayEnd.getTime() + PAD_MS) },
-          toDate: { $gt: new Date(dayStart.getTime() - PAD_MS) },
-        },
-        { status: { $in: ON_RENT_STATUSES } },
-      ],
-    })
-      .select("vehicleId fromDate toDate pickupTime dropTime status")
-      .lean();
-
-    const bookedSet = new Set();
-    const onRentSet = new Set();
-
-    for (const booking of bookings) {
-      const vid = String(booking.vehicleId);
-      if (!vehicleIdSet.has(vid)) continue;
-
-      const isOnRent = ON_RENT_STATUSES.includes(booking.status);
-
-      // On rent = handed over and not yet returned, right now.
-      if (isOnRent) onRentSet.add(vid);
-
-      const start = combineISTDateAndTime(booking.fromDate, booking.pickupTime, {
-        hour: 0,
-        minute: 0,
-      });
-      const end = combineISTDateAndTime(booking.toDate, booking.dropTime, {
-        hour: 23,
-        minute: 59,
-      });
-
-      const overlapsToday =
-        start && end && start < dayEnd && end > dayStart;
-
-      // Booked today = any booking inside today's window, or a vehicle that
-      // is still out (overdue returns still block the vehicle today).
-      if (overlapsToday || isOnRent) bookedSet.add(vid);
-    }
-
-    // -----------------------------------
-    // 3. Maintenance overlapping today
-    // -----------------------------------
-    const maintenances = await Maintenance.find({
-      isDeleted: { $ne: true },
-      status: { $nin: ["Cancelled", "Completed"] },
-      vehicle: { $in: vehicleIds },
-      startDate: { $lt: dayEnd },
-      endDate: { $gt: dayStart },
-    })
-      .select("vehicle")
-      .lean();
-
-    const maintenanceSet = new Set();
-    for (const m of maintenances) {
-      const vid = String(m.vehicle);
-      if (vehicleIdSet.has(vid)) maintenanceSet.add(vid);
-    }
-
-    // -----------------------------------
-    // 4. Unbooked = no booking AND no maintenance today
-    // -----------------------------------
-    const unbookedIds = vehicles
-      .map((v) => String(v._id))
-      .filter((id) => !bookedSet.has(id) && !maintenanceSet.has(id));
-
-    const byCategory = (ids) => {
-      const out = { car: 0, bike: 0 };
-      for (const id of ids) out[categoryById.get(id)]++;
-      return out;
-    };
-
-    const allIds = vehicles.map((v) => String(v._id));
-
-    return res.status(200).json({
-      success: true,
-      window: {
-        start: dayStart,
-        end: dayEnd,
-        timezone: "Asia/Kolkata",
-        businessDayStartHour: BUSINESS_DAY_START_HOUR,
-      },
-      stats: {
-        totalVehicles: allIds.length,
-        bookedToday: bookedSet.size,
-        unbookedToday: unbookedIds.length,
-        onRentToday: onRentSet.size,
-        maintenanceToday: maintenanceSet.size,
-      },
-      breakdown: {
-        totalVehicles: byCategory(allIds),
-        bookedToday: byCategory(bookedSet),
-        unbookedToday: byCategory(unbookedIds),
-        onRentToday: byCategory(onRentSet),
-        maintenanceToday: byCategory(maintenanceSet),
-      },
-      // Handy if you later want clicking a card to filter the timeline.
-      vehicleIds: {
-        booked: [...bookedSet],
-        unbooked: unbookedIds,
-        onRent: [...onRentSet],
-        maintenance: [...maintenanceSet],
-      },
-    });
-  } catch (error) {
-    console.error("Get dashboard stats error:", error);
-
-    return res.status(500).json({
-      success: false,
-      message: "Failed to fetch dashboard stats",
-      error: error.message,
-    });
-  }
-};
 export const getVehiclesForImport = async (req, res) => {
   try {
     const vehicles = await Vehicle.find({
@@ -395,12 +129,12 @@ export const getBookingsForImport = async (req, res) => {
 export const getPaymentsForImport = async (req, res) => {
   try {
     const { from, to } = req.query;
- 
+
     // ---------------------------------------
     // Step 1: are there any payments at all?
     // ---------------------------------------
     const anyPayment = await PaymentHistory.exists({});
- 
+
     if (!anyPayment) {
       return res.status(200).json({
         success: true,
@@ -410,14 +144,14 @@ export const getPaymentsForImport = async (req, res) => {
         payments: [],
       });
     }
- 
+
     // ---------------------------------------
     // Step 2: active vehicles and the payment ids they point to
     // ---------------------------------------
     const vehicles = await Vehicle.find({ isDeleted: false })
       .select("_id payments")
       .lean();
- 
+
     if (vehicles.length === 0) {
       return res.status(200).json({
         success: true,
@@ -427,20 +161,20 @@ export const getPaymentsForImport = async (req, res) => {
         payments: [],
       });
     }
- 
+
     const activeVehicleIds = vehicles.map((v) => v._id);
     const activeVehicleSet = new Set(activeVehicleIds.map(String));
- 
+
     const paymentToVehicle = new Map();
     const linkedPaymentIds = [];
- 
+
     for (const vehicle of vehicles) {
       for (const paymentId of vehicle.payments || []) {
         paymentToVehicle.set(String(paymentId), String(vehicle._id));
         linkedPaymentIds.push(paymentId);
       }
     }
- 
+
     // ---------------------------------------
     // Step 3: build the filter
     // ---------------------------------------
@@ -450,10 +184,10 @@ export const getPaymentsForImport = async (req, res) => {
         { "vehicle.vehicleId": { $in: activeVehicleIds } },
       ],
     };
- 
+
     if (from || to) {
       filter.createdAt = {};
- 
+
       if (from) {
         const fromDate = new Date(`${from}T00:00:00.000+05:30`);
         if (Number.isNaN(fromDate.getTime())) {
@@ -461,7 +195,7 @@ export const getPaymentsForImport = async (req, res) => {
         }
         filter.createdAt.$gte = fromDate;
       }
- 
+
       if (to) {
         const toDate = new Date(`${to}T23:59:59.999+05:30`);
         if (Number.isNaN(toDate.getTime())) {
@@ -470,7 +204,7 @@ export const getPaymentsForImport = async (req, res) => {
         filter.createdAt.$lte = toDate;
       }
     }
- 
+
     // ---------------------------------------
     // Step 4: fetch
     // ---------------------------------------
@@ -498,21 +232,21 @@ export const getPaymentsForImport = async (req, res) => {
       )
       .sort({ createdAt: 1 })
       .lean();
- 
+
     const formattedPayments = [];
     let unlinkedCount = 0;
- 
+
     for (const payment of payments) {
       const snapshotVehicleId = payment.vehicle?.vehicleId ? String(payment.vehicle.vehicleId) : null;
       const linkedVehicleId = paymentToVehicle.get(String(payment._id));
- 
+
       const vehicleId =
         linkedVehicleId ||
         (snapshotVehicleId && activeVehicleSet.has(snapshotVehicleId) ? snapshotVehicleId : null);
- 
+
       if (!vehicleId) continue;
       if (!linkedVehicleId) unlinkedCount++;
- 
+
       const breakdown = {
         cash: Number(payment.paymentBreakdown?.cash) || 0,
         phonePe: Number(payment.paymentBreakdown?.phonePe) || 0,
@@ -520,53 +254,53 @@ export const getPaymentsForImport = async (req, res) => {
       };
       const breakdownTotal = breakdown.cash + breakdown.phonePe + breakdown.razorpay;
       const amount = Number(payment.amount) || 0;
- 
+
       formattedPayments.push({
         _id: payment._id,
         vehicleId,
- 
+
         // snapshot of the vehicle at the time of payment
         vehicle: {
           vehicleName: payment.vehicle?.vehicleName || "",
           vehicleNumber: payment.vehicle?.vehicleNumber || "",
         },
- 
+
         // Mixed payments sometimes store only the breakdown; fall back to its total.
         amount: amount > 0 ? amount : breakdownTotal,
         type: payment.type,
         paymentMethod: payment.paymentMethod || "cash",
         paymentBreakdown: breakdown,
         upiLast4: payment.upiLast4 || [],
- 
+
         isCollected: !!payment.isCollected,
         collectedAmount: payment.collectedAmount || 0,
         collectedPhonePe: payment.collectedPhonePe || 0,
         collectionHistory: payment.collectionHistory || [],
- 
+
         bookingId: payment.bookingId || null,
         booking: {
           fromDate: payment.booking?.fromDate || null,
           toDate: payment.booking?.toDate || null,
           bookingAmount: payment.booking?.bookingAmount || 0,
         },
- 
+
         customer: {
           fullName: payment.customer?.fullName || "",
           mobileNumber: payment.customer?.mobileNumber || "",
         },
- 
+
         note: payment.note || "",
         createdAt: payment.createdAt,
       });
     }
- 
+
     if (unlinkedCount > 0) {
       console.warn(
         `getPaymentsForImport: ${unlinkedCount} payment(s) found only via vehicle snapshot — ` +
           "their ids are missing from vehicle.payments. Push the id when creating these payments.",
       );
     }
- 
+
     return res.status(200).json({
       success: true,
       hasPayments: formattedPayments.length > 0,
@@ -582,7 +316,7 @@ export const getPaymentsForImport = async (req, res) => {
     });
   } catch (error) {
     console.error("Get payments for import error:", error);
- 
+
     return res.status(500).json({
       success: false,
       message: "Failed to fetch payment details",
@@ -797,5 +531,293 @@ export const getMaintenances = async (req, res, next) => {
     });
   } catch (error) {
     next(error);
+  }
+};
+
+// =====================================================================
+// DASHBOARD STATS  (uses only the Vehicle and Booking models)
+// =====================================================================
+//
+// Rules — every vehicle lands in exactly ONE of these three buckets,
+// so  bookedToday + unbookedToday + maintenanceToday === totalVehicles:
+//
+//   maintenanceToday : vehicle.status === "service"
+//   bookedToday      : not in service, and has a non-cancelled booking whose
+//                      pickup→drop time overlaps today's business day
+//                      (8 AM → 8 AM next day, IST), or is on rent right now
+//   unbookedToday    : everything else
+//
+//   onRentToday      : (subset of bookedToday) not in service, and has a
+//                      booking that is NOT completed/cancelled where
+//                        pickup <= now < drop            (running now), or
+//                        drop passed within the last OVERDUE_GRACE_HOURS
+//                        and status is vehicle_handover/active (late return)
+//
+// Why dates and not just booking.status: old bookings that were never
+// moved to "completed" keep status "active" forever. Counting by status
+// alone made almost the whole fleet look "on rent". Those stale bookings
+// are now ignored and reported in `diagnostics.staleActiveBookings` so
+// they can be cleaned up.
+// =====================================================================
+
+const IST_OFFSET_MS = 330 * 60 * 1000; // UTC+05:30
+const HOUR_MS = 60 * 60 * 1000;
+const DAY_MS = 24 * HOUR_MS;
+
+const BUSINESS_DAY_START_HOUR = 8;
+const OVERDUE_GRACE_HOURS = 24;
+
+const HANDED_OVER_STATUSES = ["vehicle_handover", "active"];
+
+// Same fallback the frontend uses for legacy vehicles with no category.
+const BIKE_KEYWORDS = [
+  "hunter",
+  "avenis",
+  "ntorq",
+  "activa",
+  "splendor",
+  "pulsar",
+  "classic",
+  "scooty",
+  "jupiter",
+];
+
+function resolveCategory(vehicle) {
+  if (vehicle.category === "car" || vehicle.category === "bike") {
+    return vehicle.category;
+  }
+  const name = (vehicle.vehicleName || "").toLowerCase();
+  return BIKE_KEYWORDS.some((k) => name.includes(k)) ? "bike" : "car";
+}
+
+// Calendar parts of a Date as seen in IST (works whatever TZ the server uses).
+function getISTParts(date) {
+  const shifted = new Date(date.getTime() + IST_OFFSET_MS);
+  return {
+    year: shifted.getUTCFullYear(),
+    month: shifted.getUTCMonth(),
+    day: shifted.getUTCDate(),
+    hour: shifted.getUTCHours(),
+  };
+}
+
+// Real Date for an IST wall-clock time.
+function makeISTDate(year, month, day, hour = 0, minute = 0) {
+  return new Date(Date.UTC(year, month, day, hour, minute) - IST_OFFSET_MS);
+}
+
+// Accepts "09:00 AM", "9:00am", "14:30".
+function parseTimeString(value) {
+  if (!value || typeof value !== "string") return null;
+  const text = value.trim();
+
+  let match = text.match(/^(\d{1,2}):(\d{2})\s*(AM|PM)$/i);
+  if (match) {
+    let hour = Number(match[1]);
+    const minute = Number(match[2]);
+    const period = match[3].toUpperCase();
+    if (hour < 1 || hour > 12 || minute > 59) return null;
+    if (period === "PM" && hour !== 12) hour += 12;
+    if (period === "AM" && hour === 12) hour = 0;
+    return { hour, minute };
+  }
+
+  match = text.match(/^(\d{1,2}):(\d{2})$/);
+  if (match) {
+    const hour = Number(match[1]);
+    const minute = Number(match[2]);
+    if (hour > 23 || minute > 59) return null;
+    return { hour, minute };
+  }
+
+  return null;
+}
+
+// fromDate/toDate carry the day, pickupTime/dropTime carry the time.
+function combineISTDateAndTime(dateValue, timeValue, fallback) {
+  const base = new Date(dateValue);
+  if (Number.isNaN(base.getTime())) return null;
+  const { year, month, day } = getISTParts(base);
+  const time = parseTimeString(timeValue) || fallback;
+  return makeISTDate(year, month, day, time.hour, time.minute);
+}
+
+// Today's business window in IST. Before 8 AM we are still in yesterday's
+// business day. Optional ?date=YYYY-MM-DD picks a specific day.
+function getBusinessDayWindow(dateParam, now) {
+  let start;
+
+  if (dateParam) {
+    const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dateParam);
+    if (!match) return null;
+    start = makeISTDate(
+      Number(match[1]),
+      Number(match[2]) - 1,
+      Number(match[3]),
+      BUSINESS_DAY_START_HOUR,
+    );
+  } else {
+    const p = getISTParts(now);
+    const day = p.hour < BUSINESS_DAY_START_HOUR ? p.day - 1 : p.day;
+    start = makeISTDate(p.year, p.month, day, BUSINESS_DAY_START_HOUR);
+  }
+
+  return { start, end: new Date(start.getTime() + DAY_MS) };
+}
+
+export const getDashboardStats = async (req, res) => {
+  try {
+    const now = new Date();
+    const window = getBusinessDayWindow(req.query.date, now);
+
+    if (!window) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid 'date'. Use YYYY-MM-DD.",
+      });
+    }
+
+    const { start: dayStart, end: dayEnd } = window;
+    const overdueCutoff = new Date(now.getTime() - OVERDUE_GRACE_HOURS * HOUR_MS);
+
+    // -----------------------------------
+    // 1. Vehicles (source of truth for total + service)
+    // -----------------------------------
+    const vehicles = await Vehicle.find({ isDeleted: false })
+      .select("_id vehicleName category status")
+      .lean();
+
+    const allIds = vehicles.map((v) => String(v._id));
+    const vehicleIdSet = new Set(allIds);
+    const categoryById = new Map(
+      vehicles.map((v) => [String(v._id), resolveCategory(v)]),
+    );
+
+    const serviceSet = new Set(
+      vehicles.filter((v) => v.status === "service").map((v) => String(v._id)),
+    );
+
+    // -----------------------------------
+    // 2. Only bookings whose dates can touch today or "now".
+    //    2-day padding because the exact times live in pickupTime/dropTime
+    //    strings — the precise check happens in JS below.
+    // -----------------------------------
+    const PAD_MS = 2 * DAY_MS;
+    const earliest = Math.min(dayStart.getTime(), overdueCutoff.getTime());
+    const latest = Math.max(dayEnd.getTime(), now.getTime());
+
+    const bookings = await Booking.find({
+      isDeleted: false,
+      status: { $ne: "cancelled" },
+      vehicleId: { $in: vehicles.map((v) => v._id) },
+      fromDate: { $lt: new Date(latest + PAD_MS) },
+      toDate: { $gt: new Date(earliest - PAD_MS) },
+    })
+      .select("vehicleId fromDate toDate pickupTime dropTime status")
+      .lean();
+
+    const bookedSet = new Set();
+    const onRentSet = new Set();
+
+    for (const booking of bookings) {
+      const vid = String(booking.vehicleId);
+      if (!vehicleIdSet.has(vid)) continue;
+      if (serviceSet.has(vid)) continue; // service wins over bookings
+
+      const start = combineISTDateAndTime(booking.fromDate, booking.pickupTime, {
+        hour: 0,
+        minute: 0,
+      });
+      const end = combineISTDateAndTime(booking.toDate, booking.dropTime, {
+        hour: 23,
+        minute: 59,
+      });
+      if (!start || !end || end <= start) continue;
+
+      // Booked today: any non-cancelled booking inside today's window
+      // (a booking completed earlier today still counts as booked today).
+      if (start < dayEnd && end > dayStart) bookedSet.add(vid);
+
+      // On rent now: not completed, and running right now or a recent
+      // late return that was actually handed over.
+      if (booking.status !== "completed") {
+        const runningNow = start <= now && end > now;
+        const lateReturn =
+          HANDED_OVER_STATUSES.includes(booking.status) &&
+          end <= now &&
+          end > overdueCutoff;
+
+        if (runningNow || lateReturn) {
+          onRentSet.add(vid);
+          bookedSet.add(vid); // a vehicle that is out is booked today
+        }
+      }
+    }
+
+    // -----------------------------------
+    // 3. Unbooked = not booked and not in service
+    // -----------------------------------
+    const unbookedIds = allIds.filter(
+      (id) => !bookedSet.has(id) && !serviceSet.has(id),
+    );
+
+    // -----------------------------------
+    // 4. Diagnostics: bookings still marked handed over whose drop date is
+    //    long past. These are what inflated "On Rent" before — mark them
+    //    completed to clean the data.
+    // -----------------------------------
+    const staleActiveBookings = await Booking.countDocuments({
+      isDeleted: false,
+      status: { $in: HANDED_OVER_STATUSES },
+      toDate: { $lt: new Date(overdueCutoff.getTime() - DAY_MS) },
+    });
+
+    const byCategory = (ids) => {
+      const out = { car: 0, bike: 0 };
+      for (const id of ids) out[categoryById.get(id)]++;
+      return out;
+    };
+
+    return res.status(200).json({
+      success: true,
+      window: {
+        start: dayStart,
+        end: dayEnd,
+        timezone: "Asia/Kolkata",
+        businessDayStartHour: BUSINESS_DAY_START_HOUR,
+      },
+      stats: {
+        totalVehicles: allIds.length,
+        bookedToday: bookedSet.size,
+        unbookedToday: unbookedIds.length,
+        onRentToday: onRentSet.size,
+        maintenanceToday: serviceSet.size,
+      },
+      breakdown: {
+        totalVehicles: byCategory(allIds),
+        bookedToday: byCategory(bookedSet),
+        unbookedToday: byCategory(unbookedIds),
+        onRentToday: byCategory(onRentSet),
+        maintenanceToday: byCategory(serviceSet),
+      },
+      vehicleIds: {
+        booked: [...bookedSet],
+        unbooked: unbookedIds,
+        onRent: [...onRentSet],
+        maintenance: [...serviceSet],
+      },
+      diagnostics: {
+        bookingsChecked: bookings.length,
+        staleActiveBookings,
+      },
+    });
+  } catch (error) {
+    console.error("Get dashboard stats error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Failed to fetch dashboard stats",
+      error: error.message,
+    });
   }
 };
