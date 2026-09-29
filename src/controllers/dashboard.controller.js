@@ -684,7 +684,9 @@ export const getDashboardStats = async (req, res) => {
     // 1. Vehicles (source of truth for total + service)
     // -----------------------------------
     const vehicles = await Vehicle.find({ isDeleted: false })
-      .select("_id vehicleName category status")
+      .select(
+        "_id vehicleName category status maintenance.reason maintenance.estimatedCompletionDate",
+      )
       .lean();
 
     const allIds = vehicles.map((v) => String(v._id));
@@ -696,6 +698,16 @@ export const getDashboardStats = async (req, res) => {
     const serviceSet = new Set(
       vehicles.filter((v) => v.status === "service").map((v) => String(v._id)),
     );
+
+    // Extra info shown in the "In Maintenance" hover list
+    const serviceDetails = {};
+    for (const v of vehicles) {
+      if (v.status !== "service") continue;
+      serviceDetails[String(v._id)] = {
+        reason: v.maintenance?.reason || "",
+        estimatedCompletionDate: v.maintenance?.estimatedCompletionDate || null,
+      };
+    }
 
     // -----------------------------------
     // 2. Only bookings whose dates can touch today or "now".
@@ -713,11 +725,49 @@ export const getDashboardStats = async (req, res) => {
       fromDate: { $lt: new Date(latest + PAD_MS) },
       toDate: { $gt: new Date(earliest - PAD_MS) },
     })
-      .select("vehicleId fromDate toDate pickupTime dropTime status")
+      .select(
+        "_id bookingCode customerName mobileNumber vehicleId fromDate toDate pickupTime dropTime status",
+      )
       .lean();
 
     const bookedSet = new Set();
     const onRentSet = new Set();
+
+    // One "most relevant" booking per vehicle for the hover lists.
+    // Priority: on rent now > not yet completed (earliest first) > completed.
+    const bookingDetails = {};
+    const rememberBooking = (vid, booking, start, end, onRent) => {
+      const detail = {
+        bookingId: String(booking._id),
+        bookingCode: booking.bookingCode || "",
+        customerName: booking.customerName || "",
+        mobileNumber: booking.mobileNumber || "",
+        start,
+        end,
+        status: booking.status,
+        onRent,
+      };
+
+      const existing = bookingDetails[vid];
+      if (!existing) {
+        bookingDetails[vid] = detail;
+        return;
+      }
+      if (existing.onRent) return;
+      if (onRent) {
+        bookingDetails[vid] = detail;
+        return;
+      }
+
+      const existingDone = existing.status === "completed";
+      const newDone = booking.status === "completed";
+      if (existingDone && !newDone) {
+        bookingDetails[vid] = detail;
+        return;
+      }
+      if (!existingDone && newDone) return;
+      if (start < existing.start) bookingDetails[vid] = detail;
+    };
 
     for (const booking of bookings) {
       const vid = String(booking.vehicleId);
@@ -736,21 +786,24 @@ export const getDashboardStats = async (req, res) => {
 
       // Booked today: any non-cancelled booking inside today's window
       // (a booking completed earlier today still counts as booked today).
-      if (start < dayEnd && end > dayStart) bookedSet.add(vid);
+      const overlapsToday = start < dayEnd && end > dayStart;
 
       // On rent now: not completed, and running right now or a recent
       // late return that was actually handed over.
+      let isOnRentNow = false;
       if (booking.status !== "completed") {
         const runningNow = start <= now && end > now;
         const lateReturn =
           HANDED_OVER_STATUSES.includes(booking.status) &&
           end <= now &&
           end > overdueCutoff;
+        isOnRentNow = runningNow || lateReturn;
+      }
 
-        if (runningNow || lateReturn) {
-          onRentSet.add(vid);
-          bookedSet.add(vid); // a vehicle that is out is booked today
-        }
+      if (isOnRentNow) onRentSet.add(vid);
+      if (overlapsToday || isOnRentNow) {
+        bookedSet.add(vid); // a vehicle that is out is booked today
+        rememberBooking(vid, booking, start, end, isOnRentNow);
       }
     }
 
@@ -806,6 +859,9 @@ export const getDashboardStats = async (req, res) => {
         onRent: [...onRentSet],
         maintenance: [...serviceSet],
       },
+      // Per-vehicle details for the card hover lists
+      bookingDetails,
+      serviceDetails,
       diagnostics: {
         bookingsChecked: bookings.length,
         staleActiveBookings,
