@@ -1769,16 +1769,18 @@ export const getBookingPayments = async (req, res) => {
       sortOrder = "desc",
     } = req.query;
 
-    // ---------- Company scope ----------
-    const companyId = req.user?.company || req.query.company;
-    if (!companyId || !mongoose.Types.ObjectId.isValid(companyId)) {
-      return res.status(400).json({ success: false, message: "Valid company is required" });
+     // ---------- Company scope (optional, no auth) ----------
+    const { company } = req.query;
+
+    const filter = { type: "booking" };
+
+    if (company) {
+      if (!mongoose.Types.ObjectId.isValid(company)) {
+        return res.status(400).json({ success: false, message: "Invalid company id" });
+      }
+      filter.company = new mongoose.Types.ObjectId(company);
     }
 
-    const filter = {
-      company: new mongoose.Types.ObjectId(companyId),
-      type: "booking",
-    };
     const and = [];
 
     // ---------- Month filter (supports old records without bookingMonth) ----------
