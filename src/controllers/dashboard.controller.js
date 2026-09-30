@@ -936,9 +936,11 @@ export const getVehicleRevenue = async (req, res) => {
 
 // ============================================================
 // ============================================================
-// BOOKING REVENUE DASHBOARD (PaymentHistory only)
+// BOOKING REVENUE DASHBOARD
 //
-// Every number here comes from the PaymentHistory collection.
+// Source: PaymentHistory only, and only payments with type "booking"
+// (the advance taken when a booking is created). Handover, rental,
+// extension, additional_charge, receive and refund payments are ignored.
 // The Booking collection is not read at all.
 //
 // Two views (the "tab" on the frontend):
@@ -952,33 +954,22 @@ export const getVehicleRevenue = async (req, res) => {
 //     e.g. advance paid 30 Sep for a 02-05 Oct trip => October.
 //
 //   basis=created              ?range=today | 7d | month
-//     Payments made in that window (payment createdAt, IST),
-//     whatever month the trip is in. Compared with the same
-//     elapsed time of the previous period.
+//     Booking payments made in that window (payment createdAt, IST),
+//     whatever month the trip is in. Compared with the same elapsed
+//     time of the previous period.
 //
-// Money definitions:
-//   amount     = payment.amount, or its breakdown total if amount is 0
-//   received   = sum of all payments except refunds
-//   refunded   = sum of refund payments
-//   net        = received - refunded      (the revenue figure)
+// Counts:
+//   bookings = distinct bookingId among the booking payments
+//   allTime  = every booking payment ever, for the company
 // ============================================================
 // ============================================================
 
+const PR_PAYMENT_TYPE = "booking";
 const PR_MONTH_REGEX = /^\d{4}-(0[1-9]|1[0-2])$/;
 const PR_BASES = ["booking", "created"];
 const PR_RANGES = ["today", "7d", "month"];
-const PR_IST_TZ = "+05:30";
-
-const PR_PAYMENT_TYPES = [
-  "booking",
-  "handover",
-  "rental",
-  "extension",
-  "additional_charge",
-  "receive",
-  "refund",
-];
 const PR_PAYMENT_METHODS = ["cash", "phonepe", "razorpay", "mixed"];
+const PR_IST_TZ = "+05:30";
 
 const prPad = (n) => String(n).padStart(2, "0");
 
@@ -1038,7 +1029,7 @@ function prEscapeRegex(text) {
 // ------------------------------------------------------------
 
 // Returns { params } or { error }.
-function parsePaymentRevenueQuery(query = {}, now = new Date()) {
+function parseBookingRevenueQuery(query = {}, now = new Date()) {
   const basis = query.basis ? String(query.basis).trim() : "booking";
   if (!PR_BASES.includes(basis)) {
     return { error: "basis must be 'booking' or 'created'." };
@@ -1052,11 +1043,6 @@ function parsePaymentRevenueQuery(query = {}, now = new Date()) {
   const month = query.month ? String(query.month).trim() : prCurrentMonth(now);
   if (!PR_MONTH_REGEX.test(month)) {
     return { error: "month must be in YYYY-MM format." };
-  }
-
-  const type = query.type ? String(query.type).trim() : null;
-  if (type && !PR_PAYMENT_TYPES.includes(type)) {
-    return { error: `type must be one of: ${PR_PAYMENT_TYPES.join(", ")}.` };
   }
 
   const method = query.method ? String(query.method).trim() : null;
@@ -1077,7 +1063,6 @@ function parsePaymentRevenueQuery(query = {}, now = new Date()) {
       range,
       month,
       year,
-      type,
       method,
       page: Math.max(1, Number(query.page) || 1),
       limit: Math.min(100, Math.max(1, Number(query.limit) || 20)),
@@ -1100,8 +1085,7 @@ function prBookingMonthPeriod({ month, year }) {
   const [y, m] = month.split("-").map(Number);
   const daysInMonth = new Date(Date.UTC(y, m, 0)).getUTCDate();
 
-  // Payments with no month and no trip dates fall back to their own date.
-  // Pad by a day each side for the IST offset; the exact check comes after.
+  // Padded by a day for payments that fall back to their own IST date.
   const padStart = new Date(start.getTime() - DAY_MS);
   const padEnd = new Date(end.getTime() + DAY_MS);
 
@@ -1119,8 +1103,7 @@ function prBookingMonthPeriod({ month, year }) {
     previous: { resolvedMonth: previousMonth },
     trend: {
       granularity: "day",
-      label: "trip start date",
-      // Day of the trip start; payments without trip dates use the payment date.
+      groupedBy: "trip start date",
       keyExpr: {
         $ifNull: [
           { $dateToString: { format: "%Y-%m-%d", date: "$booking.fromDate", timezone: "UTC" } },
@@ -1190,7 +1173,7 @@ function prCreatedPeriod({ range, year }, now) {
     previous: { createdAt: { $gte: prevStart, $lt: prevEnd } },
     trend: {
       granularity,
-      label: "payment date",
+      groupedBy: "payment date",
       keyExpr: {
         $dateToString: {
           format: granularity === "hour" ? "%Y-%m-%dT%H" : "%Y-%m-%d",
@@ -1263,14 +1246,22 @@ const PR_MONTH_SOURCE = {
   ],
 };
 
-// Stage 1: amount, refund flag, resolved month.
+// Base filter shared by every query: company + booking payments only.
+function prBaseMatch(companyId) {
+  return {
+    type: PR_PAYMENT_TYPE,
+    ...(companyId ? { company: companyId } : {}),
+  };
+}
+
+// Stage 1: resolved month + amount.
 function prFieldsStage() {
   return {
     $addFields: {
       resolvedMonth: PR_RESOLVED_MONTH,
       monthSource: PR_MONTH_SOURCE,
-      _isRefund: { $eq: ["$type", "refund"] },
       _breakdownTotal: PR_BREAKDOWN_TOTAL,
+      // Mixed payments sometimes store only the breakdown.
       _amount: {
         $cond: [{ $gt: [prNum("$amount"), 0] }, prNum("$amount"), PR_BREAKDOWN_TOTAL],
       },
@@ -1278,29 +1269,19 @@ function prFieldsStage() {
   };
 }
 
-// Stage 2: money in, refunds, channel split and office collection per payment.
+// Stage 2: channel split and office hand-in per payment.
 function prMoneyStage() {
   // Breakdown when present, otherwise the whole amount goes to the method's channel.
   const channel = (key, method) => ({
     $cond: [
-      "$_isRefund",
-      0,
-      {
-        $cond: [
-          { $gt: ["$_breakdownTotal", 0] },
-          prNum(`$paymentBreakdown.${key}`),
-          { $cond: [{ $eq: ["$paymentMethod", method] }, "$_amount", 0] },
-        ],
-      },
+      { $gt: ["$_breakdownTotal", 0] },
+      prNum(`$paymentBreakdown.${key}`),
+      { $cond: [{ $eq: ["$paymentMethod", method] }, "$_amount", 0] },
     ],
   });
 
   return {
     $addFields: {
-      _in: { $cond: ["$_isRefund", 0, "$_amount"] },
-      _out: { $cond: ["$_isRefund", "$_amount", 0] },
-      _net: { $cond: ["$_isRefund", { $multiply: ["$_amount", -1] }, "$_amount"] },
-
       _chCash: channel("cash", "cash"),
       _chPhonePe: channel("phonePe", "phonepe"),
       _chRazorpay: channel("razorpay", "razorpay"),
@@ -1308,7 +1289,6 @@ function prMoneyStage() {
         $cond: [
           {
             $and: [
-              { $not: ["$_isRefund"] },
               { $eq: ["$_breakdownTotal", 0] },
               { $not: [{ $in: ["$paymentMethod", ["cash", "phonepe", "razorpay"]] }] },
             ],
@@ -1317,19 +1297,11 @@ function prMoneyStage() {
           0,
         ],
       },
-
-      // Money handed in to the office (collect action).
       _settled: {
         $cond: [
-          "$_isRefund",
-          0,
-          {
-            $cond: [
-              { $eq: ["$isCollected", true] },
-              "$_amount",
-              { $min: ["$_amount", prNum("$collectedAmount")] },
-            ],
-          },
+          { $eq: ["$isCollected", true] },
+          "$_amount",
+          { $min: ["$_amount", prNum("$collectedAmount")] },
         ],
       },
     },
@@ -1338,34 +1310,24 @@ function prMoneyStage() {
 
 const PR_SUMS_GROUP = {
   paymentsCount: { $sum: 1 },
-  receivedCount: { $sum: { $cond: ["$_isRefund", 0, 1] } },
-  refundCount: { $sum: { $cond: ["$_isRefund", 1, 0] } },
-
-  received: { $sum: "$_in" },
-  refunded: { $sum: "$_out" },
-  netRevenue: { $sum: "$_net" },
-
+  revenue: { $sum: "$_amount" },
   settled: { $sum: "$_settled" },
-
   channelCash: { $sum: "$_chCash" },
   channelPhonePe: { $sum: "$_chPhonePe" },
   channelRazorpay: { $sum: "$_chRazorpay" },
   channelOther: { $sum: "$_chOther" },
 };
 
-const PR_KPI_GROUP = {
-  ...PR_SUMS_GROUP,
-  _bookings: { $addToSet: "$bookingId" },
-  _customers: { $addToSet: "$customer.mobileNumber" },
-  _vehicles: { $addToSet: "$vehicle.vehicleId" },
-};
-
 const PR_EMPTY_SUMS = Object.fromEntries(Object.keys(PR_SUMS_GROUP).map((k) => [k, 0]));
 
-function prListMatch(currentMatch, { type, method, search }) {
+// Distinct counts, dropping null / empty values.
+const prDistinctCount = (field) => ({
+  $size: { $setDifference: [field, [null, ""]] },
+});
+
+function prListMatch(currentMatch, { method, search }) {
   const match = { ...currentMatch };
 
-  if (type) match.type = type;
   if (method) match.paymentMethod = method;
 
   if (search) {
@@ -1375,8 +1337,8 @@ function prListMatch(currentMatch, { type, method, search }) {
       { "customer.mobileNumber": regex },
       { "vehicle.vehicleName": regex },
       { "vehicle.vehicleNumber": regex },
-      { note: regex },
       { upiLast4: regex },
+      { note: regex },
     ];
   }
 
@@ -1389,24 +1351,23 @@ function prListMatch(currentMatch, { type, method, search }) {
 
 const prKpiFacet = (match) => [
   { $match: match },
-  { $group: { _id: null, ...PR_KPI_GROUP } },
+  {
+    $group: {
+      _id: null,
+      ...PR_SUMS_GROUP,
+      _bookings: { $addToSet: "$bookingId" },
+      _customers: { $addToSet: "$customer.mobileNumber" },
+      _vehicles: { $addToSet: "$vehicle.vehicleId" },
+    },
+  },
   {
     $addFields: {
-      bookingsCount: { $size: { $setDifference: ["$_bookings", [null]] } },
-      customersCount: {
-        $size: { $setDifference: ["$_customers", [null, ""]] },
-      },
-      vehiclesCount: { $size: { $setDifference: ["$_vehicles", [null]] } },
+      bookingsCount: prDistinctCount("$_bookings"),
+      customersCount: prDistinctCount("$_customers"),
+      vehiclesCount: prDistinctCount("$_vehicles"),
     },
   },
   { $project: { _bookings: 0, _customers: 0, _vehicles: 0 } },
-];
-
-const prTypeFacet = (match) => [
-  { $match: match },
-  { $group: { _id: "$type", count: { $sum: 1 }, amount: { $sum: "$_amount" } } },
-  { $project: { _id: 0, type: "$_id", count: 1, amount: 1 } },
-  { $sort: { amount: -1 } },
 ];
 
 const prTopVehiclesFacet = (match, limit = 5) => [
@@ -1416,9 +1377,8 @@ const prTopVehiclesFacet = (match, limit = 5) => [
       _id: { $ifNull: ["$vehicle.vehicleId", "$vehicle.vehicleNumber"] },
       vehicleName: { $last: "$vehicle.vehicleName" },
       vehicleNumber: { $last: "$vehicle.vehicleNumber" },
-      payments: { $sum: 1 },
-      bookings: { $addToSet: "$bookingId" },
-      revenue: { $sum: "$_net" },
+      _bookings: { $addToSet: "$bookingId" },
+      revenue: { $sum: "$_amount" },
     },
   },
   { $sort: { revenue: -1 } },
@@ -1429,8 +1389,7 @@ const prTopVehiclesFacet = (match, limit = 5) => [
       vehicleId: "$_id",
       vehicleName: 1,
       vehicleNumber: 1,
-      payments: 1,
-      bookings: { $size: "$bookings" },
+      bookings: prDistinctCount("$_bookings"),
       revenue: 1,
     },
   },
@@ -1442,16 +1401,25 @@ const prTrendFacet = (match, keyExpr) => [
     $group: {
       _id: keyExpr,
       payments: { $sum: 1 },
-      received: { $sum: "$_in" },
-      refunded: { $sum: "$_out" },
-      net: { $sum: "$_net" },
+      revenue: { $sum: "$_amount" },
+      _bookings: { $addToSet: "$bookingId" },
     },
   },
+  { $addFields: { bookings: prDistinctCount("$_bookings") } },
+  { $project: { _bookings: 0 } },
 ];
 
 const prYearlyFacet = (match, keyExpr) => [
   { $match: match },
-  { $group: { _id: keyExpr, ...PR_SUMS_GROUP } },
+  {
+    $group: {
+      _id: keyExpr,
+      ...PR_SUMS_GROUP,
+      _bookings: { $addToSet: "$bookingId" },
+    },
+  },
+  { $addFields: { bookingsCount: prDistinctCount("$_bookings") } },
+  { $project: { _bookings: 0 } },
 ];
 
 const prListTotalFacet = (listMatch) => [{ $match: listMatch }, { $count: "count" }];
@@ -1464,12 +1432,10 @@ const prPaymentsFacet = (listMatch, page, limit) => [
   {
     $project: {
       bookingId: 1,
-      type: 1,
       paymentMethod: 1,
       paymentBreakdown: 1,
       upiLast4: 1,
       amount: "$_amount",
-      signedAmount: "$_net",
       customer: 1,
       vehicle: 1,
       booking: 1,
@@ -1482,6 +1448,35 @@ const prPaymentsFacet = (listMatch, page, limit) => [
     },
   },
 ];
+
+// All-time totals for the company (no period filter).
+async function prLoadAllTime(companyId) {
+  const [row] = await PaymentHistory.aggregate([
+    { $match: prBaseMatch(companyId) },
+    prFieldsStage(),
+    {
+      $group: {
+        _id: null,
+        paymentsCount: { $sum: 1 },
+        revenue: { $sum: "$_amount" },
+        _bookings: { $addToSet: "$bookingId" },
+        firstPaymentAt: { $min: "$createdAt" },
+        lastPaymentAt: { $max: "$createdAt" },
+      },
+    },
+    { $addFields: { bookingsCount: prDistinctCount("$_bookings") } },
+    { $project: { _id: 0, _bookings: 0 } },
+  ]);
+
+  return {
+    bookingsCount: row?.bookingsCount || 0,
+    paymentsCount: row?.paymentsCount || 0,
+    revenue: row?.revenue || 0,
+    avgPerBooking: row?.bookingsCount ? Math.round(row.revenue / row.bookingsCount) : 0,
+    firstPaymentAt: row?.firstPaymentAt || null,
+    lastPaymentAt: row?.lastPaymentAt || null,
+  };
+}
 
 // ------------------------------------------------------------
 // RESULT SHAPERS
@@ -1497,11 +1492,9 @@ function prFinalizeKpis(raw) {
   };
   delete k._id;
 
-  k.avgPayment = k.receivedCount ? Math.round(k.received / k.receivedCount) : 0;
-  k.revenuePerBooking = k.bookingsCount ? Math.round(k.netRevenue / k.bookingsCount) : 0;
-  k.refundRate = prPct(k.refunded, k.received);
-  k.unsettled = Math.max(0, k.received - k.settled);
-  k.settledRate = prPct(k.settled, k.received);
+  k.avgPerBooking = k.bookingsCount ? Math.round(k.revenue / k.bookingsCount) : 0;
+  k.unsettled = Math.max(0, k.revenue - k.settled);
+  k.settledRate = prPct(k.settled, k.revenue);
 
   return k;
 }
@@ -1517,17 +1510,15 @@ function prChannels(k) {
 
 function prBuildGrowth(current, previous) {
   return {
-    netRevenue: prGrowth(current.netRevenue, previous.netRevenue),
-    received: prGrowth(current.received, previous.received),
-    refunded: prGrowth(current.refunded, previous.refunded),
-    paymentsCount: prGrowth(current.paymentsCount, previous.paymentsCount),
+    revenue: prGrowth(current.revenue, previous.revenue),
     bookingsCount: prGrowth(current.bookingsCount, previous.bookingsCount),
-    revenuePerBooking: prGrowth(current.revenuePerBooking, previous.revenuePerBooking),
+    avgPerBooking: prGrowth(current.avgPerBooking, previous.avgPerBooking),
+    customersCount: prGrowth(current.customersCount, previous.customersCount),
   };
 }
 
-// Zero-filled trend. Keys outside the buckets (e.g. an October-trip payment
-// with no trip date) are kept at the end so no money is hidden.
+// Zero-filled trend. Keys outside the buckets are returned separately
+// so their money is never hidden.
 function prBuildTrend(buckets, rows = []) {
   const byKey = new Map(rows.map((r) => [r._id, r]));
   const point = (key) => {
@@ -1535,19 +1526,18 @@ function prBuildTrend(buckets, rows = []) {
     return {
       key,
       payments: row?.payments || 0,
-      received: row?.received || 0,
-      refunded: row?.refunded || 0,
-      net: row?.net || 0,
+      bookings: row?.bookings || 0,
+      revenue: row?.revenue || 0,
     };
   };
 
   const bucketSet = new Set(buckets);
-  const extra = rows
+  const outside = rows
     .map((r) => r._id)
     .filter((key) => key && !bucketSet.has(key))
     .sort();
 
-  return { points: buckets.map(point), outside: extra.map(point) };
+  return { points: buckets.map(point), outside: outside.map(point) };
 }
 
 function prBuildMonthlyTrend(months, rows = []) {
@@ -1556,9 +1546,10 @@ function prBuildMonthlyTrend(months, rows = []) {
 }
 
 function prBuildYearTotals(monthlyTrend) {
+  const keys = [...Object.keys(PR_EMPTY_SUMS), "bookingsCount"];
   return prFinalizeKpis(
     monthlyTrend.reduce((acc, m) => {
-      Object.keys(PR_EMPTY_SUMS).forEach((key) => {
+      keys.forEach((key) => {
         acc[key] = (acc[key] || 0) + (m[key] || 0);
       });
       return acc;
@@ -1570,7 +1561,7 @@ function prBuildYearTotals(monthlyTrend) {
 // LOADER
 // ------------------------------------------------------------
 
-async function loadPaymentRevenue(params, companyId, now) {
+async function loadBookingRevenue(params, companyId, now) {
   const { basis, year, page, limit } = params;
 
   const period =
@@ -1579,12 +1570,7 @@ async function loadPaymentRevenue(params, companyId, now) {
   const listMatch = prListMatch(period.current, params);
 
   const pipeline = [
-    {
-      $match: {
-        ...(companyId ? { company: companyId } : {}),
-        ...period.prefilter,
-      },
-    },
+    { $match: { ...prBaseMatch(companyId), ...period.prefilter } },
     prFieldsStage(),
   ];
 
@@ -1594,7 +1580,6 @@ async function loadPaymentRevenue(params, companyId, now) {
     $facet: {
       current: prKpiFacet(period.current),
       previous: prKpiFacet(period.previous),
-      byType: prTypeFacet(period.current),
       topVehicles: prTopVehiclesFacet(period.current),
       trend: prTrendFacet(period.current, period.trend.keyExpr),
       yearly: prYearlyFacet(period.yearly.match, period.yearly.keyExpr),
@@ -1603,7 +1588,10 @@ async function loadPaymentRevenue(params, companyId, now) {
     },
   });
 
-  const [result = {}] = await PaymentHistory.aggregate(pipeline);
+  const [[result = {}], allTime] = await Promise.all([
+    PaymentHistory.aggregate(pipeline),
+    prLoadAllTime(companyId),
+  ]);
 
   const kpis = prFinalizeKpis(result.current?.[0]);
   const previousKpis = prFinalizeKpis(result.previous?.[0]);
@@ -1612,11 +1600,11 @@ async function loadPaymentRevenue(params, companyId, now) {
   const total = result.listTotal?.[0]?.count || 0;
 
   return {
-    source: "paymentHistory",
+    source: "paymentHistory:booking",
     filters: {
       basis,
       year,
-      type: params.type,
+      paymentType: PR_PAYMENT_TYPE,
       method: params.method,
       search: params.search,
       timezone: "Asia/Kolkata",
@@ -1626,16 +1614,16 @@ async function loadPaymentRevenue(params, companyId, now) {
     previousKpis,
     growth: prBuildGrowth(kpis, previousKpis),
     channels: prChannels(kpis),
-    byType: result.byType || [],
     topVehicles: result.topVehicles || [],
     trend: {
       granularity: period.trend.granularity,
-      groupedBy: period.trend.label,
+      groupedBy: period.trend.groupedBy,
       points: trend.points,
       outside: trend.outside,
     },
     monthlyTrend,
     yearTotals: prBuildYearTotals(monthlyTrend),
+    allTime,
     payments: result.payments || [],
     pagination: { page, limit, total, totalPages: Math.ceil(total / limit) },
   };
@@ -1646,13 +1634,13 @@ async function loadPaymentRevenue(params, companyId, now) {
 //
 // ?basis=booking&month=2026-10
 // ?basis=created&range=today|7d|month
-// + &type=&method=&search=&page=1&limit=20&year=
+// + &method=&search=&page=1&limit=20&year=
 // ============================================================
 
 export const getBookingDashboardRevenue = async (req, res) => {
   try {
     const now = new Date();
-    const { params, error } = parsePaymentRevenueQuery(req.query, now);
+    const { params, error } = parseBookingRevenueQuery(req.query, now);
 
     if (error) {
       return res.status(400).json({ success: false, message: error });
@@ -1665,7 +1653,7 @@ export const getBookingDashboardRevenue = async (req, res) => {
         ? new mongoose.Types.ObjectId(String(rawCompany))
         : null;
 
-    const data = await loadPaymentRevenue(params, companyId, now);
+    const data = await loadBookingRevenue(params, companyId, now);
 
     return res.status(200).json({ success: true, generatedAt: now, ...data });
   } catch (error) {
