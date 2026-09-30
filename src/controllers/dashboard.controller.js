@@ -16,6 +16,13 @@ import {
   toRevenueRow,
 } from "../utils/revenue.utils.js";
 
+import {
+  loadRevenueVehicles,
+  loadRevenuePayments,
+  loadRevenueBookings,
+  loadRevenueServiceDays,
+} from "../services/revenue.service.js";
+
 export const getVehiclesForImport = async (req, res) => {
   try {
     const vehicles = await Vehicle.find({
