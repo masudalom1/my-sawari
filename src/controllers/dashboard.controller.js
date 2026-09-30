@@ -1299,7 +1299,7 @@ async function loadBookingDashboard(params, companyId) {
 // ?month=2026-10&year=2026&status=&search=&page=1&limit=20
 // ============================================================
  
-export const getBookingDashboard = async (req, res) => {
+export const getBookingDashboardRevenue = async (req, res) => {
   try {
     const { params, error } = parseBookingDashboardQuery(req.query);
  
