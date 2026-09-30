@@ -933,3 +933,397 @@ export const getVehicleRevenue = async (req, res) => {
     });
   }
 };
+
+const BD_MONTH_REGEX = /^\d{4}-(0[1-9]|1[0-2])$/;
+ 
+const bdPad = (n) => String(n).padStart(2, "0");
+ 
+// Current month in IST (matches the rest of this dashboard).
+function bdCurrentMonth() {
+  const p = getISTParts(new Date());
+  return `${p.year}-${bdPad(p.month + 1)}`;
+}
+ 
+function bdPreviousMonth(monthStr) {
+  const [y, m] = monthStr.split("-").map(Number);
+  const d = new Date(Date.UTC(y, m - 2, 1));
+  return `${d.getUTCFullYear()}-${bdPad(d.getUTCMonth() + 1)}`;
+}
+ 
+function bdYearMonths(year) {
+  return Array.from({ length: 12 }, (_, i) => `${year}-${bdPad(i + 1)}`);
+}
+ 
+// Earliest start / latest end across months (UTC, booking dates are UTC midnight).
+function bdMonthsDateSpan(months) {
+  const starts = months.map((m) => {
+    const [y, mo] = m.split("-").map(Number);
+    return Date.UTC(y, mo - 1, 1);
+  });
+  const ends = months.map((m) => {
+    const [y, mo] = m.split("-").map(Number);
+    return Date.UTC(y, mo, 1);
+  });
+  return { start: new Date(Math.min(...starts)), end: new Date(Math.max(...ends)) };
+}
+ 
+function bdGrowth(current, previous) {
+  if (!previous) return current ? 100 : 0;
+  return Math.round(((current - previous) / previous) * 1000) / 10;
+}
+ 
+function bdEscapeRegex(text) {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+ 
+// Returns { params } or { error }.
+function parseBookingDashboardQuery(query = {}) {
+  const month = query.month?.trim() || bdCurrentMonth();
+ 
+  if (!BD_MONTH_REGEX.test(month)) {
+    return { error: "Month must be in YYYY-MM format." };
+  }
+ 
+  const year = Number(query.year) || Number(month.slice(0, 4));
+ 
+  if (year < 2000 || year > 2100) {
+    return { error: "Invalid year." };
+  }
+ 
+  return {
+    params: {
+      month,
+      year,
+      page: Math.max(1, Number(query.page) || 1),
+      limit: Math.min(100, Math.max(1, Number(query.limit) || 20)),
+      status: query.status?.trim() || null,
+      search: query.search?.trim() || null,
+    },
+  };
+}
+ 
+// ---------- Aggregation expressions ----------
+ 
+const BD_RESOLVED_MONTH = {
+  $cond: [
+    { $ne: [{ $ifNull: ["$bookingMonth", ""] }, ""] },
+    "$bookingMonth",
+    {
+      $ifNull: [
+        { $dateToString: { format: "%Y-%m", date: "$fromDate", timezone: "UTC" } },
+        { $dateToString: { format: "%Y-%m", date: "$toDate", timezone: "UTC" } },
+      ],
+    },
+  ],
+};
+ 
+const BD_NOT_CANCELLED = { $ne: ["$status", "cancelled"] };
+const BD_NET = { $subtract: ["$_gross", "$_discount"] };
+ 
+const bdSumIfBillable = (field) => ({ $sum: { $cond: [BD_NOT_CANCELLED, field, 0] } });
+const bdCountIfStatus = (statuses) => ({
+  $sum: { $cond: [{ $in: ["$status", statuses] }, 1, 0] },
+});
+ 
+const BD_KPI_GROUP = {
+  totalBookings: { $sum: 1 },
+  cancelledBookings: bdCountIfStatus(["cancelled"]),
+  completedBookings: bdCountIfStatus(["completed"]),
+  activeBookings: bdCountIfStatus(HANDED_OVER_STATUSES),
+  upcomingBookings: bdCountIfStatus(["confirmed", "handover_pending"]),
+ 
+  // Revenue excludes cancelled bookings.
+  grossRevenue: bdSumIfBillable("$_gross"),
+  totalDiscount: bdSumIfBillable("$_discount"),
+  advanceCollected: bdSumIfBillable("$_advance"),
+  securityDeposits: bdSumIfBillable("$_deposit"),
+  pendingBalance: bdSumIfBillable("$_balance"),
+  rentalDays: bdSumIfBillable("$_days"),
+};
+ 
+const BD_EMPTY_KPIS = Object.fromEntries(Object.keys(BD_KPI_GROUP).map((k) => [k, 0]));
+ 
+// ---------- Pipeline builders ----------
+ 
+function bdBaseMatch(months, companyId) {
+  const { start, end } = bdMonthsDateSpan(months);
+ 
+  const match = {
+    isDeleted: false,
+    $or: [
+      { bookingMonth: { $in: months } },
+      { fromDate: { $gte: start, $lt: end } },
+      { fromDate: null, toDate: { $gte: start, $lt: end } },
+    ],
+  };
+ 
+  if (companyId) match.company = companyId;
+ 
+  return { $match: match };
+}
+ 
+function bdComputedFields() {
+  return {
+    $addFields: {
+      resolvedMonth: BD_RESOLVED_MONTH,
+      _gross: { $ifNull: ["$payment.totalAmount", { $ifNull: ["$quotationAmount", 0] }] },
+      _discount: { $ifNull: ["$payment.discountAmount", { $ifNull: ["$discountAmount", 0] }] },
+      _advance: { $ifNull: ["$payment.bookingAmountPaid", { $ifNull: ["$bookingAmount", 0] }] },
+      _deposit: { $ifNull: ["$payment.securityDeposit", { $ifNull: ["$securityDeposit", 0] }] },
+      _balance: { $ifNull: ["$payment.balanceAmount", 0] },
+      _days: { $ifNull: ["$totalDays", 1] },
+    },
+  };
+}
+ 
+function bdListMatch({ month, status, search }) {
+  const match = { resolvedMonth: month };
+ 
+  if (status) match.status = status;
+ 
+  if (search) {
+    const regex = new RegExp(bdEscapeRegex(search), "i");
+    match.$or = [
+      { customerName: regex },
+      { mobileNumber: regex },
+      { bookingCode: regex },
+      { vehicleName: regex },
+      { vehicleNumber: regex },
+    ];
+  }
+ 
+  return match;
+}
+ 
+// ---------- Facets (one per dashboard section) ----------
+ 
+const bdKpiFacet = (month) => [
+  { $match: { resolvedMonth: month } },
+  { $group: { _id: null, ...BD_KPI_GROUP } },
+];
+ 
+const bdStatusFacet = (month) => [
+  { $match: { resolvedMonth: month } },
+  { $group: { _id: "$status", count: { $sum: 1 }, revenue: { $sum: BD_NET } } },
+  { $project: { _id: 0, status: "$_id", count: 1, revenue: 1 } },
+  { $sort: { count: -1 } },
+];
+ 
+const bdPaymentMethodsFacet = (month) => [
+  { $match: { resolvedMonth: month, status: { $ne: "cancelled" } } },
+  {
+    $group: {
+      _id: null,
+      cash: { $sum: { $ifNull: ["$payment.paymentBreakdown.cash", 0] } },
+      phonePe: { $sum: { $ifNull: ["$payment.paymentBreakdown.phonePe", 0] } },
+      razorpay: { $sum: { $ifNull: ["$payment.paymentBreakdown.razorpay", 0] } },
+    },
+  },
+  { $project: { _id: 0 } },
+];
+ 
+const bdTopVehiclesFacet = (month, limit = 5) => [
+  { $match: { resolvedMonth: month, status: { $ne: "cancelled" } } },
+  {
+    $group: {
+      _id: "$vehicleId",
+      vehicleName: { $first: "$vehicleName" },
+      vehicleNumber: { $first: "$vehicleNumber" },
+      bookings: { $sum: 1 },
+      rentalDays: { $sum: "$_days" },
+      revenue: { $sum: BD_NET },
+    },
+  },
+  { $sort: { revenue: -1 } },
+  { $limit: limit },
+  {
+    $project: {
+      _id: 0,
+      vehicleId: "$_id",
+      vehicleName: 1,
+      vehicleNumber: 1,
+      bookings: 1,
+      rentalDays: 1,
+      revenue: 1,
+    },
+  },
+];
+ 
+const bdDailyTrendFacet = (month) => [
+  { $match: { resolvedMonth: month, status: { $ne: "cancelled" } } },
+  {
+    $group: {
+      _id: { $dateToString: { format: "%Y-%m-%d", date: "$fromDate", timezone: "UTC" } },
+      bookings: { $sum: 1 },
+      revenue: { $sum: BD_NET },
+    },
+  },
+  { $sort: { _id: 1 } },
+  { $project: { _id: 0, date: "$_id", bookings: 1, revenue: 1 } },
+];
+ 
+const bdMonthlyTrendFacet = (months) => [
+  { $match: { resolvedMonth: { $in: months } } },
+  { $group: { _id: "$resolvedMonth", ...BD_KPI_GROUP } },
+];
+ 
+const bdListTotalFacet = (listMatch) => [{ $match: listMatch }, { $count: "count" }];
+ 
+const bdBookingsFacet = (listMatch, page, limit) => [
+  { $match: listMatch },
+  { $sort: { fromDate: 1, createdAt: -1 } },
+  { $skip: (page - 1) * limit },
+  { $limit: limit },
+  {
+    $project: {
+      bookingCode: 1,
+      customerName: 1,
+      mobileNumber: 1,
+      vehicleId: 1,
+      vehicleName: 1,
+      vehicleNumber: 1,
+      fromDate: 1,
+      toDate: 1,
+      pickupTime: 1,
+      dropTime: 1,
+      totalDays: 1,
+      status: 1,
+      bookingMonth: "$resolvedMonth",
+      grossAmount: "$_gross",
+      discountAmount: "$_discount",
+      netAmount: BD_NET,
+      advancePaid: "$_advance",
+      securityDeposit: "$_deposit",
+      balanceAmount: "$_balance",
+      paymentMethod: "$payment.paymentMethod",
+      paymentStatus: "$payment.paymentStatus",
+      createdAt: 1,
+    },
+  },
+];
+ 
+// ---------- Result shapers ----------
+ 
+function bdFinalizeKpis(raw) {
+  const k = { ...BD_EMPTY_KPIS, ...(raw || {}) };
+  delete k._id;
+ 
+  const billable = k.totalBookings - k.cancelledBookings;
+ 
+  k.netRevenue = k.grossRevenue - k.totalDiscount;
+  k.avgBookingValue = billable ? Math.round(k.netRevenue / billable) : 0;
+  k.avgRentalDays = billable ? Math.round((k.rentalDays / billable) * 10) / 10 : 0;
+  k.cancellationRate = k.totalBookings
+    ? Math.round((k.cancelledBookings / k.totalBookings) * 1000) / 10
+    : 0;
+ 
+  return k;
+}
+ 
+function bdBuildGrowth(current, previous) {
+  return {
+    totalBookings: bdGrowth(current.totalBookings, previous.totalBookings),
+    netRevenue: bdGrowth(current.netRevenue, previous.netRevenue),
+    advanceCollected: bdGrowth(current.advanceCollected, previous.advanceCollected),
+    avgBookingValue: bdGrowth(current.avgBookingValue, previous.avgBookingValue),
+  };
+}
+ 
+function bdBuildMonthlyTrend(months, rows = []) {
+  const byMonth = new Map(rows.map((r) => [r._id, r]));
+  return months.map((m) => ({ month: m, ...bdFinalizeKpis(byMonth.get(m)) }));
+}
+ 
+function bdBuildYearTotals(monthlyTrend) {
+  return bdFinalizeKpis(
+    monthlyTrend.reduce((acc, m) => {
+      Object.keys(BD_EMPTY_KPIS).forEach((key) => {
+        acc[key] = (acc[key] || 0) + (m[key] || 0);
+      });
+      return acc;
+    }, {}),
+  );
+}
+ 
+// ---------- Data loader ----------
+ 
+async function loadBookingDashboard(params, companyId) {
+  const { month, year, page, limit, status, search } = params;
+ 
+  const prevMonth = bdPreviousMonth(month);
+  const months = bdYearMonths(year);
+  const allMonths = [...new Set([month, prevMonth, ...months])];
+  const listMatch = bdListMatch({ month, status, search });
+ 
+  const [result = {}] = await Booking.aggregate([
+    bdBaseMatch(allMonths, companyId),
+    bdComputedFields(),
+    { $match: { resolvedMonth: { $in: allMonths } } },
+    {
+      $facet: {
+        current: bdKpiFacet(month),
+        previous: bdKpiFacet(prevMonth),
+        statusBreakdown: bdStatusFacet(month),
+        paymentMethods: bdPaymentMethodsFacet(month),
+        topVehicles: bdTopVehiclesFacet(month),
+        dailyTrend: bdDailyTrendFacet(month),
+        monthlyTrend: bdMonthlyTrendFacet(months),
+        listTotal: bdListTotalFacet(listMatch),
+        bookings: bdBookingsFacet(listMatch, page, limit),
+      },
+    },
+  ]);
+ 
+  const kpis = bdFinalizeKpis(result.current?.[0]);
+  const prevKpis = bdFinalizeKpis(result.previous?.[0]);
+  const monthlyTrend = bdBuildMonthlyTrend(months, result.monthlyTrend);
+  const total = result.listTotal?.[0]?.count || 0;
+ 
+  return {
+    filters: { month, previousMonth: prevMonth, year, status, search },
+    kpis,
+    growth: bdBuildGrowth(kpis, prevKpis),
+    statusBreakdown: result.statusBreakdown || [],
+    paymentMethods: result.paymentMethods?.[0] || { cash: 0, phonePe: 0, razorpay: 0 },
+    topVehicles: result.topVehicles || [],
+    dailyTrend: result.dailyTrend || [],
+    monthlyTrend,
+    yearTotals: bdBuildYearTotals(monthlyTrend),
+    bookings: result.bookings || [],
+    pagination: { page, limit, total, totalPages: Math.ceil(total / limit) },
+  };
+}
+ 
+// ============================================================
+// GET /api/dashboard/bookings
+// ?month=2026-10&year=2026&status=&search=&page=1&limit=20
+// ============================================================
+ 
+export const getBookingDashboard = async (req, res) => {
+  try {
+    const { params, error } = parseBookingDashboardQuery(req.query);
+ 
+    if (error) {
+      return res.status(400).json({ success: false, message: error });
+    }
+ 
+    // Scope to the user's company when available.
+    const rawCompany = req.user?.company || req.user?._id;
+    const companyId =
+      rawCompany && mongoose.Types.ObjectId.isValid(String(rawCompany))
+        ? new mongoose.Types.ObjectId(String(rawCompany))
+        : null;
+ 
+    const data = await loadBookingDashboard(params, companyId);
+ 
+    return res.status(200).json({ success: true, generatedAt: new Date(), ...data });
+  } catch (error) {
+    console.error("Get booking dashboard error:", error);
+ 
+    return res.status(500).json({
+      success: false,
+      message: "Failed to build booking dashboard",
+      error: error.message,
+    });
+  }
+};

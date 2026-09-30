@@ -1,7 +1,8 @@
 import express from "express";
 
 import protect from "../middlewares/auth.middleware.js"
-import { createMaintenance, getBookingsForImport, getDashboardStats, getMaintenances, getPaymentsForImport, getVehicleRevenue, getVehiclesForImport } from "../controllers/dashboard.controller.js";
+import { createMaintenance, getBookingDashboard, getBookingsForImport, getDashboardStats, getMaintenances, getPaymentsForImport, getVehicleRevenue, getVehiclesForImport } from "../controllers/dashboard.controller.js";
+import { getBookingsDashboard } from "../controllers/lead.controller.js";
 
 const router = express.Router();
 
@@ -12,5 +13,6 @@ router.post("/maintenance", createMaintenance);
 router.get("/maintenance", getMaintenances);
 router.get("/stats", getDashboardStats);
 router.get("/revenue/vehicles", getVehicleRevenue);
+router.get("/bookings", protect, getBookingsDashboard);
 
 export default router;
