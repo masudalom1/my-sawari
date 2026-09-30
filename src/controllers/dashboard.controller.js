@@ -1725,6 +1725,208 @@ export const getBookingDashboardRevenue = async (req, res) => {
   }
 };
 
+const BOOKING_PAYMENT_COLUMNS = [
+  { key: "paymentDate", label: "Payment Date" },
+  { key: "bookingMonth", label: "Booking Month" },
+  { key: "customerName", label: "Customer Name" },
+  { key: "mobileNumber", label: "Mobile" },
+  { key: "vehicleName", label: "Vehicle" },
+  { key: "vehicleNumber", label: "Vehicle No." },
+  { key: "fromDate", label: "From" },
+  { key: "toDate", label: "To" },
+  { key: "bookingAmount", label: "Booking Amount" },
+  { key: "amount", label: "Paid Amount" },
+  { key: "paymentMethod", label: "Method" },
+  { key: "cash", label: "Cash" },
+  { key: "phonePe", label: "PhonePe" },
+  { key: "razorpay", label: "Razorpay" },
+  { key: "upiLast4", label: "UPI Last 4" },
+  { key: "isCollected", label: "Collected" },
+  { key: "collectedAmount", label: "Collected Amount" },
+  { key: "collectedPhonePe", label: "Collected PhonePe" },
+  { key: "lastCollectedAt", label: "Last Collected At" },
+  { key: "createdByName", label: "Created By" },
+  { key: "note", label: "Note" },
+];
+
+const SORTABLE_FIELDS = ["createdAt", "amount", "booking.fromDate", "bookingMonth"];
+
+const escapeRegex = (str) => str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+export const getBookingPayments = async (req, res) => {
+  try {
+    const {
+      month,          // "YYYY-MM"
+      fromDate,       // payment created from (ISO date)
+      toDate,         // payment created to (ISO date)
+      paymentMethod,  // cash | phonepe | razorpay | mixed
+      isCollected,    // "true" | "false"
+      search,         // customer name / mobile / vehicle number
+      page = 1,
+      limit = 50,
+      all,            // "true" => no pagination (full export)
+      sortBy = "createdAt",
+      sortOrder = "desc",
+    } = req.query;
+
+    // ---------- Company scope ----------
+    const companyId = req.user?.company || req.query.company;
+    if (!companyId || !mongoose.Types.ObjectId.isValid(companyId)) {
+      return res.status(400).json({ success: false, message: "Valid company is required" });
+    }
+
+    const filter = {
+      company: new mongoose.Types.ObjectId(companyId),
+      type: "booking",
+    };
+    const and = [];
+
+    // ---------- Month filter (supports old records without bookingMonth) ----------
+    if (month) {
+      if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) {
+        return res.status(400).json({ success: false, message: "month must be YYYY-MM" });
+      }
+      const [y, m] = month.split("-").map(Number);
+      const start = new Date(Date.UTC(y, m - 1, 1));
+      const end = new Date(Date.UTC(y, m, 1));
+
+      and.push({
+        $or: [
+          { bookingMonth: month },
+          { bookingMonth: null, "booking.fromDate": { $gte: start, $lt: end } },
+          { bookingMonth: null, "booking.fromDate": null, "booking.toDate": { $gte: start, $lt: end } },
+        ],
+      });
+    }
+
+    // ---------- Payment date range ----------
+    if (fromDate || toDate) {
+      const range = {};
+      if (fromDate) {
+        const d = new Date(fromDate);
+        if (!isNaN(d)) range.$gte = d;
+      }
+      if (toDate) {
+        const d = new Date(toDate);
+        if (!isNaN(d)) {
+          d.setUTCHours(23, 59, 59, 999);
+          range.$lte = d;
+        }
+      }
+      if (Object.keys(range).length) filter.createdAt = range;
+    }
+
+    // ---------- Other filters ----------
+    if (paymentMethod && ["cash", "phonepe", "razorpay", "mixed"].includes(paymentMethod)) {
+      filter.paymentMethod = paymentMethod;
+    }
+
+    if (isCollected === "true" || isCollected === "false") {
+      filter.isCollected = isCollected === "true";
+    }
+
+    if (search?.trim()) {
+      const rx = new RegExp(escapeRegex(search.trim()), "i");
+      and.push({
+        $or: [
+          { "customer.fullName": rx },
+          { "customer.mobileNumber": rx },
+          { "vehicle.vehicleNumber": rx },
+          { "vehicle.vehicleName": rx },
+        ],
+      });
+    }
+
+    if (and.length) filter.$and = and;
+
+    // ---------- Sorting & pagination ----------
+    const sortField = SORTABLE_FIELDS.includes(sortBy) ? sortBy : "createdAt";
+    const sort = { [sortField]: sortOrder === "asc" ? 1 : -1, _id: -1 };
+
+    const exportAll = all === "true";
+    const pageNum = Math.max(parseInt(page, 10) || 1, 1);
+    const limitNum = Math.min(Math.max(parseInt(limit, 10) || 50, 1), 500);
+
+    let query = PaymentHistory.find(filter)
+      .select("-collectionHistory -__v")
+      .populate("createdBy", "name")
+      .sort(sort)
+      .lean();
+
+    if (!exportAll) query = query.skip((pageNum - 1) * limitNum).limit(limitNum);
+
+    const [payments, total, summaryAgg] = await Promise.all([
+      query,
+      PaymentHistory.countDocuments(filter),
+      PaymentHistory.aggregate([
+        { $match: filter },
+        {
+          $group: {
+            _id: null,
+            totalAmount: { $sum: "$amount" },
+            totalCash: { $sum: "$paymentBreakdown.cash" },
+            totalPhonePe: { $sum: "$paymentBreakdown.phonePe" },
+            totalRazorpay: { $sum: "$paymentBreakdown.razorpay" },
+            totalCollected: { $sum: "$collectedAmount" },
+            totalCollectedPhonePe: { $sum: "$collectedPhonePe" },
+            collectedCount: { $sum: { $cond: ["$isCollected", 1, 0] } },
+          },
+        },
+      ]),
+    ]);
+
+    // ---------- Flatten for sheet ----------
+    const rows = payments.map((p) => ({
+      _id: p._id,
+      bookingId: p.bookingId,
+      paymentDate: p.createdAt,
+      bookingMonth:
+        p.bookingMonth ||
+        toBookingMonth(p.booking?.fromDate) ||
+        toBookingMonth(p.booking?.toDate) ||
+        "",
+      customerName: p.customer?.fullName || "",
+      mobileNumber: p.customer?.mobileNumber || "",
+      vehicleName: p.vehicle?.vehicleName || "",
+      vehicleNumber: p.vehicle?.vehicleNumber || "",
+      fromDate: p.booking?.fromDate || null,
+      toDate: p.booking?.toDate || null,
+      bookingAmount: p.booking?.bookingAmount || 0,
+      amount: p.amount || 0,
+      paymentMethod: p.paymentMethod,
+      cash: p.paymentBreakdown?.cash || 0,
+      phonePe: p.paymentBreakdown?.phonePe || 0,
+      razorpay: p.paymentBreakdown?.razorpay || 0,
+      upiLast4: (p.upiLast4 || []).join(", "),
+      isCollected: !!p.isCollected,
+      collectedAmount: p.collectedAmount || 0,
+      collectedPhonePe: p.collectedPhonePe || 0,
+      lastCollectedAt: p.lastCollectedAt || null,
+      createdByName: p.createdBy?.name || "",
+      note: p.note || "",
+    }));
+
+    const summary = summaryAgg[0] || {
+      totalAmount: 0, totalCash: 0, totalPhonePe: 0, totalRazorpay: 0,
+      totalCollected: 0, totalCollectedPhonePe: 0, collectedCount: 0,
+    };
+    delete summary._id;
+
+    return res.status(200).json({
+      success: true,
+      columns: BOOKING_PAYMENT_COLUMNS,
+      rows,
+      summary: { ...summary, count: total, pendingCount: total - summary.collectedCount },
+      pagination: exportAll
+        ? { total, page: 1, limit: total, totalPages: 1 }
+        : { total, page: pageNum, limit: limitNum, totalPages: Math.ceil(total / limitNum) },
+    });
+  } catch (error) {
+    console.error("getBookingPayments error:", error);
+    return res.status(500).json({ success: false, message: "Failed to fetch booking payments" });
+  }
+};
+
 // Aliases so older route imports keep working.
 export const getBookingDashboard = getBookingDashboardRevenue;
 export const getBookingsDashboard = getBookingDashboardRevenue;
