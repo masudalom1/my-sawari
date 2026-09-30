@@ -2,8 +2,7 @@ import mongoose from "mongoose";
 import Maintenance from "../models/maintenance.model.js";
 import Vehicle from "../models/vehicle.model.js";
 import Booking from "../models/booking.model.js";
-import PaymentHistory from "../models/paymentHistory.model.js";
-
+import PaymentHistory, { toBookingMonth } from "../models/paymentHistory.model.js";
 import {
   parseRevenueRange,
   daysBetweenKeys,
