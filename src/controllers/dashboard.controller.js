@@ -934,28 +934,34 @@ export const getVehicleRevenue = async (req, res) => {
   }
 };
 
-const BD_MONTH_REGEX = /^\d{4}-(0[1-9]|1[0-2])$/;
+const BR_MONTH_REGEX = /^\d{4}-(0[1-9]|1[0-2])$/;
+const BR_BASES = ["booking", "created"];
+const BR_RANGES = ["today", "7d", "month"];
+const BR_IST_TZ = "+05:30";
  
-const bdPad = (n) => String(n).padStart(2, "0");
+const brPad = (n) => String(n).padStart(2, "0");
  
-// Current month in IST (matches the rest of this dashboard).
-function bdCurrentMonth() {
-  const p = getISTParts(new Date());
-  return `${p.year}-${bdPad(p.month + 1)}`;
+function brMonthKey(year, monthIndex) {
+  const d = new Date(Date.UTC(year, monthIndex, 1));
+  return `${d.getUTCFullYear()}-${brPad(d.getUTCMonth() + 1)}`;
 }
  
-function bdPreviousMonth(monthStr) {
+function brCurrentMonth(now) {
+  const p = getISTParts(now);
+  return brMonthKey(p.year, p.month);
+}
+ 
+function brPreviousMonth(monthStr) {
   const [y, m] = monthStr.split("-").map(Number);
-  const d = new Date(Date.UTC(y, m - 2, 1));
-  return `${d.getUTCFullYear()}-${bdPad(d.getUTCMonth() + 1)}`;
+  return brMonthKey(y, m - 2);
 }
  
-function bdYearMonths(year) {
-  return Array.from({ length: 12 }, (_, i) => `${year}-${bdPad(i + 1)}`);
+function brYearMonths(year) {
+  return Array.from({ length: 12 }, (_, i) => brMonthKey(year, i));
 }
  
-// Earliest start / latest end across months (UTC, booking dates are UTC midnight).
-function bdMonthsDateSpan(months) {
+// Earliest start / latest end across months (UTC; trip dates are stored at UTC midnight).
+function brMonthsDateSpan(months) {
   const starts = months.map((m) => {
     const [y, mo] = m.split("-").map(Number);
     return Date.UTC(y, mo - 1, 1);
@@ -967,24 +973,48 @@ function bdMonthsDateSpan(months) {
   return { start: new Date(Math.min(...starts)), end: new Date(Math.max(...ends)) };
 }
  
-function bdGrowth(current, previous) {
+function brISTDayKey(date) {
+  const p = getISTParts(date);
+  return `${p.year}-${brPad(p.month + 1)}-${brPad(p.day)}`;
+}
+ 
+function brGrowth(current, previous) {
   if (!previous) return current ? 100 : 0;
   return Math.round(((current - previous) / previous) * 1000) / 10;
 }
  
-function bdEscapeRegex(text) {
+function brPct(part, whole) {
+  if (!whole) return 0;
+  return Math.round((part / whole) * 1000) / 10;
+}
+ 
+function brEscapeRegex(text) {
   return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
  
-// Returns { params } or { error }.
-function parseBookingDashboardQuery(query = {}) {
-  const month = query.month?.trim() || bdCurrentMonth();
+// ------------------------------------------------------------
+// QUERY
+// ------------------------------------------------------------
  
-  if (!BD_MONTH_REGEX.test(month)) {
-    return { error: "Month must be in YYYY-MM format." };
+// Returns { params } or { error }.
+function parseBookingRevenueQuery(query = {}, now = new Date()) {
+  const basis = query.basis ? String(query.basis).trim() : "booking";
+  if (!BR_BASES.includes(basis)) {
+    return { error: "basis must be 'booking' or 'created'." };
   }
  
-  const year = Number(query.year) || Number(month.slice(0, 4));
+  const range = query.range ? String(query.range).trim() : "month";
+  if (!BR_RANGES.includes(range)) {
+    return { error: "range must be 'today', '7d' or 'month'." };
+  }
+ 
+  const month = query.month ? String(query.month).trim() : brCurrentMonth(now);
+  if (!BR_MONTH_REGEX.test(month)) {
+    return { error: "month must be in YYYY-MM format." };
+  }
+ 
+  const defaultYear = basis === "booking" ? Number(month.slice(0, 4)) : getISTParts(now).year;
+  const year = Number(query.year) || defaultYear;
  
   if (year < 2000 || year > 2100) {
     return { error: "Invalid year." };
@@ -992,19 +1022,140 @@ function parseBookingDashboardQuery(query = {}) {
  
   return {
     params: {
+      basis,
+      range,
       month,
       year,
       page: Math.max(1, Number(query.page) || 1),
       limit: Math.min(100, Math.max(1, Number(query.limit) || 20)),
-      status: query.status?.trim() || null,
-      search: query.search?.trim() || null,
+      status: query.status ? String(query.status).trim() : null,
+      search: query.search ? String(query.search).trim() : null,
     },
   };
 }
  
-// ---------- Aggregation expressions ----------
+// ------------------------------------------------------------
+// PERIODS
+// ------------------------------------------------------------
  
-const BD_RESOLVED_MONTH = {
+// basis=booking: by resolved booking month.
+function brBookingMonthPeriod({ month, year }) {
+  const previousMonth = brPreviousMonth(month);
+  const months = brYearMonths(year);
+  const allMonths = [...new Set([month, previousMonth, ...months])];
+  const { start, end } = brMonthsDateSpan(allMonths);
+ 
+  const [y, m] = month.split("-").map(Number);
+  const daysInMonth = new Date(Date.UTC(y, m, 0)).getUTCDate();
+ 
+  return {
+    // Index-friendly pre-filter; the exact month check happens after resolvedMonth is computed.
+    prefilter: {
+      $or: [
+        { bookingMonth: { $in: allMonths } },
+        { fromDate: { $gte: start, $lt: end } },
+        { fromDate: null, toDate: { $gte: start, $lt: end } },
+      ],
+    },
+    scope: { resolvedMonth: { $in: allMonths } },
+    current: { resolvedMonth: month },
+    previous: { resolvedMonth: previousMonth },
+    trend: {
+      granularity: "day",
+      keyExpr: { $dateToString: { format: "%Y-%m-%d", date: "$fromDate", timezone: "UTC" } },
+      buckets: Array.from({ length: daysInMonth }, (_, i) => `${month}-${brPad(i + 1)}`),
+    },
+    yearly: {
+      months,
+      match: { resolvedMonth: { $in: months } },
+      keyExpr: "$resolvedMonth",
+    },
+    listSort: { fromDate: 1, createdAt: -1 },
+    meta: { month, previousMonth },
+  };
+}
+ 
+// basis=created: by createdAt in IST.
+function brCreatedPeriod({ range, year }, now) {
+  const p = getISTParts(now);
+ 
+  let start;
+  let prevStart;
+  let granularity = "day";
+  let dayCount = 0;
+ 
+  if (range === "today") {
+    start = makeISTDate(p.year, p.month, p.day);
+    prevStart = new Date(start.getTime() - DAY_MS);
+    granularity = "hour";
+  } else if (range === "7d") {
+    start = makeISTDate(p.year, p.month, p.day - 6);
+    prevStart = new Date(start.getTime() - 7 * DAY_MS);
+    dayCount = 7;
+  } else {
+    start = makeISTDate(p.year, p.month, 1);
+    prevStart = makeISTDate(p.year, p.month - 1, 1);
+    dayCount = p.day;
+  }
+ 
+  const end = now;
+ 
+  // Same elapsed time in the previous period -> fair comparison.
+  const prevEnd = new Date(
+    Math.min(prevStart.getTime() + (end.getTime() - start.getTime()), start.getTime()),
+  );
+ 
+  const yearStart = makeISTDate(year, 0, 1);
+  const yearEnd = makeISTDate(year + 1, 0, 1);
+ 
+  const lo = new Date(Math.min(prevStart.getTime(), yearStart.getTime()));
+  const hi = new Date(Math.max(end.getTime(), yearEnd.getTime()));
+ 
+  const todayKey = brISTDayKey(now);
+ 
+  const buckets =
+    granularity === "hour"
+      ? Array.from({ length: p.hour + 1 }, (_, h) => `${todayKey}T${brPad(h)}`)
+      : Array.from({ length: dayCount }, (_, i) =>
+          brISTDayKey(new Date(start.getTime() + i * DAY_MS)),
+        );
+ 
+  return {
+    prefilter: { createdAt: { $gte: lo, $lte: hi } },
+    scope: null,
+    current: { createdAt: { $gte: start, $lte: end } },
+    previous: { createdAt: { $gte: prevStart, $lt: prevEnd } },
+    trend: {
+      granularity,
+      keyExpr: {
+        $dateToString: {
+          format: granularity === "hour" ? "%Y-%m-%dT%H" : "%Y-%m-%d",
+          date: "$createdAt",
+          timezone: BR_IST_TZ,
+        },
+      },
+      buckets,
+    },
+    yearly: {
+      months: brYearMonths(year),
+      match: { createdAt: { $gte: yearStart, $lt: yearEnd } },
+      keyExpr: { $dateToString: { format: "%Y-%m", date: "$createdAt", timezone: BR_IST_TZ } },
+    },
+    listSort: { createdAt: -1 },
+    meta: {
+      range,
+      month: brMonthKey(p.year, p.month),
+      window: { start, end },
+      previousWindow: { start: prevStart, end: prevEnd },
+    },
+  };
+}
+ 
+// ------------------------------------------------------------
+// AGGREGATION EXPRESSIONS
+// ------------------------------------------------------------
+ 
+const BR_RESOLVED_MONTH = {
   $cond: [
     { $ne: [{ $ifNull: ["$bookingMonth", ""] }, ""] },
     "$bookingMonth",
@@ -1017,72 +1168,201 @@ const BD_RESOLVED_MONTH = {
   ],
 };
  
-const BD_NOT_CANCELLED = { $ne: ["$status", "cancelled"] };
-const BD_NET = { $subtract: ["$_gross", "$_discount"] };
+const brNum = (expr) => ({ $ifNull: [expr, 0] });
  
-const bdSumIfBillable = (field) => ({ $sum: { $cond: [BD_NOT_CANCELLED, field, 0] } });
-const bdCountIfStatus = (statuses) => ({
-  $sum: { $cond: [{ $in: ["$status", statuses] }, 1, 0] },
+// Breakdown total of one payment ("$$p").
+const brBreakdownTotal = (v) => ({
+  $add: [
+    brNum(`${v}.paymentBreakdown.cash`),
+    brNum(`${v}.paymentBreakdown.phonePe`),
+    brNum(`${v}.paymentBreakdown.razorpay`),
+  ],
 });
  
-const BD_KPI_GROUP = {
-  totalBookings: { $sum: 1 },
-  cancelledBookings: bdCountIfStatus(["cancelled"]),
-  completedBookings: bdCountIfStatus(["completed"]),
-  activeBookings: bdCountIfStatus(HANDED_OVER_STATUSES),
-  upcomingBookings: bdCountIfStatus(["confirmed", "handover_pending"]),
+// Amount of one payment: `amount`, or its breakdown total when amount is missing.
+const brPaymentAmount = (v) => ({
+  $cond: [{ $gt: [brNum(`${v}.amount`), 0] }, brNum(`${v}.amount`), brBreakdownTotal(v)],
+});
  
-  // Revenue excludes cancelled bookings.
-  grossRevenue: bdSumIfBillable("$_gross"),
-  totalDiscount: bdSumIfBillable("$_discount"),
-  advanceCollected: bdSumIfBillable("$_advance"),
-  securityDeposits: bdSumIfBillable("$_deposit"),
-  pendingBalance: bdSumIfBillable("$_balance"),
-  rentalDays: bdSumIfBillable("$_days"),
-};
+// Channel share of one payment: breakdown when present, otherwise the whole
+// amount goes to the payment method's channel.
+const brPaymentChannel = (v, key, method) => ({
+  $cond: [
+    { $gt: [brBreakdownTotal(v), 0] },
+    brNum(`${v}.paymentBreakdown.${key}`),
+    { $cond: [{ $eq: [`${v}.paymentMethod`, method] }, brPaymentAmount(v), 0] },
+  ],
+});
  
-const BD_EMPTY_KPIS = Object.fromEntries(Object.keys(BD_KPI_GROUP).map((k) => [k, 0]));
+const brPaymentOther = (v) => ({
+  $cond: [
+    {
+      $and: [
+        { $eq: [brBreakdownTotal(v), 0] },
+        { $not: [{ $in: [`${v}.paymentMethod`, ["cash", "phonepe", "razorpay"]] }] },
+      ],
+    },
+    brPaymentAmount(v),
+    0,
+  ],
+});
  
-// ---------- Pipeline builders ----------
+const brSumOver = (input, expr) => ({
+  $sum: { $map: { input, as: "p", in: expr } },
+});
  
-function bdBaseMatch(months, companyId) {
-  const { start, end } = bdMonthsDateSpan(months);
- 
-  const match = {
-    isDeleted: false,
-    $or: [
-      { bookingMonth: { $in: months } },
-      { fromDate: { $gte: start, $lt: end } },
-      { fromDate: null, toDate: { $gte: start, $lt: end } },
-    ],
-  };
- 
-  if (companyId) match.company = companyId;
- 
-  return { $match: match };
-}
- 
-function bdComputedFields() {
+// Stage 1: raw booking money fields (with fallbacks for older documents).
+function brBookingFieldsStage() {
   return {
     $addFields: {
-      resolvedMonth: BD_RESOLVED_MONTH,
+      resolvedMonth: BR_RESOLVED_MONTH,
       _gross: { $ifNull: ["$payment.totalAmount", { $ifNull: ["$quotationAmount", 0] }] },
       _discount: { $ifNull: ["$payment.discountAmount", { $ifNull: ["$discountAmount", 0] }] },
       _advance: { $ifNull: ["$payment.bookingAmountPaid", { $ifNull: ["$bookingAmount", 0] }] },
       _deposit: { $ifNull: ["$payment.securityDeposit", { $ifNull: ["$securityDeposit", 0] }] },
-      _balance: { $ifNull: ["$payment.balanceAmount", 0] },
       _days: { $ifNull: ["$totalDays", 1] },
+      _isCancelled: { $eq: ["$status", "cancelled"] },
     },
   };
 }
  
-function bdListMatch({ month, status, search }) {
-  const match = { resolvedMonth: month };
+// Stage 2: every payment recorded against the booking.
+function brPaymentsLookupStage() {
+  return {
+    $lookup: {
+      from: PaymentHistory.collection.name,
+      let: { bid: "$_id" },
+      pipeline: [
+        { $match: { $expr: { $eq: ["$bookingId", "$$bid"] } } },
+        { $project: { _id: 0, amount: 1, type: 1, paymentMethod: 1, paymentBreakdown: 1 } },
+      ],
+      as: "_payments",
+    },
+  };
+}
+ 
+// Stage 3: split payments into money in / refunds.
+function brPaymentSplitStage() {
+  return {
+    $addFields: {
+      _hasPayments: { $gt: [{ $size: "$_payments" }, 0] },
+      _paymentsIn: {
+        $filter: { input: "$_payments", as: "p", cond: { $ne: ["$$p.type", "refund"] } },
+      },
+      _paymentsOut: {
+        $filter: { input: "$_payments", as: "p", cond: { $eq: ["$$p.type", "refund"] } },
+      },
+    },
+  };
+}
+ 
+// Stage 4: received, refunded and channel totals per booking.
+function brPaymentTotalsStage() {
+  const bookingBreakdown = (key) => brNum(`$payment.paymentBreakdown.${key}`);
+ 
+  return {
+    $addFields: {
+      _net: { $subtract: ["$_gross", "$_discount"] },
+ 
+      // Bookings with no PaymentHistory records fall back to their advance.
+      _received: {
+        $cond: ["$_hasPayments", brSumOver("$_paymentsIn", brPaymentAmount("$$p")), "$_advance"],
+      },
+      _refunded: brSumOver("$_paymentsOut", brPaymentAmount("$$p")),
+ 
+      _chCash: {
+        $cond: [
+          "$_hasPayments",
+          brSumOver("$_paymentsIn", brPaymentChannel("$$p", "cash", "cash")),
+          bookingBreakdown("cash"),
+        ],
+      },
+      _chPhonePe: {
+        $cond: [
+          "$_hasPayments",
+          brSumOver("$_paymentsIn", brPaymentChannel("$$p", "phonePe", "phonepe")),
+          bookingBreakdown("phonePe"),
+        ],
+      },
+      _chRazorpay: {
+        $cond: [
+          "$_hasPayments",
+          brSumOver("$_paymentsIn", brPaymentChannel("$$p", "razorpay", "razorpay")),
+          bookingBreakdown("razorpay"),
+        ],
+      },
+      _chOther: {
+        $cond: ["$_hasPayments", brSumOver("$_paymentsIn", brPaymentOther("$$p")), 0],
+      },
+    },
+  };
+}
+ 
+// Stage 5: financial position per booking.
+function brPositionStage() {
+  const collected = { $subtract: ["$_received", "$_refunded"] };
+ 
+  return {
+    $addFields: {
+      _collected: collected,
+      _outstanding: {
+        $cond: ["$_isCancelled", 0, { $max: [0, { $subtract: ["$_net", collected] }] }],
+      },
+      _extra: {
+        $cond: ["$_isCancelled", 0, { $max: [0, { $subtract: [collected, "$_net"] }] }],
+      },
+      _retained: { $cond: ["$_isCancelled", { $max: [0, collected] }, 0] },
+    },
+  };
+}
+ 
+const BR_BILLABLE = { $not: ["$_isCancelled"] };
+ 
+const brSumIfBillable = (field) => ({ $sum: { $cond: [BR_BILLABLE, field, 0] } });
+const brCountIfStatus = (statuses) => ({
+  $sum: { $cond: [{ $in: ["$status", statuses] }, 1, 0] },
+});
+ 
+const BR_KPI_GROUP = {
+  totalBookings: { $sum: 1 },
+  cancelledBookings: brCountIfStatus(["cancelled"]),
+  completedBookings: brCountIfStatus(["completed"]),
+  activeBookings: brCountIfStatus(HANDED_OVER_STATUSES),
+  upcomingBookings: brCountIfStatus(["confirmed", "handover_pending"]),
+ 
+  // Booked revenue (non-cancelled only)
+  grossValue: brSumIfBillable("$_gross"),
+  totalDiscount: brSumIfBillable("$_discount"),
+  netRevenue: brSumIfBillable("$_net"),
+ 
+  // Money position
+  collected: brSumIfBillable("$_collected"),
+  outstanding: { $sum: "$_outstanding" },
+  extraCollected: { $sum: "$_extra" },
+  cancellationRetained: { $sum: "$_retained" },
+  refunded: { $sum: "$_refunded" },
+ 
+  // Not revenue
+  securityDeposits: brSumIfBillable("$_deposit"),
+ 
+  rentalDays: brSumIfBillable("$_days"),
+ 
+  // Money received by channel (all bookings, before refunds)
+  channelCash: { $sum: "$_chCash" },
+  channelPhonePe: { $sum: "$_chPhonePe" },
+  channelRazorpay: { $sum: "$_chRazorpay" },
+  channelOther: { $sum: "$_chOther" },
+};
+ 
+const BR_EMPTY_KPIS = Object.fromEntries(Object.keys(BR_KPI_GROUP).map((k) => [k, 0]));
+ 
+function brListMatch(currentMatch, { status, search }) {
+  const match = { ...currentMatch };
  
   if (status) match.status = status;
  
   if (search) {
-    const regex = new RegExp(bdEscapeRegex(search), "i");
+    const regex = new RegExp(brEscapeRegex(search), "i");
     match.$or = [
       { customerName: regex },
       { mobileNumber: regex },
@@ -1095,35 +1375,28 @@ function bdListMatch({ month, status, search }) {
   return match;
 }
  
-// ---------- Facets (one per dashboard section) ----------
+// ------------------------------------------------------------
+// FACETS (one per dashboard section)
+// ------------------------------------------------------------
  
-const bdKpiFacet = (month) => [
-  { $match: { resolvedMonth: month } },
-  { $group: { _id: null, ...BD_KPI_GROUP } },
-];
+const brKpiFacet = (match) => [{ $match: match }, { $group: { _id: null, ...BR_KPI_GROUP } }];
  
-const bdStatusFacet = (month) => [
-  { $match: { resolvedMonth: month } },
-  { $group: { _id: "$status", count: { $sum: 1 }, revenue: { $sum: BD_NET } } },
-  { $project: { _id: 0, status: "$_id", count: 1, revenue: 1 } },
+const brStatusFacet = (match) => [
+  { $match: match },
+  {
+    $group: {
+      _id: "$status",
+      count: { $sum: 1 },
+      revenue: brSumIfBillable("$_net"),
+      collected: { $sum: "$_collected" },
+    },
+  },
+  { $project: { _id: 0, status: "$_id", count: 1, revenue: 1, collected: 1 } },
   { $sort: { count: -1 } },
 ];
  
-const bdPaymentMethodsFacet = (month) => [
-  { $match: { resolvedMonth: month, status: { $ne: "cancelled" } } },
-  {
-    $group: {
-      _id: null,
-      cash: { $sum: { $ifNull: ["$payment.paymentBreakdown.cash", 0] } },
-      phonePe: { $sum: { $ifNull: ["$payment.paymentBreakdown.phonePe", 0] } },
-      razorpay: { $sum: { $ifNull: ["$payment.paymentBreakdown.razorpay", 0] } },
-    },
-  },
-  { $project: { _id: 0 } },
-];
- 
-const bdTopVehiclesFacet = (month, limit = 5) => [
-  { $match: { resolvedMonth: month, status: { $ne: "cancelled" } } },
+const brTopVehiclesFacet = (match, limit = 5) => [
+  { $match: { ...match, status: { $ne: "cancelled" } } },
   {
     $group: {
       _id: "$vehicleId",
@@ -1131,7 +1404,8 @@ const bdTopVehiclesFacet = (month, limit = 5) => [
       vehicleNumber: { $first: "$vehicleNumber" },
       bookings: { $sum: 1 },
       rentalDays: { $sum: "$_days" },
-      revenue: { $sum: BD_NET },
+      revenue: { $sum: "$_net" },
+      collected: { $sum: "$_collected" },
     },
   },
   { $sort: { revenue: -1 } },
@@ -1145,33 +1419,33 @@ const bdTopVehiclesFacet = (month, limit = 5) => [
       bookings: 1,
       rentalDays: 1,
       revenue: 1,
+      collected: 1,
     },
   },
 ];
  
-const bdDailyTrendFacet = (month) => [
-  { $match: { resolvedMonth: month, status: { $ne: "cancelled" } } },
+const brTrendFacet = (match, keyExpr) => [
+  { $match: { ...match, status: { $ne: "cancelled" } } },
   {
     $group: {
-      _id: { $dateToString: { format: "%Y-%m-%d", date: "$fromDate", timezone: "UTC" } },
+      _id: keyExpr,
       bookings: { $sum: 1 },
-      revenue: { $sum: BD_NET },
+      revenue: { $sum: "$_net" },
+      collected: { $sum: "$_collected" },
     },
   },
-  { $sort: { _id: 1 } },
-  { $project: { _id: 0, date: "$_id", bookings: 1, revenue: 1 } },
 ];
  
-const bdMonthlyTrendFacet = (months) => [
-  { $match: { resolvedMonth: { $in: months } } },
-  { $group: { _id: "$resolvedMonth", ...BD_KPI_GROUP } },
+const brYearlyFacet = (match, keyExpr) => [
+  { $match: match },
+  { $group: { _id: keyExpr, ...BR_KPI_GROUP } },
 ];
  
-const bdListTotalFacet = (listMatch) => [{ $match: listMatch }, { $count: "count" }];
+const brListTotalFacet = (listMatch) => [{ $match: listMatch }, { $count: "count" }];
  
-const bdBookingsFacet = (listMatch, page, limit) => [
+const brBookingsFacet = (listMatch, sort, page, limit) => [
   { $match: listMatch },
-  { $sort: { fromDate: 1, createdAt: -1 } },
+  { $sort: sort },
   { $skip: (page - 1) * limit },
   { $limit: limit },
   {
@@ -1189,55 +1463,88 @@ const bdBookingsFacet = (listMatch, page, limit) => [
       totalDays: 1,
       status: 1,
       bookingMonth: "$resolvedMonth",
+      bookingMonthSource: {
+        $cond: [{ $ne: [{ $ifNull: ["$bookingMonth", ""] }, ""] }, "field", "fromDate"],
+      },
       grossAmount: "$_gross",
       discountAmount: "$_discount",
-      netAmount: BD_NET,
-      advancePaid: "$_advance",
+      netAmount: "$_net",
+      collected: "$_collected",
+      refunded: "$_refunded",
+      outstanding: "$_outstanding",
+      extraCollected: "$_extra",
+      retained: "$_retained",
       securityDeposit: "$_deposit",
-      balanceAmount: "$_balance",
       paymentMethod: "$payment.paymentMethod",
-      paymentStatus: "$payment.paymentStatus",
       createdAt: 1,
     },
   },
 ];
  
-// ---------- Result shapers ----------
+// ------------------------------------------------------------
+// RESULT SHAPERS
+// ------------------------------------------------------------
  
-function bdFinalizeKpis(raw) {
-  const k = { ...BD_EMPTY_KPIS, ...(raw || {}) };
+function brFinalizeKpis(raw) {
+  const k = { ...BR_EMPTY_KPIS, ...(raw || {}) };
   delete k._id;
  
   const billable = k.totalBookings - k.cancelledBookings;
  
-  k.netRevenue = k.grossRevenue - k.totalDiscount;
+  k.billableBookings = billable;
   k.avgBookingValue = billable ? Math.round(k.netRevenue / billable) : 0;
   k.avgRentalDays = billable ? Math.round((k.rentalDays / billable) * 10) / 10 : 0;
-  k.cancellationRate = k.totalBookings
-    ? Math.round((k.cancelledBookings / k.totalBookings) * 1000) / 10
-    : 0;
+  k.collectionRate = brPct(k.collected, k.netRevenue);
+  k.cancellationRate = brPct(k.cancelledBookings, k.totalBookings);
+ 
+  // Everything actually kept: collected on live bookings + kept on cancellations.
+  k.totalReceived = k.collected + k.cancellationRetained;
  
   return k;
 }
  
-function bdBuildGrowth(current, previous) {
+function brPaymentMethods(k) {
   return {
-    totalBookings: bdGrowth(current.totalBookings, previous.totalBookings),
-    netRevenue: bdGrowth(current.netRevenue, previous.netRevenue),
-    advanceCollected: bdGrowth(current.advanceCollected, previous.advanceCollected),
-    avgBookingValue: bdGrowth(current.avgBookingValue, previous.avgBookingValue),
+    cash: k.channelCash,
+    phonePe: k.channelPhonePe,
+    razorpay: k.channelRazorpay,
+    other: k.channelOther,
   };
 }
  
-function bdBuildMonthlyTrend(months, rows = []) {
-  const byMonth = new Map(rows.map((r) => [r._id, r]));
-  return months.map((m) => ({ month: m, ...bdFinalizeKpis(byMonth.get(m)) }));
+function brBuildGrowth(current, previous) {
+  return {
+    totalBookings: brGrowth(current.totalBookings, previous.totalBookings),
+    netRevenue: brGrowth(current.netRevenue, previous.netRevenue),
+    collected: brGrowth(current.collected, previous.collected),
+    avgBookingValue: brGrowth(current.avgBookingValue, previous.avgBookingValue),
+    rentalDays: brGrowth(current.rentalDays, previous.rentalDays),
+  };
 }
  
-function bdBuildYearTotals(monthlyTrend) {
-  return bdFinalizeKpis(
+// Zero-filled trend points.
+function brBuildTrend(buckets, rows = []) {
+  const byKey = new Map(rows.map((r) => [r._id, r]));
+  return buckets.map((key) => {
+    const row = byKey.get(key);
+    return {
+      key,
+      bookings: row?.bookings || 0,
+      revenue: row?.revenue || 0,
+      collected: row?.collected || 0,
+    };
+  });
+}
+ 
+function brBuildMonthlyTrend(months, rows = []) {
+  const byMonth = new Map(rows.map((r) => [r._id, r]));
+  return months.map((m) => ({ month: m, ...brFinalizeKpis(byMonth.get(m)) }));
+}
+ 
+function brBuildYearTotals(monthlyTrend) {
+  return brFinalizeKpis(
     monthlyTrend.reduce((acc, m) => {
-      Object.keys(BD_EMPTY_KPIS).forEach((key) => {
+      Object.keys(BR_EMPTY_KPIS).forEach((key) => {
         acc[key] = (acc[key] || 0) + (m[key] || 0);
       });
       return acc;
@@ -1245,84 +1552,118 @@ function bdBuildYearTotals(monthlyTrend) {
   );
 }
  
-// ---------- Data loader ----------
+// ------------------------------------------------------------
+// LOADER
+// ------------------------------------------------------------
  
-async function loadBookingDashboard(params, companyId) {
-  const { month, year, page, limit, status, search } = params;
+async function loadBookingRevenue(params, companyId, now) {
+  const { basis, year, page, limit } = params;
  
-  const prevMonth = bdPreviousMonth(month);
-  const months = bdYearMonths(year);
-  const allMonths = [...new Set([month, prevMonth, ...months])];
-  const listMatch = bdListMatch({ month, status, search });
+  const period =
+    basis === "created" ? brCreatedPeriod(params, now) : brBookingMonthPeriod(params);
  
-  const [result = {}] = await Booking.aggregate([
-    bdBaseMatch(allMonths, companyId),
-    bdComputedFields(),
-    { $match: { resolvedMonth: { $in: allMonths } } },
+  const listMatch = brListMatch(period.current, params);
+ 
+  const pipeline = [
     {
-      $facet: {
-        current: bdKpiFacet(month),
-        previous: bdKpiFacet(prevMonth),
-        statusBreakdown: bdStatusFacet(month),
-        paymentMethods: bdPaymentMethodsFacet(month),
-        topVehicles: bdTopVehiclesFacet(month),
-        dailyTrend: bdDailyTrendFacet(month),
-        monthlyTrend: bdMonthlyTrendFacet(months),
-        listTotal: bdListTotalFacet(listMatch),
-        bookings: bdBookingsFacet(listMatch, page, limit),
+      $match: {
+        isDeleted: false,
+        ...(companyId ? { company: companyId } : {}),
+        ...period.prefilter,
       },
     },
-  ]);
+    brBookingFieldsStage(),
+  ];
  
-  const kpis = bdFinalizeKpis(result.current?.[0]);
-  const prevKpis = bdFinalizeKpis(result.previous?.[0]);
-  const monthlyTrend = bdBuildMonthlyTrend(months, result.monthlyTrend);
+  // Narrow to the needed months before joining payments.
+  if (period.scope) pipeline.push({ $match: period.scope });
+ 
+  pipeline.push(
+    brPaymentsLookupStage(),
+    brPaymentSplitStage(),
+    brPaymentTotalsStage(),
+    brPositionStage(),
+    { $unset: ["_payments", "_paymentsIn", "_paymentsOut"] },
+    {
+      $facet: {
+        current: brKpiFacet(period.current),
+        previous: brKpiFacet(period.previous),
+        statusBreakdown: brStatusFacet(period.current),
+        topVehicles: brTopVehiclesFacet(period.current),
+        trend: brTrendFacet(period.current, period.trend.keyExpr),
+        yearly: brYearlyFacet(period.yearly.match, period.yearly.keyExpr),
+        listTotal: brListTotalFacet(listMatch),
+        bookings: brBookingsFacet(listMatch, period.listSort, page, limit),
+      },
+    },
+  );
+ 
+  const [result = {}] = await Booking.aggregate(pipeline);
+ 
+  const kpis = brFinalizeKpis(result.current?.[0]);
+  const previousKpis = brFinalizeKpis(result.previous?.[0]);
+  const monthlyTrend = brBuildMonthlyTrend(period.yearly.months, result.yearly);
   const total = result.listTotal?.[0]?.count || 0;
  
   return {
-    filters: { month, previousMonth: prevMonth, year, status, search },
+    filters: {
+      basis,
+      year,
+      status: params.status,
+      search: params.search,
+      timezone: "Asia/Kolkata",
+      ...period.meta,
+    },
     kpis,
-    growth: bdBuildGrowth(kpis, prevKpis),
+    previousKpis,
+    growth: brBuildGrowth(kpis, previousKpis),
+    paymentMethods: brPaymentMethods(kpis),
     statusBreakdown: result.statusBreakdown || [],
-    paymentMethods: result.paymentMethods?.[0] || { cash: 0, phonePe: 0, razorpay: 0 },
     topVehicles: result.topVehicles || [],
-    dailyTrend: result.dailyTrend || [],
+    trend: {
+      granularity: period.trend.granularity,
+      points: brBuildTrend(period.trend.buckets, result.trend),
+    },
     monthlyTrend,
-    yearTotals: bdBuildYearTotals(monthlyTrend),
+    yearTotals: brBuildYearTotals(monthlyTrend),
     bookings: result.bookings || [],
     pagination: { page, limit, total, totalPages: Math.ceil(total / limit) },
   };
 }
  
 // ============================================================
-// GET /api/dashboard/bookings
-// ?month=2026-10&year=2026&status=&search=&page=1&limit=20
+// GET /api/v1/dashboard/bookings
+//
+// ?basis=booking&month=2026-10
+// ?basis=created&range=today|7d|month
+// + &status=&search=&page=1&limit=20&year=
 // ============================================================
  
 export const getBookingDashboardRevenue = async (req, res) => {
   try {
-    const { params, error } = parseBookingDashboardQuery(req.query);
+    const now = new Date();
+    const { params, error } = parseBookingRevenueQuery(req.query, now);
  
     if (error) {
       return res.status(400).json({ success: false, message: error });
     }
  
-    // Scope to the user's company when available.
+    // Same company scoping as createBookings (company || user id).
     const rawCompany = req.user?.company || req.user?._id;
     const companyId =
       rawCompany && mongoose.Types.ObjectId.isValid(String(rawCompany))
         ? new mongoose.Types.ObjectId(String(rawCompany))
         : null;
  
-    const data = await loadBookingDashboard(params, companyId);
+    const data = await loadBookingRevenue(params, companyId, now);
  
-    return res.status(200).json({ success: true, generatedAt: new Date(), ...data });
+    return res.status(200).json({ success: true, generatedAt: now, ...data });
   } catch (error) {
-    console.error("Get booking dashboard error:", error);
+    console.error("Get booking revenue error:", error);
  
     return res.status(500).json({
       success: false,
-      message: "Failed to build booking dashboard",
+      message: "Failed to build booking revenue",
       error: error.message,
     });
   }
