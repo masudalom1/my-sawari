@@ -3,7 +3,7 @@ import Lead from "../models/lead.model.js";
 import LeadHistory from "../models/leadHistory.model.js";
 import Booking from "../models/booking.model.js";
 import Vehicle from "../models/vehicle.model.js";
-import PaymentHistory from "../models/paymentHistory.model.js";
+import PaymentHistory,{toBookingMonth} from "../models/paymentHistory.model.js";
 import { sendBookingCreatedMessage } from "../services/wati.service.js";
 
 const dashboardCache = new Map();
@@ -2294,6 +2294,11 @@ const combineDateAndTime = (date, time) => {
   return d;
 };
 
+// fromDate first, then toDate as fallback.
+const resolveBookingMonth = (fromDate, toDate) => {
+  return toBookingMonth(fromDate) || toBookingMonth(toDate) || null;
+};
+
 export const createBookings = async (req, res, next) => {
   const session = await mongoose.startSession();
 
@@ -2510,6 +2515,16 @@ export const createBookings = async (req, res, next) => {
     const finalTotalDays = Math.max(1, calculatedTotalDays);
 
     // ============================================================
+    // BOOKING MONTH
+    //
+    // Based on trip start date, not creation date.
+    // Example: created 30 Sep for 02 Oct - 05 Oct => "2026-10"
+    // Falls back to toDate if fromDate is somehow unavailable.
+    // ============================================================
+
+    const bookingMonth = resolveBookingMonth(finalFromDate, finalToDate);
+
+    // ============================================================
     // PAYMENT METHOD VALIDATION
     // ============================================================
 
@@ -2708,23 +2723,6 @@ export const createBookings = async (req, res, next) => {
           toDate: existingBooking.toDate,
           pickupTime: existingBooking.pickupTime,
           dropTime: existingBooking.dropTime,
-          status: existingBooking.status,
-        },
-      });
-    }
-
-    if (existingBooking) {
-      await session.abortTransaction();
-
-      return res.status(409).json({
-        success: false,
-        message: "This vehicle is already booked during the selected dates.",
-        conflict: {
-          bookingId: existingBooking._id,
-          bookingCode: existingBooking.bookingCode || null,
-          customerName: existingBooking.customerName || "",
-          fromDate: existingBooking.fromDate,
-          toDate: existingBooking.toDate,
           status: existingBooking.status,
         },
       });
@@ -2940,10 +2938,6 @@ export const createBookings = async (req, res, next) => {
     );
 
     // ============================================================
-    // PAYMENT HISTORY
-    // ============================================================
-
-    // ============================================================
     // PAYMENT HISTORY + VEHICLE PAYMENT ID
     // ============================================================
 
@@ -2968,6 +2962,7 @@ export const createBookings = async (req, res, next) => {
 
               vehicleNumber: vehicle.vehicleNumber,
             },
+
             booking: {
               fromDate: finalFromDate,
 
@@ -2975,6 +2970,9 @@ export const createBookings = async (req, res, next) => {
 
               bookingAmount: advancePaid,
             },
+
+            // Trip month (from fromDate), e.g. "2026-10".
+            bookingMonth,
 
             amount: advancePaid,
 

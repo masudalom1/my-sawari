@@ -1,5 +1,14 @@
 import mongoose from "mongoose";
 
+export const toBookingMonth = (date) => {
+  if (!date) return null;
+  const d = new Date(date);
+  if (isNaN(d.getTime())) return null;
+  const year = d.getUTCFullYear();
+  const month = String(d.getUTCMonth() + 1).padStart(2, "0");
+  return `${year}-${month}`;
+};
+
 const collectionEntrySchema = new mongoose.Schema(
   {
     channel: {
@@ -104,6 +113,12 @@ const paymentHistorySchema = new mongoose.Schema(
         default: 0,
         min: 0,
       },
+    },
+    bookingMonth: {
+      type: String,
+      default: null,
+      match: [/^\d{4}-(0[1-9]|1[0-2])$/, "bookingMonth must be YYYY-MM"],
+      index: true,
     },
     // ==========================
     // PAYMENT
@@ -213,5 +228,26 @@ const paymentHistorySchema = new mongoose.Schema(
     timestamps: true,
   },
 );
+
+paymentHistorySchema.pre("validate", function () {
+  if (!this.bookingMonth) {
+    this.bookingMonth =
+      toBookingMonth(this.booking?.fromDate) ||
+      toBookingMonth(this.booking?.toDate) ||
+      null;
+  }
+});
+
+// Read helper for old records: field -> fromDate -> toDate
+paymentHistorySchema.methods.getBookingMonth = function () {
+  return (
+    this.bookingMonth ||
+    toBookingMonth(this.booking?.fromDate) ||
+    toBookingMonth(this.booking?.toDate) ||
+    null
+  );
+};
+
+paymentHistorySchema.index({ company: 1, bookingMonth: 1 });
 
 export default mongoose.model("PaymentHistory", paymentHistorySchema);
