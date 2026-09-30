@@ -4,6 +4,18 @@ import Vehicle from "../models/vehicle.model.js";
 import Booking from "../models/booking.model.js";
 import PaymentHistory from "../models/paymentHistory.model.js";
 
+import {
+  parseRevenueRange,
+  daysBetweenKeys,
+  emptyRevenueTotals,
+  finalizeRevenueTotals,
+  sumRevenueTotals,
+  applyPayments,
+  applyBookings,
+  applyFleetDays,
+  toRevenueRow,
+} from "../utils/revenue.utils.js";
+
 export const getVehiclesForImport = async (req, res) => {
   try {
     const vehicles = await Vehicle.find({
@@ -534,31 +546,6 @@ export const getMaintenances = async (req, res, next) => {
   }
 };
 
-// =====================================================================
-// DASHBOARD STATS  (uses only the Vehicle and Booking models)
-// =====================================================================
-//
-// Rules — every vehicle lands in exactly ONE of these three buckets,
-// so  bookedToday + unbookedToday + maintenanceToday === totalVehicles:
-//
-//   maintenanceToday : vehicle.status === "service"
-//   bookedToday      : not in service, and has a non-cancelled booking whose
-//                      pickup→drop time overlaps today's business day
-//                      (8 AM → 8 AM next day, IST), or is on rent right now
-//   unbookedToday    : everything else
-//
-//   onRentToday      : (subset of bookedToday) not in service, and has a
-//                      booking that is NOT completed/cancelled where
-//                        pickup <= now < drop            (running now), or
-//                        drop passed within the last OVERDUE_GRACE_HOURS
-//                        and status is vehicle_handover/active (late return)
-//
-// Why dates and not just booking.status: old bookings that were never
-// moved to "completed" keep status "active" forever. Counting by status
-// alone made almost the whole fleet look "on rent". Those stale bookings
-// are now ignored and reported in `diagnostics.staleActiveBookings` so
-// they can be cleaned up.
-// =====================================================================
 
 const IST_OFFSET_MS = 330 * 60 * 1000; // UTC+05:30
 const HOUR_MS = 60 * 60 * 1000;
@@ -873,6 +860,68 @@ export const getDashboardStats = async (req, res) => {
     return res.status(500).json({
       success: false,
       message: "Failed to fetch dashboard stats",
+      error: error.message,
+    });
+  }
+};
+
+export const getVehicleRevenue = async (req, res) => {
+  try {
+    // ---------------------------------------
+    // Step 1: validate the range
+    // ---------------------------------------
+    const range = parseRevenueRange(req.query);
+    if (range.error) {
+      return res.status(400).json({ success: false, message: range.error });
+    }
+    const { from, to, today, excludeService } = range;
+ 
+    // ---------------------------------------
+    // Step 2: vehicles. Only ones with a price per day have a target.
+    // ---------------------------------------
+    const allVehicles = await loadRevenueVehicles();
+    const rated = allVehicles.filter((v) => Number(v.pricePerDay) > 0);
+    const ratedIds = rated.map((v) => v._id);
+    const stats = new Map(rated.map((v) => [String(v._id), emptyRevenueTotals()]));
+ 
+    // ---------------------------------------
+    // Step 3: only the records that touch the range
+    // ---------------------------------------
+    const [payments, bookings, serviceDays] = await Promise.all([
+      loadRevenuePayments(allVehicles, from, to),
+      loadRevenueBookings(ratedIds, from, to),
+      loadRevenueServiceDays(ratedIds, from, to),
+    ]);
+ 
+    // ---------------------------------------
+    // Step 4: add everything up
+    // ---------------------------------------
+    applyPayments(stats, payments, range);
+    applyBookings(stats, bookings, range);
+    applyFleetDays(stats, rated, serviceDays, range);
+ 
+    // ---------------------------------------
+    // Step 5: response
+    // ---------------------------------------
+    const vehicles = rated
+      .map((v) => toRevenueRow(v, stats.get(String(v._id))))
+      .sort((a, b) => b.net - a.net);
+ 
+    return res.status(200).json({
+      success: true,
+      count: vehicles.length,
+      generatedAt: new Date(),
+      range: { from, to, today, days: daysBetweenKeys(from, to) + 1 },
+      excludeService,
+      totals: finalizeRevenueTotals(sumRevenueTotals(stats)),
+      unratedCount: allVehicles.length - rated.length,
+      vehicles,
+    });
+  } catch (error) {
+    console.error("Get vehicle revenue error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to build revenue by vehicle",
       error: error.message,
     });
   }
