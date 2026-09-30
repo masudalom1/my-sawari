@@ -13,6 +13,6 @@ router.post("/maintenance", createMaintenance);
 router.get("/maintenance", getMaintenances);
 router.get("/stats", getDashboardStats);
 router.get("/revenue/vehicles", getVehicleRevenue);
-router.get("/bookings", protect, getBookingsDashboard);
+router.get("/bookingrevenue", protect, getBookingsDashboard);
 
 export default router;
