@@ -948,10 +948,10 @@ export const getVehicleRevenue = async (req, res) => {
 //   basis=booking  (default)   ?month=YYYY-MM
 //     A payment belongs to its booking month:
 //       payment.bookingMonth
-//       -> month of payment.booking.fromDate
-//       -> month of payment.booking.toDate
-//       -> month the payment was made (last resort)
+//       -> else month of payment.booking.fromDate
 //     e.g. advance paid 30 Sep for a 02-05 Oct trip => October.
+//     Payments with neither are "unassigned": they are counted in the
+//     all-time totals and reported, but never guessed into a month.
 //
 //   basis=created              ?range=today | 7d | month
 //     Booking payments made in that window (payment createdAt, IST),
@@ -960,6 +960,11 @@ export const getVehicleRevenue = async (req, res) => {
 //
 // Counts:
 //   bookings = distinct bookingId among the booking payments
+//   summary  = fixed quick numbers, independent of the selected tab:
+//                today      -> advances paid today (created date, IST)
+//                last7Days  -> advances paid in the last 7 days (created date)
+//                thisMonth  -> booking month = current month
+//                nextMonth  -> booking month = next month
 //   allTime  = every booking payment ever, for the company
 // ============================================================
 // ============================================================
@@ -1085,17 +1090,11 @@ function prBookingMonthPeriod({ month, year }) {
   const [y, m] = month.split("-").map(Number);
   const daysInMonth = new Date(Date.UTC(y, m, 0)).getUTCDate();
 
-  // Padded by a day for payments that fall back to their own IST date.
-  const padStart = new Date(start.getTime() - DAY_MS);
-  const padEnd = new Date(end.getTime() + DAY_MS);
-
   return {
     prefilter: {
       $or: [
         { bookingMonth: { $in: allMonths } },
         { "booking.fromDate": { $gte: start, $lt: end } },
-        { "booking.toDate": { $gte: start, $lt: end } },
-        { createdAt: { $gte: padStart, $lt: padEnd } },
       ],
     },
     scope: { resolvedMonth: { $in: allMonths } },
@@ -1104,12 +1103,8 @@ function prBookingMonthPeriod({ month, year }) {
     trend: {
       granularity: "day",
       groupedBy: "trip start date",
-      keyExpr: {
-        $ifNull: [
-          { $dateToString: { format: "%Y-%m-%d", date: "$booking.fromDate", timezone: "UTC" } },
-          { $dateToString: { format: "%Y-%m-%d", date: "$createdAt", timezone: PR_IST_TZ } },
-        ],
-      },
+      // Trip start day; null when the payment has no fromDate (shown separately).
+      keyExpr: { $dateToString: { format: "%Y-%m-%d", date: "$booking.fromDate", timezone: "UTC" } },
       buckets: Array.from({ length: daysInMonth }, (_, i) => `${month}-${prPad(i + 1)}`),
     },
     yearly: {
@@ -1211,39 +1206,26 @@ const PR_BREAKDOWN_TOTAL = {
   ],
 };
 
-// bookingMonth -> booking.fromDate -> booking.toDate -> payment date
+const PR_HAS_BOOKING_MONTH = { $ne: [{ $ifNull: ["$bookingMonth", ""] }, ""] };
+const PR_HAS_FROM_DATE = { $ne: [{ $ifNull: ["$booking.fromDate", null] }, null] };
+
+// bookingMonth -> month of booking.fromDate -> null (unassigned)
 const PR_RESOLVED_MONTH = {
   $cond: [
-    { $ne: [{ $ifNull: ["$bookingMonth", ""] }, ""] },
+    PR_HAS_BOOKING_MONTH,
     "$bookingMonth",
     {
-      $ifNull: [
+      $cond: [
+        PR_HAS_FROM_DATE,
         { $dateToString: { format: "%Y-%m", date: "$booking.fromDate", timezone: "UTC" } },
-        { $dateToString: { format: "%Y-%m", date: "$booking.toDate", timezone: "UTC" } },
-        { $dateToString: { format: "%Y-%m", date: "$createdAt", timezone: PR_IST_TZ } },
+        null,
       ],
     },
   ],
 };
 
 const PR_MONTH_SOURCE = {
-  $cond: [
-    { $ne: [{ $ifNull: ["$bookingMonth", ""] }, ""] },
-    "field",
-    {
-      $cond: [
-        { $ne: [{ $ifNull: ["$booking.fromDate", null] }, null] },
-        "fromDate",
-        {
-          $cond: [
-            { $ne: [{ $ifNull: ["$booking.toDate", null] }, null] },
-            "toDate",
-            "paymentDate",
-          ],
-        },
-      ],
-    },
-  ],
+  $cond: [PR_HAS_BOOKING_MONTH, "field", { $cond: [PR_HAS_FROM_DATE, "fromDate", "none"] }],
 };
 
 // Base filter shared by every query: company + booking payments only.
@@ -1462,6 +1444,10 @@ async function prLoadAllTime(companyId) {
         _bookings: { $addToSet: "$bookingId" },
         firstPaymentAt: { $min: "$createdAt" },
         lastPaymentAt: { $max: "$createdAt" },
+        unassignedPayments: { $sum: { $cond: [{ $eq: ["$resolvedMonth", null] }, 1, 0] } },
+        unassignedRevenue: {
+          $sum: { $cond: [{ $eq: ["$resolvedMonth", null] }, "$_amount", 0] },
+        },
       },
     },
     { $addFields: { bookingsCount: prDistinctCount("$_bookings") } },
@@ -1475,6 +1461,76 @@ async function prLoadAllTime(companyId) {
     avgPerBooking: row?.bookingsCount ? Math.round(row.revenue / row.bookingsCount) : 0,
     firstPaymentAt: row?.firstPaymentAt || null,
     lastPaymentAt: row?.lastPaymentAt || null,
+    // Payments with no bookingMonth and no fromDate: not placed in any month.
+    unassignedPayments: row?.unassignedPayments || 0,
+    unassignedRevenue: row?.unassignedRevenue || 0,
+  };
+}
+
+// Quick numbers shown on every tab:
+//   today / last7Days     -> by payment createdAt (IST)
+//   thisMonth / nextMonth -> by booking month (bookingMonth -> fromDate)
+async function prLoadSummary(companyId, now) {
+  const p = getISTParts(now);
+
+  const thisMonth = prMonthKey(p.year, p.month);
+  const nextMonth = prMonthKey(p.year, p.month + 1);
+  const todayStart = makeISTDate(p.year, p.month, p.day);
+  const weekStart = makeISTDate(p.year, p.month, p.day - 6);
+  const { start: monthsStart, end: monthsEnd } = prMonthsUTCSpan([thisMonth, nextMonth]);
+
+  const totals = [
+    {
+      $group: {
+        _id: null,
+        paymentsCount: { $sum: 1 },
+        revenue: { $sum: "$_amount" },
+        _bookings: { $addToSet: "$bookingId" },
+      },
+    },
+    { $addFields: { bookingsCount: prDistinctCount("$_bookings") } },
+    { $project: { _id: 0, _bookings: 0 } },
+  ];
+
+  const [result = {}] = await PaymentHistory.aggregate([
+    {
+      $match: {
+        ...prBaseMatch(companyId),
+        $or: [
+          { bookingMonth: { $in: [thisMonth, nextMonth] } },
+          { "booking.fromDate": { $gte: monthsStart, $lt: monthsEnd } },
+          { createdAt: { $gte: weekStart, $lte: now } },
+        ],
+      },
+    },
+    prFieldsStage(),
+    {
+      $facet: {
+        today: [{ $match: { createdAt: { $gte: todayStart, $lte: now } } }, ...totals],
+        last7Days: [{ $match: { createdAt: { $gte: weekStart, $lte: now } } }, ...totals],
+        thisMonth: [{ $match: { resolvedMonth: thisMonth } }, ...totals],
+        nextMonth: [{ $match: { resolvedMonth: nextMonth } }, ...totals],
+      },
+    },
+  ]);
+
+  const pick = (key) => {
+    const row = result[key]?.[0];
+    const bookingsCount = row?.bookingsCount || 0;
+    const revenue = row?.revenue || 0;
+    return {
+      bookingsCount,
+      paymentsCount: row?.paymentsCount || 0,
+      revenue,
+      avgPerBooking: bookingsCount ? Math.round(revenue / bookingsCount) : 0,
+    };
+  };
+
+  return {
+    today: { basis: "created", range: "today", from: todayStart, to: now, ...pick("today") },
+    last7Days: { basis: "created", range: "7d", from: weekStart, to: now, ...pick("last7Days") },
+    thisMonth: { basis: "booking", month: thisMonth, ...pick("thisMonth") },
+    nextMonth: { basis: "booking", month: nextMonth, ...pick("nextMonth") },
   };
 }
 
@@ -1533,9 +1589,9 @@ function prBuildTrend(buckets, rows = []) {
 
   const bucketSet = new Set(buckets);
   const outside = rows
-    .map((r) => r._id)
-    .filter((key) => key && !bucketSet.has(key))
-    .sort();
+    .map((r) => r._id ?? null)
+    .filter((key) => !bucketSet.has(key))
+    .sort((a, b) => String(a).localeCompare(String(b)));
 
   return { points: buckets.map(point), outside: outside.map(point) };
 }
@@ -1588,9 +1644,10 @@ async function loadBookingRevenue(params, companyId, now) {
     },
   });
 
-  const [[result = {}], allTime] = await Promise.all([
+  const [[result = {}], allTime, summary] = await Promise.all([
     PaymentHistory.aggregate(pipeline),
     prLoadAllTime(companyId),
+    prLoadSummary(companyId, now),
   ]);
 
   const kpis = prFinalizeKpis(result.current?.[0]);
@@ -1623,6 +1680,7 @@ async function loadBookingRevenue(params, companyId, now) {
     },
     monthlyTrend,
     yearTotals: prBuildYearTotals(monthlyTrend),
+    summary,
     allTime,
     payments: result.payments || [],
     pagination: { page, limit, total, totalPages: Math.ceil(total / limit) },
