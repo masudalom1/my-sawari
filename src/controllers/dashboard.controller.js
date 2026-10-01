@@ -2488,22 +2488,39 @@ export const getBookingPayments = async (req, res) => {
  
     const and = [];
  
-    // ---------- Month filter (supports old records without bookingMonth) ----------
+    // ---------- Month filter: by the booking's FROM date (trip start) ----------
+    // A booking belongs to the month its trip starts in, judged by the
+    // Booking's own fromDate (current, even if the trip was rescheduled).
+    // Month edges are in IST, so a trip starting 1 Oct is always October,
+    // whether the date was saved at UTC midnight or IST midnight.
+    // Bookings whose Booking record no longer exists fall back to the
+    // fromDate saved on the payment itself.
     if (month) {
       if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) {
         return res.status(400).json({ success: false, message: "month must be YYYY-MM" });
       }
       const [y, m] = month.split("-").map(Number);
-      const start = new Date(Date.UTC(y, m - 1, 1));
-      const end = new Date(Date.UTC(y, m, 1));
+      const IST_MS = 330 * 60 * 1000;
+      const start = new Date(Date.UTC(y, m - 1, 1) - IST_MS); // 1st of month, 00:00 IST
+      const end = new Date(Date.UTC(y, m, 1) - IST_MS); // 1st of next month, 00:00 IST
+      const fromRange = { $gte: start, $lt: end };
  
-      and.push({
-        $or: [
-          { bookingMonth: month },
-          { bookingMonth: null, "booking.fromDate": { $gte: start, $lt: end } },
-          { bookingMonth: null, "booking.fromDate": null, "booking.toDate": { $gte: start, $lt: end } },
-        ],
-      });
+      const [monthBookingIds, snapshotBookingIds] = await Promise.all([
+        // Bookings whose trip starts in this month
+        Booking.distinct("_id", { fromDate: fromRange }),
+        // Booking payments whose saved trip start is in this month
+        PaymentHistory.distinct("bookingId", { type: "booking", "booking.fromDate": fromRange }),
+      ]);
+ 
+      // Use the payment's saved date only when the Booking record is missing
+      const inMonth = new Set(monthBookingIds.map(String));
+      const candidates = snapshotBookingIds.filter((bid) => bid && !inMonth.has(String(bid)));
+      const stillExisting = candidates.length
+        ? new Set((await Booking.distinct("_id", { _id: { $in: candidates } })).map(String))
+        : new Set();
+      const orphanIds = candidates.filter((bid) => !stillExisting.has(String(bid)));
+ 
+      and.push({ bookingId: { $in: [...monthBookingIds, ...orphanIds] } });
     }
  
     // ---------- Payment date range ----------
