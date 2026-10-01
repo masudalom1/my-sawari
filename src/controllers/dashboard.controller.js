@@ -1727,6 +1727,7 @@ export const getBookingDashboardRevenue = async (req, res) => {
 };
 
  
+ 
 const BOOKING_PAYMENT_COLUMNS = [
   { key: "paymentDate", label: "Payment Date" },
   { key: "bookingMonth", label: "Booking Month" },
@@ -1919,6 +1920,10 @@ const emptyLedger = () => ({
   returnFinalBalance: null, // null = not returned yet
   returnCollected: null,
   returnedAt: null,
+ 
+  // Trip dates from the handover (used only when the payment has no From/To)
+  handoverPickupAt: null,
+  handoverDropAt: null,
  
   paymentCount: 0,
   lastPaymentAt: null,
@@ -2397,6 +2402,9 @@ const buildBookingLedgers = async (bookingIds, companyId) => {
       l.returnFinalBalance = numOrNull(ret.settlementDetails?.finalBalance);
     }
  
+    l.handoverPickupAt = ho?.trip?.pickupDateTime ?? null;
+    l.handoverDropAt = ho?.trip?.dropDateTime ?? null;
+ 
     l.tripDays = ho?.trip?.numberOfDays ?? bk?.totalDays ?? null;
     l.currentDropAt = ho?.trip?.dropDateTime ?? bk?.toDate ?? null;
  
@@ -2489,12 +2497,13 @@ export const getBookingPayments = async (req, res) => {
     const and = [];
  
     // ---------- Month filter: by the booking's FROM date (trip start) ----------
-    // A booking belongs to the month its trip starts in, judged by the
-    // Booking's own fromDate (current, even if the trip was rescheduled).
+    // The trip start date is taken from, in order:
+    //   1. Booking.fromDate (current, even if the trip was rescheduled)
+    //   2. the From date saved on the payment (booking.fromDate)
+    //   3. the handover's pickup date (trip.pickupDateTime)
+    // A source is used only when the ones before it are not available.
     // Month edges are in IST, so a trip starting 1 Oct is always October,
     // whether the date was saved at UTC midnight or IST midnight.
-    // Bookings whose Booking record no longer exists fall back to the
-    // fromDate saved on the payment itself.
     if (month) {
       if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) {
         return res.status(400).json({ success: false, message: "month must be YYYY-MM" });
@@ -2504,23 +2513,54 @@ export const getBookingPayments = async (req, res) => {
       const start = new Date(Date.UTC(y, m - 1, 1) - IST_MS); // 1st of month, 00:00 IST
       const end = new Date(Date.UTC(y, m, 1) - IST_MS); // 1st of next month, 00:00 IST
       const fromRange = { $gte: start, $lt: end };
+      const toObjectId = (v) => new mongoose.Types.ObjectId(String(v));
  
-      const [monthBookingIds, snapshotBookingIds] = await Promise.all([
-        // Bookings whose trip starts in this month
+      const [monthBookingIds, snapshotBookingIds, handoversInMonth] = await Promise.all([
+        // 1. Bookings whose trip starts in this month
         Booking.distinct("_id", { fromDate: fromRange }),
-        // Booking payments whose saved trip start is in this month
+        // 2. Booking payments whose saved trip start is in this month
         PaymentHistory.distinct("bookingId", { type: "booking", "booking.fromDate": fromRange }),
+        // 3. Handovers whose pickup is in this month
+        Handover.find({ isDeleted: { $ne: true }, "trip.pickupDateTime": fromRange })
+          .select("_id bookingId")
+          .lean(),
       ]);
  
-      // Use the payment's saved date only when the Booking record is missing
-      const inMonth = new Set(monthBookingIds.map(String));
-      const candidates = snapshotBookingIds.filter((bid) => bid && !inMonth.has(String(bid)));
-      const stillExisting = candidates.length
-        ? new Set((await Booking.distinct("_id", { _id: { $in: candidates } })).map(String))
-        : new Set();
-      const orphanIds = candidates.filter((bid) => !stillExisting.has(String(bid)));
+      // Booking payments with NO saved From date, linked to those handovers
+      const hoBookingIds = handoversInMonth.map((h) => h.bookingId).filter(Boolean);
+      const hoIds = handoversInMonth.map((h) => h._id);
+      const handoverBookingIds = hoIds.length
+        ? await PaymentHistory.distinct("bookingId", {
+            type: "booking",
+            "booking.fromDate": null, // missing or empty
+            $or: [
+              ...(hoBookingIds.length ? [{ bookingId: { $in: hoBookingIds } }] : []),
+              { handoverId: { $in: hoIds } },
+              { bookingId: { $in: hoIds } },
+            ],
+          })
+        : [];
  
-      and.push({ bookingId: { $in: [...monthBookingIds, ...orphanIds] } });
+      // Sources 2 and 3 apply only when the Booking itself has no From date
+      const inMonth = new Set(monthBookingIds.map(String));
+      const candidates = [
+        ...new Set([...snapshotBookingIds, ...handoverBookingIds].filter(Boolean).map(String)),
+      ].filter((bid) => !inMonth.has(bid));
+ 
+      const haveOwnFromDate = candidates.length
+        ? new Set(
+            (
+              await Booking.distinct("_id", {
+                _id: { $in: candidates.map(toObjectId) },
+                fromDate: { $ne: null },
+              })
+            ).map(String),
+          )
+        : new Set();
+ 
+      const fallbackIds = candidates.filter((bid) => !haveOwnFromDate.has(bid)).map(toObjectId);
+ 
+      and.push({ bookingId: { $in: [...monthBookingIds, ...fallbackIds] } });
     }
  
     // ---------- Payment date range ----------
@@ -2615,7 +2655,10 @@ export const getBookingPayments = async (req, res) => {
     }
  
     // ---------- Flatten for sheet ----------
-    const rows = payments.map((p) => ({
+    const rows = payments.map((p) => {
+      const ledger = ledgers.get(String(p.bookingId)) || emptyLedger();
+ 
+      return {
       _id: p._id,
       bookingId: p.bookingId,
       paymentDate: p.createdAt,
@@ -2623,13 +2666,16 @@ export const getBookingPayments = async (req, res) => {
         p.bookingMonth ||
         toBookingMonth(p.booking?.fromDate) ||
         toBookingMonth(p.booking?.toDate) ||
+        toBookingMonth(ledger.handoverPickupAt) ||
+        toBookingMonth(ledger.handoverDropAt) ||
         "",
       customerName: p.customer?.fullName || "",
       mobileNumber: p.customer?.mobileNumber || "",
       vehicleName: p.vehicle?.vehicleName || "",
       vehicleNumber: p.vehicle?.vehicleNumber || "",
-      fromDate: p.booking?.fromDate || null,
-      toDate: p.booking?.toDate || null,
+      // From / To: saved on the payment, else taken from the handover
+      fromDate: p.booking?.fromDate || ledger.handoverPickupAt || null,
+      toDate: p.booking?.toDate || ledger.handoverDropAt || null,
       bookingAmount: p.booking?.bookingAmount || 0,
       amount: p.amount || 0,
       paymentMethod: p.paymentMethod,
@@ -2645,8 +2691,9 @@ export const getBookingPayments = async (req, res) => {
       note: p.note || "",
  
       // Booking-level ledger (same values on every row of the same booking)
-      ...(ledgers.get(String(p.bookingId)) || emptyLedger()),
-    }));
+      ...ledger,
+      };
+    });
  
     const summary = summaryAgg[0] || {
       totalAmount: 0,
