@@ -4,7 +4,7 @@ import Vehicle from "../models/vehicle.model.js";
 import Booking from "../models/booking.model.js";
 import PaymentHistory, { toBookingMonth } from "../models/paymentHistory.model.js";
 import Handover from "../models/handover.model.js";
-import vehicleReturnModel from "../models/vehicleReturn.model.js";
+import vehicleReturn from "../models/vehicleReturn.model.js";
 import {
   parseRevenueRange,
   daysBetweenKeys,
