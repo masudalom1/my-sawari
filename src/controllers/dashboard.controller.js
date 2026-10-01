@@ -4,8 +4,7 @@ import Vehicle from "../models/vehicle.model.js";
 import Booking from "../models/booking.model.js";
 import PaymentHistory, { toBookingMonth } from "../models/paymentHistory.model.js";
 import Handover from "../models/handover.model.js";
-import vehicleReturn from "../models/vehicleReturn.model.js";
-import {
+import VehicleReturn from "../models/vehicleReturn.model.js";import {
   parseRevenueRange,
   daysBetweenKeys,
   emptyRevenueTotals,
@@ -2311,14 +2310,16 @@ export const getBookingPayments = async (req, res) => {
     ]);
  
     // ---------- NEW: booking ledger (all payment types) ----------
-    let ledgers = new Map();
+      let ledgers = new Map();
     let ledgerError = false;
+    let ledgerErrorMessage = "";
     try {
       ledgers = await buildBookingLedgers(filteredBookingIds, filter.company);
     } catch (err) {
       // Never break the existing sheet if the ledger fails
       console.error("getBookingPayments ledger error:", err);
       ledgerError = true;
+      ledgerErrorMessage = err.message;
     }
  
     // ---------- Flatten for sheet ----------
