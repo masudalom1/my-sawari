@@ -1747,11 +1747,327 @@ const BOOKING_PAYMENT_COLUMNS = [
   { key: "createdByName", label: "Created By" },
   { key: "note", label: "Note" },
 ];
-
+ 
+// NEW: booking-level ledger columns.
+// These are lifetime totals of EVERY PaymentHistory record that shares the
+// same bookingId (same customer + same vehicle + same booking duration),
+// across all payment types, plus the latest handover / return snapshot.
+const BOOKING_LEDGER_COLUMNS = [
+  { key: "bookingCode", label: "Booking Code", group: "ledger" },
+  { key: "bookingStatus", label: "Booking Status", group: "ledger" },
+  { key: "tripDays", label: "Days", group: "ledger" },
+  { key: "currentDropAt", label: "Current Drop", group: "ledger" },
+  { key: "allBookingPaid", label: "Booking (All)", group: "ledger" },
+  { key: "handoverPaid", label: "Handover", group: "ledger" },
+  { key: "rentalPaid", label: "Rental", group: "ledger" },
+  { key: "extensionPaid", label: "Extension", group: "ledger" },
+  { key: "additionalChargePaid", label: "Additional Charge", group: "ledger" },
+  { key: "receivePaid", label: "Receive", group: "ledger" },
+  { key: "refundPaid", label: "Refund", group: "ledger" },
+  { key: "totalReceived", label: "Total Received", group: "ledger" },
+  { key: "netReceived", label: "Net Received", group: "ledger" },
+  { key: "netCash", label: "Net Cash", group: "ledger" },
+  { key: "netPhonePe", label: "Net PhonePe", group: "ledger" },
+  { key: "netRazorpay", label: "Net Razorpay", group: "ledger" },
+  { key: "splitDiff", label: "Unsplit Amount", group: "ledger" },
+  { key: "handoverStatus", label: "Handover Status", group: "ledger" },
+  { key: "handoverBill", label: "Handover Bill", group: "ledger" },
+  { key: "handoverBalance", label: "Handover Balance", group: "ledger" },
+  { key: "returnStatus", label: "Settlement Status", group: "ledger" },
+  { key: "returnFinalBalance", label: "Return Balance", group: "ledger" },
+  { key: "currentDue", label: "Current Due", group: "ledger" },
+  { key: "dueSource", label: "Due From", group: "ledger" },
+  { key: "paymentCount", label: "Txns", group: "ledger" },
+  { key: "lastPaymentAt", label: "Last Txn At", group: "ledger" },
+];
+ 
+const ALL_BOOKING_PAYMENT_COLUMNS = [...BOOKING_PAYMENT_COLUMNS, ...BOOKING_LEDGER_COLUMNS];
+ 
 const SORTABLE_FIELDS = ["createdAt", "amount", "booking.fromDate", "bookingMonth"];
-
+ 
 const escapeRegex = (str) => str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-
+ 
+// ============================================================
+// LEDGER CONFIG & HELPERS
+// ============================================================
+const PAYMENT_TYPES = [
+  "booking",
+  "handover",
+  "rental",
+  "extension",
+  "additional_charge",
+  "receive",
+  "refund",
+];
+ 
+const TYPE_TO_FIELD = {
+  booking: "allBookingPaid",
+  handover: "handoverPaid",
+  rental: "rentalPaid",
+  extension: "extensionPaid",
+  additional_charge: "additionalChargePaid",
+  receive: "receivePaid",
+  refund: "refundPaid",
+};
+ 
+// Money coming IN (everything except refund)
+const INFLOW_FIELDS = PAYMENT_TYPES.filter((t) => t !== "refund").map((t) => TYPE_TO_FIELD[t]);
+ 
+// Money fields that get summed in the footer (per distinct booking, never per row)
+const LEDGER_MONEY_FIELDS = [
+  "allBookingPaid",
+  "handoverPaid",
+  "rentalPaid",
+  "extensionPaid",
+  "additionalChargePaid",
+  "receivePaid",
+  "refundPaid",
+  "totalReceived",
+  "netReceived",
+  "netCash",
+  "netPhonePe",
+  "netRazorpay",
+  "splitDiff",
+  "handoverBill",
+  "handoverBalance",
+  "returnFinalBalance",
+  "currentDue",
+];
+ 
+// Round to paise to avoid floating point noise (e.g. 0.1 + 0.2)
+const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
+const numOrNull = (v) => (v === null || v === undefined ? null : round2(v));
+ 
+const emptyLedger = () => ({
+  bookingCode: "",
+  bookingStatus: "",
+  tripDays: null,
+  currentDropAt: null,
+  allBookingPaid: 0,
+  handoverPaid: 0,
+  rentalPaid: 0,
+  extensionPaid: 0,
+  additionalChargePaid: 0,
+  receivePaid: 0,
+  refundPaid: 0,
+  totalReceived: 0,
+  netReceived: 0,
+  netCash: 0,
+  netPhonePe: 0,
+  netRazorpay: 0,
+  splitDiff: 0,
+  handoverStatus: "",
+  handoverBill: null, // null = no handover yet
+  handoverBalance: null,
+  returnStatus: "",
+  returnFinalBalance: null, // null = not returned yet
+  currentDue: 0,
+  dueSource: "",
+  paymentCount: 0,
+  lastPaymentAt: null,
+});
+ 
+/**
+ * Build a booking-level ledger for each bookingId.
+ * Returns Map<bookingIdString, ledger>.
+ */
+const buildBookingLedgers = async (bookingIds, companyId) => {
+  const ids = (bookingIds || []).filter(Boolean);
+  const ledgers = new Map();
+  if (!ids.length) return ledgers;
+ 
+  // ---------- 1. All payment records of these bookings, every type ----------
+  const paymentMatch = { bookingId: { $in: ids } };
+  if (companyId) paymentMatch.company = companyId;
+ 
+  const typeSums = {};
+  for (const t of PAYMENT_TYPES) {
+    typeSums[TYPE_TO_FIELD[t]] = {
+      $sum: { $cond: [{ $eq: ["$type", t] }, "$_amt", 0] },
+    };
+  }
+ 
+  // If a single-method record has an empty breakdown, attribute the full
+  // amount to that method's channel. "mixed" with an empty breakdown stays
+  // unassigned and shows up in "Unsplit Amount" so it can be fixed.
+  const channelAmount = (method, bdField) => ({
+    $cond: [
+      { $and: [{ $eq: ["$_bdTotal", 0] }, { $eq: ["$paymentMethod", method] }] },
+      "$_amt",
+      bdField,
+    ],
+  });
+ 
+  const paymentPipeline = [
+    { $match: paymentMatch },
+    {
+      $addFields: {
+        _amt: { $ifNull: ["$amount", 0] },
+        _sign: { $cond: [{ $eq: ["$type", "refund"] }, -1, 1] },
+        _bdCash: { $ifNull: ["$paymentBreakdown.cash", 0] },
+        _bdPhonePe: { $ifNull: ["$paymentBreakdown.phonePe", 0] },
+        _bdRazorpay: { $ifNull: ["$paymentBreakdown.razorpay", 0] },
+      },
+    },
+    { $addFields: { _bdTotal: { $add: ["$_bdCash", "$_bdPhonePe", "$_bdRazorpay"] } } },
+    {
+      $addFields: {
+        _cash: channelAmount("cash", "$_bdCash"),
+        _phonePe: channelAmount("phonepe", "$_bdPhonePe"),
+        _razorpay: channelAmount("razorpay", "$_bdRazorpay"),
+      },
+    },
+    {
+      $group: {
+        _id: "$bookingId",
+        ...typeSums,
+        netCash: { $sum: { $multiply: ["$_sign", "$_cash"] } },
+        netPhonePe: { $sum: { $multiply: ["$_sign", "$_phonePe"] } },
+        netRazorpay: { $sum: { $multiply: ["$_sign", "$_razorpay"] } },
+        paymentCount: { $sum: 1 },
+        lastPaymentAt: { $max: "$createdAt" },
+      },
+    },
+  ];
+ 
+  // ---------- 2. Latest handover per booking + its vehicle return ----------
+  const handoverPipeline = [
+    { $match: { bookingId: { $in: ids }, isDeleted: { $ne: true } } },
+    { $sort: { createdAt: -1, _id: -1 } },
+    {
+      $group: {
+        _id: "$bookingId",
+        handoverId: { $first: "$_id" },
+        handoverStatus: { $first: "$handoverStatus" },
+        handoverBill: { $first: "$payment.totalAmount" },
+        handoverBalance: { $first: "$payment.balanceAmount" },
+        tripDays: { $first: "$trip.numberOfDays" },
+        dropDateTime: { $first: "$trip.dropDateTime" },
+      },
+    },
+    {
+      $lookup: {
+        from: VehicleReturn.collection.name,
+        let: { hid: "$handoverId" },
+        pipeline: [
+          { $match: { $expr: { $eq: ["$handover", "$$hid"] } } },
+          { $project: { _id: 1, "settlementDetails.finalBalance": 1, "settlementDetails.status": 1 } },
+          { $limit: 1 },
+        ],
+        as: "ret",
+      },
+    },
+    { $addFields: { ret: { $arrayElemAt: ["$ret", 0] } } },
+  ];
+ 
+  const [paymentAgg, bookings, handoverAgg] = await Promise.all([
+    PaymentHistory.aggregate(paymentPipeline),
+    Booking.find({ _id: { $in: ids } })
+      .select("bookingCode status totalDays toDate isDeleted payment.balanceAmount")
+      .lean(),
+    Handover.aggregate(handoverPipeline),
+  ]);
+ 
+  const payMap = new Map(paymentAgg.map((p) => [String(p._id), p]));
+  const bookingMap = new Map(bookings.map((b) => [String(b._id), b]));
+  const handoverMap = new Map(handoverAgg.map((h) => [String(h._id), h]));
+ 
+  // ---------- 3. Compose ledger per booking ----------
+  for (const id of ids) {
+    const key = String(id);
+    if (ledgers.has(key)) continue;
+ 
+    const pay = payMap.get(key) || {};
+    const bk = bookingMap.get(key) || null;
+    const ho = handoverMap.get(key) || null;
+    const hasReturn = !!ho?.ret?._id;
+ 
+    const l = emptyLedger();
+ 
+    // Per-type totals
+    for (const field of Object.values(TYPE_TO_FIELD)) l[field] = round2(pay[field]);
+ 
+    l.totalReceived = round2(INFLOW_FIELDS.reduce((s, f) => s + l[f], 0));
+    l.netReceived = round2(l.totalReceived - l.refundPaid);
+ 
+    l.netCash = round2(pay.netCash);
+    l.netPhonePe = round2(pay.netPhonePe);
+    l.netRazorpay = round2(pay.netRazorpay);
+    // Should be 0 when every record's breakdown is filled correctly
+    l.splitDiff = round2(l.netReceived - l.netCash - l.netPhonePe - l.netRazorpay);
+ 
+    l.paymentCount = pay.paymentCount || 0;
+    l.lastPaymentAt = pay.lastPaymentAt || null;
+ 
+    // Booking snapshot
+    if (bk) {
+      l.bookingCode = bk.bookingCode || "";
+      l.bookingStatus = bk.isDeleted ? "deleted" : bk.status || "";
+    }
+ 
+    // Handover snapshot (latest)
+    if (ho) {
+      l.handoverStatus = ho.handoverStatus || "";
+      l.handoverBill = numOrNull(ho.handoverBill);
+      l.handoverBalance = numOrNull(ho.handoverBalance);
+    }
+ 
+    // Return snapshot
+    if (hasReturn) {
+      l.returnStatus = ho.ret.settlementDetails?.status || "";
+      l.returnFinalBalance = numOrNull(ho.ret.settlementDetails?.finalBalance);
+    }
+ 
+    // Duration: handover reflects extensions, else booking
+    l.tripDays = ho?.tripDays ?? bk?.totalDays ?? null;
+    l.currentDropAt = ho?.dropDateTime ?? bk?.toDate ?? null;
+ 
+    // Current due — most recent stage wins: return > handover > booking
+    if (hasReturn) {
+      l.currentDue = round2(ho.ret.settlementDetails?.finalBalance);
+      l.dueSource = "return";
+    } else if (ho && ho.handoverStatus === "cancelled") {
+      l.currentDue = 0;
+      l.dueSource = "cancelled";
+    } else if (ho) {
+      l.currentDue = round2(ho.handoverBalance);
+      l.dueSource = "handover";
+    } else if (bk && (bk.isDeleted || bk.status === "cancelled")) {
+      l.currentDue = 0;
+      l.dueSource = "cancelled";
+    } else if (bk) {
+      l.currentDue = round2(bk.payment?.balanceAmount);
+      l.dueSource = "booking";
+    }
+ 
+    ledgers.set(key, l);
+  }
+ 
+  return ledgers;
+};
+ 
+// Totals over DISTINCT bookings (no double counting when a booking has
+// more than one "booking" type payment row)
+const summarizeLedgers = (ledgers) => {
+  const s = Object.fromEntries(LEDGER_MONEY_FIELDS.map((f) => [f, 0]));
+  s.bookingCount = 0;
+  s.paymentCount = 0;
+  s.dueBookingCount = 0;
+ 
+  for (const l of ledgers.values()) {
+    s.bookingCount += 1;
+    s.paymentCount += l.paymentCount || 0;
+    if ((Number(l.currentDue) || 0) > 0) s.dueBookingCount += 1;
+    for (const f of LEDGER_MONEY_FIELDS) s[f] += Number(l[f]) || 0;
+  }
+ 
+  for (const f of LEDGER_MONEY_FIELDS) s[f] = round2(s[f]);
+  return s;
+};
+ 
+// ============================================================
+// CONTROLLER
+// ============================================================
 export const getBookingPayments = async (req, res) => {
   try {
     const {
@@ -1767,21 +2083,21 @@ export const getBookingPayments = async (req, res) => {
       sortBy = "createdAt",
       sortOrder = "desc",
     } = req.query;
-
-     // ---------- Company scope (optional, no auth) ----------
+ 
+    // ---------- Company scope (optional, no auth) ----------
     const { company } = req.query;
-
+ 
     const filter = { type: "booking" };
-
+ 
     if (company) {
       if (!mongoose.Types.ObjectId.isValid(company)) {
         return res.status(400).json({ success: false, message: "Invalid company id" });
       }
       filter.company = new mongoose.Types.ObjectId(company);
     }
-
+ 
     const and = [];
-
+ 
     // ---------- Month filter (supports old records without bookingMonth) ----------
     if (month) {
       if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) {
@@ -1790,7 +2106,7 @@ export const getBookingPayments = async (req, res) => {
       const [y, m] = month.split("-").map(Number);
       const start = new Date(Date.UTC(y, m - 1, 1));
       const end = new Date(Date.UTC(y, m, 1));
-
+ 
       and.push({
         $or: [
           { bookingMonth: month },
@@ -1799,7 +2115,7 @@ export const getBookingPayments = async (req, res) => {
         ],
       });
     }
-
+ 
     // ---------- Payment date range ----------
     if (fromDate || toDate) {
       const range = {};
@@ -1816,16 +2132,16 @@ export const getBookingPayments = async (req, res) => {
       }
       if (Object.keys(range).length) filter.createdAt = range;
     }
-
+ 
     // ---------- Other filters ----------
     if (paymentMethod && ["cash", "phonepe", "razorpay", "mixed"].includes(paymentMethod)) {
       filter.paymentMethod = paymentMethod;
     }
-
+ 
     if (isCollected === "true" || isCollected === "false") {
       filter.isCollected = isCollected === "true";
     }
-
+ 
     if (search?.trim()) {
       const rx = new RegExp(escapeRegex(search.trim()), "i");
       and.push({
@@ -1837,26 +2153,26 @@ export const getBookingPayments = async (req, res) => {
         ],
       });
     }
-
+ 
     if (and.length) filter.$and = and;
-
+ 
     // ---------- Sorting & pagination ----------
     const sortField = SORTABLE_FIELDS.includes(sortBy) ? sortBy : "createdAt";
     const sort = { [sortField]: sortOrder === "asc" ? 1 : -1, _id: -1 };
-
+ 
     const exportAll = all === "true";
     const pageNum = Math.max(parseInt(page, 10) || 1, 1);
     const limitNum = Math.min(Math.max(parseInt(limit, 10) || 50, 1), 500);
-
+ 
     let query = PaymentHistory.find(filter)
       .select("-collectionHistory -__v")
       .populate("createdBy", "name")
       .sort(sort)
       .lean();
-
+ 
     if (!exportAll) query = query.skip((pageNum - 1) * limitNum).limit(limitNum);
-
-    const [payments, total, summaryAgg] = await Promise.all([
+ 
+    const [payments, total, summaryAgg, filteredBookingIds] = await Promise.all([
       query,
       PaymentHistory.countDocuments(filter),
       PaymentHistory.aggregate([
@@ -1874,8 +2190,21 @@ export const getBookingPayments = async (req, res) => {
           },
         },
       ]),
+      // NEW: every distinct booking in the filtered set (for ledger + footer totals)
+      PaymentHistory.distinct("bookingId", filter),
     ]);
-
+ 
+    // ---------- NEW: booking ledger (all payment types) ----------
+    let ledgers = new Map();
+    let ledgerError = false;
+    try {
+      ledgers = await buildBookingLedgers(filteredBookingIds, filter.company);
+    } catch (err) {
+      // Never break the existing sheet if the ledger fails
+      console.error("getBookingPayments ledger error:", err);
+      ledgerError = true;
+    }
+ 
     // ---------- Flatten for sheet ----------
     const rows = payments.map((p) => ({
       _id: p._id,
@@ -1905,19 +2234,29 @@ export const getBookingPayments = async (req, res) => {
       lastCollectedAt: p.lastCollectedAt || null,
       createdByName: p.createdBy?.name || "",
       note: p.note || "",
+ 
+      // NEW: booking-level ledger (same values on every row of the same booking)
+      ...(ledgers.get(String(p.bookingId)) || emptyLedger()),
     }));
-
+ 
     const summary = summaryAgg[0] || {
       totalAmount: 0, totalCash: 0, totalPhonePe: 0, totalRazorpay: 0,
       totalCollected: 0, totalCollectedPhonePe: 0, collectedCount: 0,
     };
     delete summary._id;
-
+ 
     return res.status(200).json({
       success: true,
-      columns: BOOKING_PAYMENT_COLUMNS,
+      columns: ALL_BOOKING_PAYMENT_COLUMNS,
       rows,
-      summary: { ...summary, count: total, pendingCount: total - summary.collectedCount },
+      summary: {
+        ...summary,
+        count: total,
+        pendingCount: total - summary.collectedCount,
+        // NEW: totals per distinct booking
+        ledger: summarizeLedgers(ledgers),
+        ledgerError,
+      },
       pagination: exportAll
         ? { total, page: 1, limit: total, totalPages: 1 }
         : { total, page: pageNum, limit: limitNum, totalPages: Math.ceil(total / limitNum) },
