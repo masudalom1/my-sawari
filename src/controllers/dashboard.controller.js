@@ -4,7 +4,8 @@ import Vehicle from "../models/vehicle.model.js";
 import Booking from "../models/booking.model.js";
 import PaymentHistory, { toBookingMonth } from "../models/paymentHistory.model.js";
 import Handover from "../models/handover.model.js";
-import VehicleReturn from "../models/vehicleReturn.model.js";import {
+import VehicleReturn from "../models/vehicleReturn.model.js";
+import {
   parseRevenueRange,
   daysBetweenKeys,
   emptyRevenueTotals,
@@ -1725,6 +1726,7 @@ export const getBookingDashboardRevenue = async (req, res) => {
   }
 };
 
+ 
 const BOOKING_PAYMENT_COLUMNS = [
   { key: "paymentDate", label: "Payment Date" },
   { key: "bookingMonth", label: "Booking Month" },
@@ -1797,6 +1799,8 @@ const BOOKING_LEDGER_COLUMNS = [
   { key: "handoverBalance", label: "Handover Balance (system)", group: "ledger" },
   { key: "returnStatus", label: "Settlement Status", group: "ledger" },
   { key: "returnFinalBalance", label: "Return Balance (system)", group: "ledger" },
+  { key: "returnCollected", label: "Return Collected (system)", group: "ledger" },
+  { key: "returnedAt", label: "Returned At", group: "ledger" },
  
   { key: "paymentCount", label: "Txns", group: "ledger" },
   { key: "lastPaymentAt", label: "Last Txn At", group: "ledger" },
@@ -1864,6 +1868,7 @@ const LEDGER_MONEY_FIELDS = [
   "handoverBill",
   "handoverBalance",
   "returnFinalBalance",
+  "returnCollected",
 ];
  
 // Round to paise to avoid floating point noise (e.g. 0.1 + 0.2)
@@ -1912,6 +1917,8 @@ const emptyLedger = () => ({
   handoverBalance: null,
   returnStatus: "",
   returnFinalBalance: null, // null = not returned yet
+  returnCollected: null,
+  returnedAt: null,
  
   paymentCount: 0,
   lastPaymentAt: null,
@@ -2085,13 +2092,21 @@ const buildBookingLedgers = async (bookingIds, companyId) => {
   }
  
   // ---------- 3. Returns ----------
-  const latestHandoverIds = [...latestHandover.values()].map((h) => h._id);
-  const returns = latestHandoverIds.length
-    ? await VehicleReturn.find({ handover: { $in: latestHandoverIds } })
-        .select("handover createdAt settlementDetails")
+  // Look at returns of EVERY handover of the booking (not only the newest),
+  // so a return saved against an earlier handover is never missed.
+  const bookingHandoverIds = [...handoverToBooking.keys()].map(toObjId);
+  const returns = bookingHandoverIds.length
+    ? await VehicleReturn.find({ handover: { $in: bookingHandoverIds } })
+        .select("handover createdAt receivingTime settlementDetails")
+        .sort({ createdAt: -1, _id: -1 })
         .lean()
     : [];
-  const returnByHandover = new Map(returns.map((r) => [String(r.handover), r]));
+ 
+  const returnByBooking = new Map(); // bookingId -> newest return
+  for (const r of returns) {
+    const bid = handoverToBooking.get(String(r.handover));
+    if (bid && !returnByBooking.has(bid)) returnByBooking.set(bid, r);
+  }
  
   // ---------- Payment accumulator (same rules for every link type) ----------
   const accs = new Map();
@@ -2280,6 +2295,9 @@ const buildBookingLedgers = async (bookingIds, companyId) => {
   );
  
   // ---------- 6. Compose ledger per booking ----------
+  let returnsWithCollection = 0;
+  let returnsNotLogged = 0;
+ 
   for (const id of ids) {
     const key = String(id);
     if (ledgers.has(key)) continue;
@@ -2287,7 +2305,7 @@ const buildBookingLedgers = async (bookingIds, companyId) => {
     const pay = accs.get(key) || { items: [] };
     const bk = bookingMap.get(key) || null;
     const ho = latestHandover.get(key) || null;
-    const ret = ho ? returnByHandover.get(String(ho._id)) || null : null;
+    const ret = returnByBooking.get(key) || null;
  
     const l = emptyLedger();
  
@@ -2296,29 +2314,73 @@ const buildBookingLedgers = async (bookingIds, companyId) => {
  
     l.totalReceived = round2(INFLOW_FIELDS.reduce((s, f) => s + l[f], 0));
     l.netReceived = round2(l.totalReceived - l.refundPaid);
-    l.netCash = round2(pay.netCash);
-    l.netPhonePe = round2(pay.netPhonePe);
-    l.netRazorpay = round2(pay.netRazorpay);
-    l.splitDiff = round2(l.netReceived - l.netCash - l.netPhonePe - l.netRazorpay);
     l.paymentCount = pay.paymentCount || 0;
     l.lastPaymentAt = pay.lastPaymentAt || null;
  
-    // Money collected at return that was never saved as a PaymentHistory record.
-    // Only the part NOT already covered by payments made at/after the return.
+    let netCash = num(pay.netCash);
+    let netPhonePe = num(pay.netPhonePe);
+    let netRazorpay = num(pay.netRazorpay);
+ 
+    // Time the return happened (payments within 2 h before it count as "at return")
+    const RETURN_WINDOW_MS = 2 * 60 * 60 * 1000;
+    const retAt = ret ? toMs(ret.receivingTime) ?? toMs(ret.createdAt) : null;
+    const atOrAfterReturn = (i) => retAt !== null && i.at !== null && i.at >= retAt - RETURN_WINDOW_MS;
+ 
+    // ---- Return collection ----
+    // settlementDetails.amountCollected is what was taken at return.
+    // If the return screen did not save it as a PaymentHistory record,
+    // add the missing part here (never double counted).
     if (ret) {
-      const retAt = toMs(ret.createdAt);
-      const loggedAtReturn =
-        retAt === null
-          ? 0
-          : pay.items
-              .filter((i) => i.type !== "refund" && i.at !== null && i.at >= retAt - 2 * 60 * 60 * 1000)
-              .reduce((s, i) => s + i.amt, 0);
-      l.returnCollectedUnlogged = round2(
-        Math.max(0, num(ret.settlementDetails?.amountCollected) - loggedAtReturn),
-      );
+      const st = ret.settlementDetails || {};
+      const collected = num(st.amountCollected);
+ 
+      l.returnCollected = round2(collected);
+      l.returnedAt = ret.receivingTime || ret.createdAt || null;
+ 
+      const loggedAtReturn = pay.items
+        .filter((i) => i.type !== "refund" && atOrAfterReturn(i))
+        .reduce((s, i) => s + i.amt, 0);
+ 
+      const unlogged = round2(Math.max(0, collected - loggedAtReturn));
+      l.returnCollectedUnlogged = unlogged;
+ 
+      if (collected > 0) returnsWithCollection += 1;
+      if (unlogged > 0) {
+        returnsNotLogged += 1;
+ 
+        // Put the unlogged part into the right channels
+        const bd = st.paymentBreakdown || {};
+        const bdCash = num(bd.cash);
+        const bdPhonePe = num(bd.phonePe);
+        const bdRazorpay = num(bd.razorpay);
+        const bdTotal = bdCash + bdPhonePe + bdRazorpay;
+ 
+        if (bdTotal > 0) {
+          const share = unlogged / bdTotal;
+          netCash += bdCash * share;
+          netPhonePe += bdPhonePe * share;
+          netRazorpay += bdRazorpay * share;
+        } else if (st.paymentMode === "Cash") {
+          netCash += unlogged;
+        } else if (st.paymentMode === "PhonePe") {
+          netPhonePe += unlogged;
+        } else if (st.paymentMode === "Razorpay") {
+          netRazorpay += unlogged;
+        }
+      }
     }
  
     l.totalPaid = round2(l.netReceived + l.returnCollectedUnlogged);
+    l.netCash = round2(netCash);
+    l.netPhonePe = round2(netPhonePe);
+    l.netRazorpay = round2(netRazorpay);
+    l.splitDiff = round2(l.totalPaid - l.netCash - l.netPhonePe - l.netRazorpay);
+ 
+    // "additional_charge" money taken at return pays the return fines,
+    // so only the part paid BEFORE the return proves an extra charge.
+    const additionalBeforeReturn = pay.items
+      .filter((i) => i.type === "additional_charge" && !atOrAfterReturn(i))
+      .reduce((s, i) => s + i.amt, 0);
  
     // ---- Snapshot info ----
     if (bk) {
@@ -2352,7 +2414,7 @@ const buildBookingLedgers = async (bookingIds, companyId) => {
     } else {
       Object.assign(
         l,
-        computeBill({ bk, ho, ret, additionalChargePaid: l.additionalChargePaid }),
+        computeBill({ bk, ho, ret, additionalChargePaid: additionalBeforeReturn }),
       );
       l.dueSource = ret ? "return" : ho ? "handover" : "booking";
  
@@ -2363,6 +2425,11 @@ const buildBookingLedgers = async (bookingIds, companyId) => {
  
     ledgers.set(key, l);
   }
+ 
+  console.log(
+    `[ledger] returns found=${returns.length} withCollection=${returnsWithCollection} ` +
+      `collectionNotInPayments=${returnsNotLogged}`,
+  );
  
   return ledgers;
 };
