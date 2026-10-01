@@ -1749,15 +1749,26 @@ const BOOKING_PAYMENT_COLUMNS = [
   { key: "note", label: "Note" },
 ];
  
-// NEW: booking-level ledger columns.
-// These are lifetime totals of EVERY PaymentHistory record that shares the
-// same bookingId (same customer + same vehicle + same booking duration),
-// across all payment types, plus the latest handover / return snapshot.
+// Booking-level ledger columns: the full bill (what the customer owes)
+// and every payment (what the customer paid), for the same booking.
 const BOOKING_LEDGER_COLUMNS = [
   { key: "bookingCode", label: "Booking Code", group: "ledger" },
   { key: "bookingStatus", label: "Booking Status", group: "ledger" },
+  { key: "dueSource", label: "Stage", group: "ledger" },
   { key: "tripDays", label: "Days", group: "ledger" },
   { key: "currentDropAt", label: "Current Drop", group: "ledger" },
+ 
+  // ---- BILL (charges) ----
+  { key: "rentCharge", label: "Rent", group: "ledger" },
+  { key: "fastagCharge", label: "FASTag", group: "ledger" },
+  { key: "pickupDropCharge", label: "Pickup / Drop", group: "ledger" },
+  { key: "extraCharge", label: "Extra Charges", group: "ledger" },
+  { key: "returnCharges", label: "Return Charges", group: "ledger" },
+  { key: "depositCharge", label: "Deposit", group: "ledger" },
+  { key: "discountGiven", label: "Discount", group: "ledger" },
+  { key: "totalBill", label: "Total Bill", group: "ledger" },
+ 
+  // ---- PAYMENTS (by type) ----
   { key: "allBookingPaid", label: "Booking (All)", group: "ledger" },
   { key: "handoverPaid", label: "Handover", group: "ledger" },
   { key: "rentalPaid", label: "Rental", group: "ledger" },
@@ -1767,17 +1778,26 @@ const BOOKING_LEDGER_COLUMNS = [
   { key: "refundPaid", label: "Refund", group: "ledger" },
   { key: "totalReceived", label: "Total Received", group: "ledger" },
   { key: "netReceived", label: "Net Received", group: "ledger" },
+  { key: "returnCollectedUnlogged", label: "Return Collected (not in payments)", group: "ledger" },
+  { key: "totalPaid", label: "Total Paid", group: "ledger" },
+ 
+  // ---- RESULT ----
+  { key: "currentDue", label: "Current Due", group: "ledger" },
+  { key: "refundDue", label: "Refund Due", group: "ledger" },
+ 
+  // ---- CHANNELS ----
   { key: "netCash", label: "Net Cash", group: "ledger" },
   { key: "netPhonePe", label: "Net PhonePe", group: "ledger" },
   { key: "netRazorpay", label: "Net Razorpay", group: "ledger" },
   { key: "splitDiff", label: "Unsplit Amount", group: "ledger" },
+ 
+  // ---- SYSTEM VALUES (for comparison only) ----
   { key: "handoverStatus", label: "Handover Status", group: "ledger" },
-  { key: "handoverBill", label: "Handover Bill", group: "ledger" },
-  { key: "handoverBalance", label: "Handover Balance", group: "ledger" },
+  { key: "handoverBill", label: "Handover Total (system)", group: "ledger" },
+  { key: "handoverBalance", label: "Handover Balance (system)", group: "ledger" },
   { key: "returnStatus", label: "Settlement Status", group: "ledger" },
-  { key: "returnFinalBalance", label: "Return Balance", group: "ledger" },
-  { key: "currentDue", label: "Current Due", group: "ledger" },
-  { key: "dueSource", label: "Due From", group: "ledger" },
+  { key: "returnFinalBalance", label: "Return Balance (system)", group: "ledger" },
+ 
   { key: "paymentCount", label: "Txns", group: "ledger" },
   { key: "lastPaymentAt", label: "Last Txn At", group: "ledger" },
 ];
@@ -1814,8 +1834,16 @@ const TYPE_TO_FIELD = {
 // Money coming IN (everything except refund)
 const INFLOW_FIELDS = PAYMENT_TYPES.filter((t) => t !== "refund").map((t) => TYPE_TO_FIELD[t]);
  
-// Money fields that get summed in the footer (per distinct booking, never per row)
+// Money fields summed in the footer (per distinct booking, never per row)
 const LEDGER_MONEY_FIELDS = [
+  "rentCharge",
+  "fastagCharge",
+  "pickupDropCharge",
+  "extraCharge",
+  "returnCharges",
+  "depositCharge",
+  "discountGiven",
+  "totalBill",
   "allBookingPaid",
   "handoverPaid",
   "rentalPaid",
@@ -1825,6 +1853,10 @@ const LEDGER_MONEY_FIELDS = [
   "refundPaid",
   "totalReceived",
   "netReceived",
+  "returnCollectedUnlogged",
+  "totalPaid",
+  "currentDue",
+  "refundDue",
   "netCash",
   "netPhonePe",
   "netRazorpay",
@@ -1832,18 +1864,29 @@ const LEDGER_MONEY_FIELDS = [
   "handoverBill",
   "handoverBalance",
   "returnFinalBalance",
-  "currentDue",
 ];
  
 // Round to paise to avoid floating point noise (e.g. 0.1 + 0.2)
 const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
 const numOrNull = (v) => (v === null || v === undefined ? null : round2(v));
+const num = (v) => Number(v) || 0;
  
 const emptyLedger = () => ({
   bookingCode: "",
   bookingStatus: "",
+  dueSource: "",
   tripDays: null,
   currentDropAt: null,
+ 
+  rentCharge: 0,
+  fastagCharge: 0,
+  pickupDropCharge: 0,
+  extraCharge: 0,
+  returnCharges: 0,
+  depositCharge: 0,
+  discountGiven: 0,
+  totalBill: 0,
+ 
   allBookingPaid: 0,
   handoverPaid: 0,
   rentalPaid: 0,
@@ -1853,30 +1896,149 @@ const emptyLedger = () => ({
   refundPaid: 0,
   totalReceived: 0,
   netReceived: 0,
+  returnCollectedUnlogged: 0,
+  totalPaid: 0,
+ 
+  currentDue: 0,
+  refundDue: 0,
+ 
   netCash: 0,
   netPhonePe: 0,
   netRazorpay: 0,
   splitDiff: 0,
+ 
   handoverStatus: "",
   handoverBill: null, // null = no handover yet
   handoverBalance: null,
   returnStatus: "",
   returnFinalBalance: null, // null = not returned yet
-  currentDue: 0,
-  dueSource: "",
+ 
   paymentCount: 0,
   lastPaymentAt: null,
 });
  
 /**
+ * Work out the customer's bill (charges) for one booking.
+ *
+ *   Total Bill = Rent + FASTag + Pickup/Drop + Extra Charges
+ *              + Return Charges + Deposit (only while vehicle is out)
+ *              − Discount
+ *
+ * Handover values are used once a handover exists (they include
+ * extensions); before that, the booking's values are used. Missing
+ * handover values fall back to the booking's values.
+ */
+const computeBill = ({ bk, ho, ret, additionalChargePaid }) => {
+  const bp = bk?.payment || {};
+  const bookingPickupDrop = num(bp.pickupCharge) + num(bp.dropCharge);
+ 
+  let rent = 0;
+  let fastag = 0;
+  let pickupDrop = 0;
+  let extra = 0;
+  let deposit = 0;
+  let discount = 0;
+ 
+  if (ho) {
+    const hp = ho.payment || {};
+ 
+    // Extensions: if totalFare was already updated to the last bill's
+    // "totalFareAfterThisBill", it includes them. Otherwise add them.
+    const bills = [...(ho.extensionBills || [])].sort(
+      (a, b) => num(a.billNumber) - num(b.billNumber),
+    );
+    const lastBill = bills[bills.length - 1];
+    const extensionSum = bills.reduce((s, b) => s + num(b.extensionAmount), 0);
+    const fareIncludesExtensions =
+      !lastBill || Math.abs(num(lastBill.totalFareAfterThisBill) - num(hp.totalFare)) <= 1;
+ 
+    const hRent = num(hp.totalFare) + (fareIncludesExtensions ? 0 : extensionSum);
+    const hFastag = num(hp.fastTagPayableAmount);
+    const hPickupDrop = num(hp.billSummary?.pickupCharge) + num(hp.billSummary?.dropCharge);
+    const hExtra = num(hp.extraCharges);
+    const hDeposit = num(hp.securityDeposit);
+    const hDiscount = num(hp.discountAmount);
+    const hTotal = num(hp.totalAmount);
+ 
+    // Do the handover's own parts add up to its stored totalAmount
+    // (either before or after discount)? Then trust them as they are.
+    const hGross = hRent + hFastag + hPickupDrop + hExtra + hDeposit;
+    const partsMatchTotal =
+      hTotal > 0 &&
+      (Math.abs(hGross - hTotal) <= 1 || Math.abs(hGross - hDiscount - hTotal) <= 1);
+ 
+    if (partsMatchTotal) {
+      rent = hRent;
+      fastag = hFastag;
+      pickupDrop = hPickupDrop;
+      extra = hExtra;
+      deposit = hDeposit;
+    } else {
+      // Fill gaps from the booking
+      fastag = hFastag > 0 ? hFastag : num(bp.fastagAmount);
+      pickupDrop = hPickupDrop > 0 ? hPickupDrop : bookingPickupDrop;
+      extra = hExtra;
+      deposit = hDeposit;
+      rent = hRent > 0 ? hRent : Math.max(0, hTotal - fastag - pickupDrop - extra - deposit);
+    }
+ 
+    // Discount given at booking carries over unless the handover sets its own
+    discount = hDiscount > 0 ? hDiscount : num(bp.discountAmount);
+  } else if (bk) {
+    rent = num(bp.vehicleRent);
+    fastag = num(bp.fastagAmount);
+    pickupDrop = bookingPickupDrop;
+    deposit = num(bp.securityDeposit);
+    discount = num(bp.discountAmount);
+ 
+    // Old bookings that only stored totalAmount
+    if (rent + fastag + pickupDrop === 0) rent = num(bp.totalAmount);
+  }
+ 
+  // Money taken as "additional_charge" proves at least that much was charged
+  extra = Math.max(extra, num(additionalChargePaid));
+ 
+  // Return: fines/fuel/damage are added; the deposit stops being a charge
+  // (it is either refunded via a "refund" payment, or kept to cover these).
+  let returnCharges = 0;
+  if (ret) {
+    const s = ret.settlementDetails || {};
+    returnCharges =
+      num(s.lateReturnFine) + num(s.extraKmFine) + num(s.fuelUsageAmount) + num(s.damageAmount);
+    deposit = 0;
+  }
+ 
+  const totalBill = Math.max(
+    0,
+    rent + fastag + pickupDrop + extra + returnCharges + deposit - discount,
+  );
+ 
+  return {
+    rentCharge: round2(rent),
+    fastagCharge: round2(fastag),
+    pickupDropCharge: round2(pickupDrop),
+    extraCharge: round2(extra),
+    returnCharges: round2(returnCharges),
+    depositCharge: round2(deposit),
+    discountGiven: round2(discount),
+    totalBill: round2(totalBill),
+  };
+};
+ 
+/**
  * Build a booking-level ledger for each bookingId.
+ * Payments are linked to a booking by:
+ *   1. payment.bookingId = booking._id
+ *   2. payment.handoverId (or bookingId) = one of the booking's handovers
+ *   3. same mobile + same vehicle number + payment inside the trip window
+ * Each payment is counted for one booking only.
  * Returns Map<bookingIdString, ledger>.
  */
 const buildBookingLedgers = async (bookingIds, companyId) => {
   const ids = (bookingIds || []).filter(Boolean);
   const ledgers = new Map();
   if (!ids.length) return ledgers;
-
+ 
   const idSet = new Set(ids.map(String));
   const DAY = 24 * 60 * 60 * 1000;
   const toObjId = (v) => new mongoose.Types.ObjectId(String(v));
@@ -1886,18 +2048,18 @@ const buildBookingLedgers = async (bookingIds, companyId) => {
     const t = d ? new Date(d).getTime() : NaN;
     return Number.isNaN(t) ? null : t;
   };
-
+ 
   // ---------- 1. Bookings ----------
   const bookings = await Booking.find({ _id: { $in: ids } })
-    .select("bookingCode status totalDays fromDate toDate isDeleted payment.balanceAmount handover mobileNumber vehicleNumber")
+    .select("bookingCode status totalDays fromDate toDate isDeleted payment handover mobileNumber vehicleNumber")
     .lean();
   const bookingMap = new Map(bookings.map((b) => [String(b._id), b]));
-
+ 
   const bookingByHandoverRef = new Map();
   for (const b of bookings) {
     if (b.handover) bookingByHandoverRef.set(String(b.handover), String(b._id));
   }
-
+ 
   // ---------- 2. Handovers ----------
   const handovers = await Handover.find({
     isDeleted: { $ne: true },
@@ -1906,81 +2068,92 @@ const buildBookingLedgers = async (bookingIds, companyId) => {
       { _id: { $in: [...bookingByHandoverRef.keys()].map(toObjId) } },
     ],
   })
-    .select("_id bookingId handoverStatus payment.totalAmount payment.balanceAmount trip createdAt customer.mobileNumber vehicle.vehicleNumber")
+    .select(
+      "_id bookingId handoverStatus payment trip createdAt customer.mobileNumber vehicle.vehicleNumber " +
+        "extensionBills.billNumber extensionBills.extensionAmount extensionBills.totalFareAfterThisBill",
+    )
     .sort({ createdAt: -1, _id: -1 })
     .lean();
-
+ 
   const handoverToBooking = new Map(); // handoverId -> bookingId
-  const latestHandover = new Map();    // bookingId -> newest handover
+  const latestHandover = new Map(); // bookingId -> newest handover
   for (const h of handovers) {
     const bid = h.bookingId ? String(h.bookingId) : bookingByHandoverRef.get(String(h._id));
     if (!bid || !idSet.has(bid)) continue;
     handoverToBooking.set(String(h._id), bid);
     if (!latestHandover.has(bid)) latestHandover.set(bid, h);
   }
-
+ 
   // ---------- 3. Returns ----------
   const latestHandoverIds = [...latestHandover.values()].map((h) => h._id);
   const returns = latestHandoverIds.length
     ? await VehicleReturn.find({ handover: { $in: latestHandoverIds } })
-        .select("handover settlementDetails.finalBalance settlementDetails.status")
+        .select("handover createdAt settlementDetails")
         .lean()
     : [];
   const returnByHandover = new Map(returns.map((r) => [String(r.handover), r]));
-
+ 
   // ---------- Payment accumulator (same rules for every link type) ----------
   const accs = new Map();
   const usedPaymentIds = new Set();
-
+ 
   const addPayment = (bid, p, how) => {
     const key = String(p._id);
     if (usedPaymentIds.has(key)) return; // never count a payment twice
     usedPaymentIds.add(key);
-
+ 
     const acc =
       accs.get(bid) ||
       {
         ...Object.fromEntries(Object.values(TYPE_TO_FIELD).map((f) => [f, 0])),
-        netCash: 0, netPhonePe: 0, netRazorpay: 0,
-        paymentCount: 0, lastPaymentAt: null,
-        linkedById: 0, linkedByHandover: 0, linkedByMatch: 0,
+        netCash: 0,
+        netPhonePe: 0,
+        netRazorpay: 0,
+        paymentCount: 0,
+        lastPaymentAt: null,
+        linkedById: 0,
+        linkedByHandover: 0,
+        linkedByMatch: 0,
+        items: [],
       };
-
-    const amt = Number(p.amount) || 0;
+ 
+    const amt = num(p.amount);
     const sign = p.type === "refund" ? -1 : 1;
     const bd = p.paymentBreakdown || {};
-    let cash = Number(bd.cash) || 0;
-    let phonePe = Number(bd.phonePe) || 0;
-    let razorpay = Number(bd.razorpay) || 0;
-
+    let cash = num(bd.cash);
+    let phonePe = num(bd.phonePe);
+    let razorpay = num(bd.razorpay);
+ 
     // Empty breakdown on a single-method payment -> whole amount to that channel
     if (cash + phonePe + razorpay === 0) {
       if (p.paymentMethod === "cash") cash = amt;
       else if (p.paymentMethod === "phonepe") phonePe = amt;
       else if (p.paymentMethod === "razorpay") razorpay = amt;
     }
-
+ 
     const field = TYPE_TO_FIELD[p.type];
     if (field) acc[field] += amt;
-
+ 
     acc.netCash += sign * cash;
     acc.netPhonePe += sign * phonePe;
     acc.netRazorpay += sign * razorpay;
     acc.paymentCount += 1;
     acc[how] += 1;
-
+    acc.items.push({ at: toMs(p.createdAt), amt, type: p.type });
+ 
     if (p.createdAt && (!acc.lastPaymentAt || p.createdAt > acc.lastPaymentAt)) {
       acc.lastPaymentAt = p.createdAt;
     }
     accs.set(bid, acc);
   };
-
-  const PAYMENT_FIELDS = "_id type amount paymentMethod paymentBreakdown bookingId handoverId customer.mobileNumber vehicle.vehicleNumber booking.fromDate booking.toDate createdAt";
+ 
+  const PAYMENT_FIELDS =
+    "_id type amount paymentMethod paymentBreakdown bookingId handoverId customer.mobileNumber vehicle.vehicleNumber booking.fromDate booking.toDate createdAt";
   const companyMatch = companyId ? { company: companyId } : {};
-
+ 
   // ---------- 4. Rules 1 + 2: linked by ID ----------
   const allHandoverIds = [...handoverToBooking.keys()].map(toObjId);
-
+ 
   const idLinked = await PaymentHistory.find({
     ...companyMatch,
     $or: [
@@ -1992,34 +2165,34 @@ const buildBookingLedgers = async (bookingIds, companyId) => {
   })
     .select(PAYMENT_FIELDS)
     .lean();
-
+ 
   for (const p of idLinked) {
     const b = p.bookingId ? String(p.bookingId) : null;
     const h = p.handoverId ? String(p.handoverId) : null;
-
+ 
     if (h && handoverToBooking.has(h)) addPayment(handoverToBooking.get(h), p, "linkedByHandover");
     else if (b && idSet.has(b)) addPayment(b, p, "linkedById");
     else if (b && handoverToBooking.has(b)) addPayment(handoverToBooking.get(b), p, "linkedByHandover");
   }
-
+ 
   // ---------- 5. Rule 3: same customer + same vehicle + same trip window ----------
   const windows = [];
   for (const id of ids) {
     const key = String(id);
     const bk = bookingMap.get(key);
     const ho = latestHandover.get(key);
-
+ 
     const mobile = normMobile(ho?.customer?.mobileNumber || bk?.mobileNumber);
     const vehicle = normVehicle(ho?.vehicle?.vehicleNumber || bk?.vehicleNumber);
     const start = toMs(ho?.trip?.pickupDateTime) ?? toMs(bk?.fromDate);
     let end = toMs(ho?.trip?.dropDateTime) ?? toMs(bk?.toDate);
-    if (!ho?.trip?.dropDateTime && end !== null) end += DAY; // booking toDate is a day, include the whole day
-
+    if (!ho?.trip?.dropDateTime && end !== null) end += DAY; // include the whole last day
+ 
     if (mobile.length === 10 && vehicle && start !== null && end !== null) {
       windows.push({ bid: key, mobile, vehicle, start, end });
     }
   }
-
+ 
   let fallbackChecked = 0;
   if (windows.length) {
     const byCustomerVehicle = new Map();
@@ -2028,12 +2201,11 @@ const buildBookingLedgers = async (bookingIds, companyId) => {
       if (!byCustomerVehicle.has(k)) byCustomerVehicle.set(k, []);
       byCustomerVehicle.get(k).push(w);
     }
-
+ 
     const mobiles = [...new Set(windows.map((w) => w.mobile))];
     const minStart = Math.min(...windows.map((w) => w.start)) - 2 * DAY;
     const maxEnd = Math.max(...windows.map((w) => w.end)) + 15 * DAY;
-
-    // Query in chunks so the regex stays small
+ 
     const candidates = [];
     for (let i = 0; i < mobiles.length; i += 300) {
       const chunk = mobiles.slice(i, i + 300);
@@ -2046,47 +2218,56 @@ const buildBookingLedgers = async (bookingIds, companyId) => {
         .lean();
       candidates.push(...found);
     }
-
+ 
     const unlinked = candidates.filter((p) => !usedPaymentIds.has(String(p._id)));
     fallbackChecked = unlinked.length;
-
-    // Never steal a payment that belongs to another real booking
-    const otherIds = [...new Set(
-      unlinked.map((p) => (p.bookingId ? String(p.bookingId) : null)).filter((b) => b && !idSet.has(b)),
-    )];
+ 
+    // Never take a payment that belongs to another real booking
+    const otherIds = [
+      ...new Set(
+        unlinked
+          .map((p) => (p.bookingId ? String(p.bookingId) : null))
+          .filter((b) => b && !idSet.has(b)),
+      ),
+    ];
     const otherExisting = otherIds.length
-      ? new Set((await Booking.find({ _id: { $in: otherIds.map(toObjId) } }).select("_id").lean()).map((b) => String(b._id)))
+      ? new Set(
+          (await Booking.find({ _id: { $in: otherIds.map(toObjId) } }).select("_id").lean()).map(
+            (b) => String(b._id),
+          ),
+        )
       : new Set();
-
+ 
     for (const p of unlinked) {
       if (p.bookingId && otherExisting.has(String(p.bookingId))) continue;
-
+ 
       const list = byCustomerVehicle.get(
         `${normMobile(p.customer?.mobileNumber)}|${normVehicle(p.vehicle?.vehicleNumber)}`,
       );
       if (!list) continue;
-
+ 
       const paidAt = toMs(p.createdAt);
       const pFrom = toMs(p.booking?.fromDate);
       const pTo = toMs(p.booking?.toDate) ?? pFrom;
-
+ 
       const fits = list.filter((w) => {
-        if (pFrom !== null) {
-          // Payment carries its own trip dates: they must overlap this trip
-          return pFrom <= w.end + DAY && pTo >= w.start - DAY;
-        }
+        if (pFrom !== null) return pFrom <= w.end + DAY && pTo >= w.start - DAY;
         return paidAt !== null && paidAt >= w.start - 2 * DAY && paidAt <= w.end + 15 * DAY;
       });
       if (!fits.length) continue;
-
-      // Several trips fit (repeat customer): closest pickup to the payment wins
-      fits.sort((a, b) => Math.abs((paidAt ?? a.start) - a.start) - Math.abs((paidAt ?? b.start) - b.start));
+ 
+      fits.sort(
+        (a, b) =>
+          Math.abs((paidAt ?? a.start) - a.start) - Math.abs((paidAt ?? b.start) - b.start),
+      );
       addPayment(fits[0].bid, p, "linkedByMatch");
     }
   }
-
+ 
   // ---------- Debug summary in the server terminal ----------
-  let byId = 0, byHandover = 0, byMatch = 0;
+  let byId = 0;
+  let byHandover = 0;
+  let byMatch = 0;
   for (const a of accs.values()) {
     byId += a.linkedById;
     byHandover += a.linkedByHandover;
@@ -2097,21 +2278,22 @@ const buildBookingLedgers = async (bookingIds, companyId) => {
       `payments linked: byId=${byId} byHandover=${byHandover} byCustomerVehicleDates=${byMatch} ` +
       `(fallback candidates checked=${fallbackChecked})`,
   );
-
+ 
   // ---------- 6. Compose ledger per booking ----------
   for (const id of ids) {
     const key = String(id);
     if (ledgers.has(key)) continue;
-
-    const pay = accs.get(key) || {};
+ 
+    const pay = accs.get(key) || { items: [] };
     const bk = bookingMap.get(key) || null;
     const ho = latestHandover.get(key) || null;
     const ret = ho ? returnByHandover.get(String(ho._id)) || null : null;
-
+ 
     const l = emptyLedger();
-
+ 
+    // ---- Payments ----
     for (const field of Object.values(TYPE_TO_FIELD)) l[field] = round2(pay[field]);
-
+ 
     l.totalReceived = round2(INFLOW_FIELDS.reduce((s, f) => s + l[f], 0));
     l.netReceived = round2(l.totalReceived - l.refundPaid);
     l.netCash = round2(pay.netCash);
@@ -2120,7 +2302,25 @@ const buildBookingLedgers = async (bookingIds, companyId) => {
     l.splitDiff = round2(l.netReceived - l.netCash - l.netPhonePe - l.netRazorpay);
     l.paymentCount = pay.paymentCount || 0;
     l.lastPaymentAt = pay.lastPaymentAt || null;
-
+ 
+    // Money collected at return that was never saved as a PaymentHistory record.
+    // Only the part NOT already covered by payments made at/after the return.
+    if (ret) {
+      const retAt = toMs(ret.createdAt);
+      const loggedAtReturn =
+        retAt === null
+          ? 0
+          : pay.items
+              .filter((i) => i.type !== "refund" && i.at !== null && i.at >= retAt - 2 * 60 * 60 * 1000)
+              .reduce((s, i) => s + i.amt, 0);
+      l.returnCollectedUnlogged = round2(
+        Math.max(0, num(ret.settlementDetails?.amountCollected) - loggedAtReturn),
+      );
+    }
+ 
+    l.totalPaid = round2(l.netReceived + l.returnCollectedUnlogged);
+ 
+    // ---- Snapshot info ----
     if (bk) {
       l.bookingCode = bk.bookingCode || "";
       l.bookingStatus = bk.isDeleted ? "deleted" : bk.status || "";
@@ -2134,30 +2334,36 @@ const buildBookingLedgers = async (bookingIds, companyId) => {
       l.returnStatus = ret.settlementDetails?.status || "";
       l.returnFinalBalance = numOrNull(ret.settlementDetails?.finalBalance);
     }
-
+ 
     l.tripDays = ho?.trip?.numberOfDays ?? bk?.totalDays ?? null;
     l.currentDropAt = ho?.trip?.dropDateTime ?? bk?.toDate ?? null;
-
-    if (ret) {
-      l.currentDue = round2(ret.settlementDetails?.finalBalance);
-      l.dueSource = "return";
-    } else if (ho && ho.handoverStatus === "cancelled") {
-      l.currentDue = 0;
+ 
+    // ---- Bill and balance ----
+    const cancelled =
+      (ho && ho.handoverStatus === "cancelled") ||
+      (!ho && bk && (bk.isDeleted || bk.status === "cancelled"));
+ 
+    if (cancelled) {
       l.dueSource = "cancelled";
-    } else if (ho) {
-      l.currentDue = round2(ho.payment?.balanceAmount);
-      l.dueSource = "handover";
-    } else if (bk && (bk.isDeleted || bk.status === "cancelled")) {
+      // No bill on a cancelled booking; money still held shows as Refund Due
+      l.totalBill = 0;
       l.currentDue = 0;
-      l.dueSource = "cancelled";
-    } else if (bk) {
-      l.currentDue = round2(bk.payment?.balanceAmount);
-      l.dueSource = "booking";
+      l.refundDue = round2(Math.max(0, l.totalPaid));
+    } else {
+      Object.assign(
+        l,
+        computeBill({ bk, ho, ret, additionalChargePaid: l.additionalChargePaid }),
+      );
+      l.dueSource = ret ? "return" : ho ? "handover" : "booking";
+ 
+      const balance = round2(l.totalBill - l.totalPaid);
+      l.currentDue = balance > 0 ? balance : 0;
+      l.refundDue = balance < 0 ? round2(-balance) : 0;
     }
-
+ 
     ledgers.set(key, l);
   }
-
+ 
   return ledgers;
 };
  
@@ -2168,12 +2374,14 @@ const summarizeLedgers = (ledgers) => {
   s.bookingCount = 0;
   s.paymentCount = 0;
   s.dueBookingCount = 0;
+  s.refundBookingCount = 0;
  
   for (const l of ledgers.values()) {
     s.bookingCount += 1;
     s.paymentCount += l.paymentCount || 0;
-    if ((Number(l.currentDue) || 0) > 0) s.dueBookingCount += 1;
-    for (const f of LEDGER_MONEY_FIELDS) s[f] += Number(l[f]) || 0;
+    if (num(l.currentDue) > 0) s.dueBookingCount += 1;
+    if (num(l.refundDue) > 0) s.refundBookingCount += 1;
+    for (const f of LEDGER_MONEY_FIELDS) s[f] += num(l[f]);
   }
  
   for (const f of LEDGER_MONEY_FIELDS) s[f] = round2(s[f]);
@@ -2186,15 +2394,15 @@ const summarizeLedgers = (ledgers) => {
 export const getBookingPayments = async (req, res) => {
   try {
     const {
-      month,          // "YYYY-MM"
-      fromDate,       // payment created from (ISO date)
-      toDate,         // payment created to (ISO date)
-      paymentMethod,  // cash | phonepe | razorpay | mixed
-      isCollected,    // "true" | "false"
-      search,         // customer name / mobile / vehicle number
+      month, // "YYYY-MM"
+      fromDate, // payment created from (ISO date)
+      toDate, // payment created to (ISO date)
+      paymentMethod, // cash | phonepe | razorpay | mixed
+      isCollected, // "true" | "false"
+      search, // customer name / mobile / vehicle number
       page = 1,
       limit = 50,
-      all,            // "true" => no pagination (full export)
+      all, // "true" => no pagination (full export)
       sortBy = "createdAt",
       sortOrder = "desc",
     } = req.query;
@@ -2305,12 +2513,12 @@ export const getBookingPayments = async (req, res) => {
           },
         },
       ]),
-      // NEW: every distinct booking in the filtered set (for ledger + footer totals)
+      // Every distinct booking in the filtered set (for ledger + footer totals)
       PaymentHistory.distinct("bookingId", filter),
     ]);
  
-    // ---------- NEW: booking ledger (all payment types) ----------
-      let ledgers = new Map();
+    // ---------- Booking ledger (bill + all payment types) ----------
+    let ledgers = new Map();
     let ledgerError = false;
     let ledgerErrorMessage = "";
     try {
@@ -2352,13 +2560,18 @@ export const getBookingPayments = async (req, res) => {
       createdByName: p.createdBy?.name || "",
       note: p.note || "",
  
-      // NEW: booking-level ledger (same values on every row of the same booking)
+      // Booking-level ledger (same values on every row of the same booking)
       ...(ledgers.get(String(p.bookingId)) || emptyLedger()),
     }));
  
     const summary = summaryAgg[0] || {
-      totalAmount: 0, totalCash: 0, totalPhonePe: 0, totalRazorpay: 0,
-      totalCollected: 0, totalCollectedPhonePe: 0, collectedCount: 0,
+      totalAmount: 0,
+      totalCash: 0,
+      totalPhonePe: 0,
+      totalRazorpay: 0,
+      totalCollected: 0,
+      totalCollectedPhonePe: 0,
+      collectedCount: 0,
     };
     delete summary._id;
  
@@ -2370,9 +2583,10 @@ export const getBookingPayments = async (req, res) => {
         ...summary,
         count: total,
         pendingCount: total - summary.collectedCount,
-        // NEW: totals per distinct booking
+        // Totals per distinct booking
         ledger: summarizeLedgers(ledgers),
         ledgerError,
+        ledgerErrorMessage,
       },
       pagination: exportAll
         ? { total, page: 1, limit: total, totalPages: 1 }
@@ -2383,7 +2597,6 @@ export const getBookingPayments = async (req, res) => {
     return res.status(500).json({ success: false, message: "Failed to fetch booking payments" });
   }
 };
-
 // Aliases so older route imports keep working.
 export const getBookingDashboard = getBookingDashboardRevenue;
 export const getBookingsDashboard = getBookingDashboardRevenue;
