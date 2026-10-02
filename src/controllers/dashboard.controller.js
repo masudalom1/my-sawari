@@ -2,7 +2,9 @@ import mongoose from "mongoose";
 import Maintenance from "../models/maintenance.model.js";
 import Vehicle from "../models/vehicle.model.js";
 import Booking from "../models/booking.model.js";
-import PaymentHistory, { toBookingMonth } from "../models/paymentHistory.model.js";
+import PaymentHistory, {
+  toBookingMonth,
+} from "../models/paymentHistory.model.js";
 import Handover from "../models/handover.model.js";
 import VehicleReturn from "../models/vehicleReturn.model.js";
 import {
@@ -64,72 +66,90 @@ export const getVehiclesForImport = async (req, res) => {
     });
   }
 };
+
+function mapHandoverStatus(handover) {
+  if (
+    handover.handoverStatus === "cancelled" ||
+    handover.bookingStatus === "cancelled"
+  ) {
+    return "cancelled";
+  }
+  if (
+    handover.handoverStatus === "returned" ||
+    handover.bookingStatus === "completed"
+  ) {
+    return "completed";
+  }
+  return "active";
+}
+
 export const getBookingsForImport = async (req, res) => {
   try {
-    const bookings = await Booking.find({
+    const handovers = await Handover.find({
       isDeleted: false,
-      status: {
-        $ne: "cancelled",
-      },
+      handoverStatus: { $ne: "cancelled" },
+      bookingStatus: { $ne: "cancelled" },
     })
       .select(
         `
         _id
-        bookingCode
-        customerName
-        mobileNumber
-        alternateMobileNumber
-        destination
-        fromDate
-        toDate
-        pickupTime
-        dropTime
-        totalDays
-        vehicleId
-        vehicleName
-        vehicleNumber
-        status
-        pickup
-        drop
+        bookingId
+        customer
+        vehicle
+        trip
         payment
-      `,
+        bookingStatus
+        handoverStatus
+        returnDetails
+        `,
       )
+      // Pull bookingCode / pickup / drop from the original booking, if linked
       .populate({
-        path: "vehicleId",
-        select: "_id vehicleName vehicleNumber vehicleType images status",
+        path: "bookingId",
+        select: "_id bookingCode pickup drop",
       })
-      .sort({ fromDate: 1 })
+      .sort({ "trip.pickupDateTime": 1 })
       .lean();
 
-    const formattedBookings = bookings.map((booking) => ({
-      _id: booking._id,
-      bookingCode: booking.bookingCode,
+    const formattedBookings = handovers.map((handover) => {
+      const linkedBooking =
+        handover.bookingId && typeof handover.bookingId === "object"
+          ? handover.bookingId
+          : null;
 
-      customerName: booking.customerName,
-      mobileNumber: booking.mobileNumber,
+      return {
+        _id: handover._id,
+        bookingCode: linkedBooking?.bookingCode || "",
 
-      destination: booking.destination,
+        customerName: handover.customer?.fullName || "",
+        mobileNumber: handover.customer?.mobileNumber || "",
 
-      fromDate: booking.fromDate,
-      toDate: booking.toDate,
+        destination: handover.customer?.destination || "",
 
-      pickupTime: booking.pickupTime,
-      dropTime: booking.dropTime,
+        // Handover stores full date-times, so the time fields are left
+        // empty — combineDateAndTime() on the frontend then uses the
+        // date-time as-is.
+        fromDate: handover.trip?.pickupDateTime || null,
+        toDate: handover.trip?.dropDateTime || null,
 
-      totalDays: booking.totalDays,
+        pickupTime: null,
+        dropTime: null,
 
-      vehicleId: booking.vehicleId?._id || booking.vehicleId,
-      vehicleName: booking.vehicleId?.vehicleName || booking.vehicleName || "",
-      vehicleNumber:
-        booking.vehicleId?.vehicleNumber || booking.vehicleNumber || "",
+        totalDays: handover.trip?.numberOfDays || 0,
 
-      status: booking.status,
+        // Current vehicle on the handover (updated on vehicle exchange)
+        vehicleId: handover.vehicle?.vehicleId || null,
+        vehicleName: handover.vehicle?.vehicleName || "",
+        vehicleNumber: handover.vehicle?.vehicleNumber || "",
 
-      pickup: booking.pickup,
-      drop: booking.drop,
+        status: mapHandoverStatus(handover),
 
-      payment: booking.payment,
-    }));
+        pickup: linkedBooking?.pickup || null,
+        drop: linkedBooking?.drop || null,
+
+        payment: handover.payment,
+      };
+    });
 
     return res.status(200).json({
       success: true,
@@ -200,7 +220,9 @@ export const getPaymentsForImport = async (req, res) => {
     // ---------------------------------------
     const filter = {
       $or: [
-        ...(linkedPaymentIds.length ? [{ _id: { $in: linkedPaymentIds } }] : []),
+        ...(linkedPaymentIds.length
+          ? [{ _id: { $in: linkedPaymentIds } }]
+          : []),
         { "vehicle.vehicleId": { $in: activeVehicleIds } },
       ],
     };
@@ -211,7 +233,12 @@ export const getPaymentsForImport = async (req, res) => {
       if (from) {
         const fromDate = new Date(`${from}T00:00:00.000+05:30`);
         if (Number.isNaN(fromDate.getTime())) {
-          return res.status(400).json({ success: false, message: "Invalid 'from' date. Use YYYY-MM-DD." });
+          return res
+            .status(400)
+            .json({
+              success: false,
+              message: "Invalid 'from' date. Use YYYY-MM-DD.",
+            });
         }
         filter.createdAt.$gte = fromDate;
       }
@@ -219,7 +246,12 @@ export const getPaymentsForImport = async (req, res) => {
       if (to) {
         const toDate = new Date(`${to}T23:59:59.999+05:30`);
         if (Number.isNaN(toDate.getTime())) {
-          return res.status(400).json({ success: false, message: "Invalid 'to' date. Use YYYY-MM-DD." });
+          return res
+            .status(400)
+            .json({
+              success: false,
+              message: "Invalid 'to' date. Use YYYY-MM-DD.",
+            });
         }
         filter.createdAt.$lte = toDate;
       }
@@ -257,12 +289,16 @@ export const getPaymentsForImport = async (req, res) => {
     let unlinkedCount = 0;
 
     for (const payment of payments) {
-      const snapshotVehicleId = payment.vehicle?.vehicleId ? String(payment.vehicle.vehicleId) : null;
+      const snapshotVehicleId = payment.vehicle?.vehicleId
+        ? String(payment.vehicle.vehicleId)
+        : null;
       const linkedVehicleId = paymentToVehicle.get(String(payment._id));
 
       const vehicleId =
         linkedVehicleId ||
-        (snapshotVehicleId && activeVehicleSet.has(snapshotVehicleId) ? snapshotVehicleId : null);
+        (snapshotVehicleId && activeVehicleSet.has(snapshotVehicleId)
+          ? snapshotVehicleId
+          : null);
 
       if (!vehicleId) continue;
       if (!linkedVehicleId) unlinkedCount++;
@@ -272,7 +308,8 @@ export const getPaymentsForImport = async (req, res) => {
         phonePe: Number(payment.paymentBreakdown?.phonePe) || 0,
         razorpay: Number(payment.paymentBreakdown?.razorpay) || 0,
       };
-      const breakdownTotal = breakdown.cash + breakdown.phonePe + breakdown.razorpay;
+      const breakdownTotal =
+        breakdown.cash + breakdown.phonePe + breakdown.razorpay;
       const amount = Number(payment.amount) || 0;
 
       formattedPayments.push({
@@ -483,9 +520,7 @@ export const createMaintenance = async (req, res, next) => {
     // ---------------------------------------
     // Get populated maintenance
     // ---------------------------------------
-    const populatedMaintenance = await Maintenance.findById(
-      maintenance._id,
-    )
+    const populatedMaintenance = await Maintenance.findById(maintenance._id)
       .populate("vehicle")
       .lean();
 
@@ -553,7 +588,6 @@ export const getMaintenances = async (req, res, next) => {
     next(error);
   }
 };
-
 
 const IST_OFFSET_MS = 330 * 60 * 1000; // UTC+05:30
 const HOUR_MS = 60 * 60 * 1000;
@@ -673,7 +707,9 @@ export const getDashboardStats = async (req, res) => {
     }
 
     const { start: dayStart, end: dayEnd } = window;
-    const overdueCutoff = new Date(now.getTime() - OVERDUE_GRACE_HOURS * HOUR_MS);
+    const overdueCutoff = new Date(
+      now.getTime() - OVERDUE_GRACE_HOURS * HOUR_MS,
+    );
 
     // -----------------------------------
     // 1. Vehicles (source of truth for total + service)
@@ -769,10 +805,14 @@ export const getDashboardStats = async (req, res) => {
       if (!vehicleIdSet.has(vid)) continue;
       if (serviceSet.has(vid)) continue; // service wins over bookings
 
-      const start = combineISTDateAndTime(booking.fromDate, booking.pickupTime, {
-        hour: 0,
-        minute: 0,
-      });
+      const start = combineISTDateAndTime(
+        booking.fromDate,
+        booking.pickupTime,
+        {
+          hour: 0,
+          minute: 0,
+        },
+      );
       const end = combineISTDateAndTime(booking.toDate, booking.dropTime, {
         hour: 23,
         minute: 59,
@@ -890,7 +930,9 @@ export const getVehicleRevenue = async (req, res) => {
     const allVehicles = await loadRevenueVehicles();
     const rated = allVehicles.filter((v) => Number(v.pricePerDay) > 0);
     const ratedIds = rated.map((v) => v._id);
-    const stats = new Map(rated.map((v) => [String(v._id), emptyRevenueTotals()]));
+    const stats = new Map(
+      rated.map((v) => [String(v._id), emptyRevenueTotals()]),
+    );
 
     // ---------------------------------------
     // Step 3: only the records that touch the range
@@ -1008,7 +1050,10 @@ function prMonthsUTCSpan(months) {
     const [y, mo] = m.split("-").map(Number);
     return Date.UTC(y, mo, 1);
   });
-  return { start: new Date(Math.min(...starts)), end: new Date(Math.max(...ends)) };
+  return {
+    start: new Date(Math.min(...starts)),
+    end: new Date(Math.max(...ends)),
+  };
 }
 
 function prISTDayKey(date) {
@@ -1053,10 +1098,13 @@ function parseBookingRevenueQuery(query = {}, now = new Date()) {
 
   const method = query.method ? String(query.method).trim() : null;
   if (method && !PR_PAYMENT_METHODS.includes(method)) {
-    return { error: `method must be one of: ${PR_PAYMENT_METHODS.join(", ")}.` };
+    return {
+      error: `method must be one of: ${PR_PAYMENT_METHODS.join(", ")}.`,
+    };
   }
 
-  const defaultYear = basis === "booking" ? Number(month.slice(0, 4)) : getISTParts(now).year;
+  const defaultYear =
+    basis === "booking" ? Number(month.slice(0, 4)) : getISTParts(now).year;
   const year = Number(query.year) || defaultYear;
 
   if (year < 2000 || year > 2100) {
@@ -1105,8 +1153,17 @@ function prBookingMonthPeriod({ month, year }) {
       granularity: "day",
       groupedBy: "trip start date",
       // Trip start day; null when the payment has no fromDate (shown separately).
-      keyExpr: { $dateToString: { format: "%Y-%m-%d", date: "$booking.fromDate", timezone: "UTC" } },
-      buckets: Array.from({ length: daysInMonth }, (_, i) => `${month}-${prPad(i + 1)}`),
+      keyExpr: {
+        $dateToString: {
+          format: "%Y-%m-%d",
+          date: "$booking.fromDate",
+          timezone: "UTC",
+        },
+      },
+      buckets: Array.from(
+        { length: daysInMonth },
+        (_, i) => `${month}-${prPad(i + 1)}`,
+      ),
     },
     yearly: {
       months,
@@ -1144,7 +1201,10 @@ function prCreatedPeriod({ range, year }, now) {
 
   // Same elapsed time in the previous period -> fair comparison.
   const prevEnd = new Date(
-    Math.min(prevStart.getTime() + (end.getTime() - start.getTime()), start.getTime()),
+    Math.min(
+      prevStart.getTime() + (end.getTime() - start.getTime()),
+      start.getTime(),
+    ),
   );
 
   const yearStart = makeISTDate(year, 0, 1);
@@ -1182,7 +1242,13 @@ function prCreatedPeriod({ range, year }, now) {
     yearly: {
       months: prYearMonths(year),
       match: { createdAt: { $gte: yearStart, $lt: yearEnd } },
-      keyExpr: { $dateToString: { format: "%Y-%m", date: "$createdAt", timezone: PR_IST_TZ } },
+      keyExpr: {
+        $dateToString: {
+          format: "%Y-%m",
+          date: "$createdAt",
+          timezone: PR_IST_TZ,
+        },
+      },
     },
     meta: {
       range,
@@ -1208,7 +1274,9 @@ const PR_BREAKDOWN_TOTAL = {
 };
 
 const PR_HAS_BOOKING_MONTH = { $ne: [{ $ifNull: ["$bookingMonth", ""] }, ""] };
-const PR_HAS_FROM_DATE = { $ne: [{ $ifNull: ["$booking.fromDate", null] }, null] };
+const PR_HAS_FROM_DATE = {
+  $ne: [{ $ifNull: ["$booking.fromDate", null] }, null],
+};
 
 // bookingMonth -> month of booking.fromDate -> null (unassigned)
 const PR_RESOLVED_MONTH = {
@@ -1218,7 +1286,13 @@ const PR_RESOLVED_MONTH = {
     {
       $cond: [
         PR_HAS_FROM_DATE,
-        { $dateToString: { format: "%Y-%m", date: "$booking.fromDate", timezone: "UTC" } },
+        {
+          $dateToString: {
+            format: "%Y-%m",
+            date: "$booking.fromDate",
+            timezone: "UTC",
+          },
+        },
         null,
       ],
     },
@@ -1226,7 +1300,11 @@ const PR_RESOLVED_MONTH = {
 };
 
 const PR_MONTH_SOURCE = {
-  $cond: [PR_HAS_BOOKING_MONTH, "field", { $cond: [PR_HAS_FROM_DATE, "fromDate", "none"] }],
+  $cond: [
+    PR_HAS_BOOKING_MONTH,
+    "field",
+    { $cond: [PR_HAS_FROM_DATE, "fromDate", "none"] },
+  ],
 };
 
 // Base filter shared by every query: company + booking payments only.
@@ -1246,7 +1324,11 @@ function prFieldsStage() {
       _breakdownTotal: PR_BREAKDOWN_TOTAL,
       // Mixed payments sometimes store only the breakdown.
       _amount: {
-        $cond: [{ $gt: [prNum("$amount"), 0] }, prNum("$amount"), PR_BREAKDOWN_TOTAL],
+        $cond: [
+          { $gt: [prNum("$amount"), 0] },
+          prNum("$amount"),
+          PR_BREAKDOWN_TOTAL,
+        ],
       },
     },
   };
@@ -1273,7 +1355,11 @@ function prMoneyStage() {
           {
             $and: [
               { $eq: ["$_breakdownTotal", 0] },
-              { $not: [{ $in: ["$paymentMethod", ["cash", "phonepe", "razorpay"]] }] },
+              {
+                $not: [
+                  { $in: ["$paymentMethod", ["cash", "phonepe", "razorpay"]] },
+                ],
+              },
             ],
           },
           "$_amount",
@@ -1301,7 +1387,9 @@ const PR_SUMS_GROUP = {
   channelOther: { $sum: "$_chOther" },
 };
 
-const PR_EMPTY_SUMS = Object.fromEntries(Object.keys(PR_SUMS_GROUP).map((k) => [k, 0]));
+const PR_EMPTY_SUMS = Object.fromEntries(
+  Object.keys(PR_SUMS_GROUP).map((k) => [k, 0]),
+);
 
 // Distinct counts, dropping null / empty values.
 const prDistinctCount = (field) => ({
@@ -1405,7 +1493,10 @@ const prYearlyFacet = (match, keyExpr) => [
   { $project: { _bookings: 0 } },
 ];
 
-const prListTotalFacet = (listMatch) => [{ $match: listMatch }, { $count: "count" }];
+const prListTotalFacet = (listMatch) => [
+  { $match: listMatch },
+  { $count: "count" },
+];
 
 const prPaymentsFacet = (listMatch, page, limit) => [
   { $match: listMatch },
@@ -1445,7 +1536,9 @@ async function prLoadAllTime(companyId) {
         _bookings: { $addToSet: "$bookingId" },
         firstPaymentAt: { $min: "$createdAt" },
         lastPaymentAt: { $max: "$createdAt" },
-        unassignedPayments: { $sum: { $cond: [{ $eq: ["$resolvedMonth", null] }, 1, 0] } },
+        unassignedPayments: {
+          $sum: { $cond: [{ $eq: ["$resolvedMonth", null] }, 1, 0] },
+        },
         unassignedRevenue: {
           $sum: { $cond: [{ $eq: ["$resolvedMonth", null] }, "$_amount", 0] },
         },
@@ -1459,7 +1552,9 @@ async function prLoadAllTime(companyId) {
     bookingsCount: row?.bookingsCount || 0,
     paymentsCount: row?.paymentsCount || 0,
     revenue: row?.revenue || 0,
-    avgPerBooking: row?.bookingsCount ? Math.round(row.revenue / row.bookingsCount) : 0,
+    avgPerBooking: row?.bookingsCount
+      ? Math.round(row.revenue / row.bookingsCount)
+      : 0,
     firstPaymentAt: row?.firstPaymentAt || null,
     lastPaymentAt: row?.lastPaymentAt || null,
     // Payments with no bookingMonth and no fromDate: not placed in any month.
@@ -1478,7 +1573,10 @@ async function prLoadSummary(companyId, now) {
   const nextMonth = prMonthKey(p.year, p.month + 1);
   const todayStart = makeISTDate(p.year, p.month, p.day);
   const weekStart = makeISTDate(p.year, p.month, p.day - 6);
-  const { start: monthsStart, end: monthsEnd } = prMonthsUTCSpan([thisMonth, nextMonth]);
+  const { start: monthsStart, end: monthsEnd } = prMonthsUTCSpan([
+    thisMonth,
+    nextMonth,
+  ]);
 
   const totals = [
     {
@@ -1507,8 +1605,14 @@ async function prLoadSummary(companyId, now) {
     prFieldsStage(),
     {
       $facet: {
-        today: [{ $match: { createdAt: { $gte: todayStart, $lte: now } } }, ...totals],
-        last7Days: [{ $match: { createdAt: { $gte: weekStart, $lte: now } } }, ...totals],
+        today: [
+          { $match: { createdAt: { $gte: todayStart, $lte: now } } },
+          ...totals,
+        ],
+        last7Days: [
+          { $match: { createdAt: { $gte: weekStart, $lte: now } } },
+          ...totals,
+        ],
         thisMonth: [{ $match: { resolvedMonth: thisMonth } }, ...totals],
         nextMonth: [{ $match: { resolvedMonth: nextMonth } }, ...totals],
       },
@@ -1528,8 +1632,20 @@ async function prLoadSummary(companyId, now) {
   };
 
   return {
-    today: { basis: "created", range: "today", from: todayStart, to: now, ...pick("today") },
-    last7Days: { basis: "created", range: "7d", from: weekStart, to: now, ...pick("last7Days") },
+    today: {
+      basis: "created",
+      range: "today",
+      from: todayStart,
+      to: now,
+      ...pick("today"),
+    },
+    last7Days: {
+      basis: "created",
+      range: "7d",
+      from: weekStart,
+      to: now,
+      ...pick("last7Days"),
+    },
     thisMonth: { basis: "booking", month: thisMonth, ...pick("thisMonth") },
     nextMonth: { basis: "booking", month: nextMonth, ...pick("nextMonth") },
   };
@@ -1549,7 +1665,9 @@ function prFinalizeKpis(raw) {
   };
   delete k._id;
 
-  k.avgPerBooking = k.bookingsCount ? Math.round(k.revenue / k.bookingsCount) : 0;
+  k.avgPerBooking = k.bookingsCount
+    ? Math.round(k.revenue / k.bookingsCount)
+    : 0;
   k.unsettled = Math.max(0, k.revenue - k.settled);
   k.settledRate = prPct(k.settled, k.revenue);
 
@@ -1622,7 +1740,9 @@ async function loadBookingRevenue(params, companyId, now) {
   const { basis, year, page, limit } = params;
 
   const period =
-    basis === "created" ? prCreatedPeriod(params, now) : prBookingMonthPeriod(params);
+    basis === "created"
+      ? prCreatedPeriod(params, now)
+      : prBookingMonthPeriod(params);
 
   const listMatch = prListMatch(period.current, params);
 
@@ -1726,8 +1846,6 @@ export const getBookingDashboardRevenue = async (req, res) => {
   }
 };
 
- 
- 
 const BOOKING_PAYMENT_COLUMNS = [
   { key: "paymentDate", label: "Payment Date" },
   { key: "bookingMonth", label: "Booking Month" },
@@ -1751,7 +1869,7 @@ const BOOKING_PAYMENT_COLUMNS = [
   { key: "createdByName", label: "Created By" },
   { key: "note", label: "Note" },
 ];
- 
+
 // Booking-level ledger columns: the full bill (what the customer owes)
 // and every payment (what the customer paid), for the same booking.
 const BOOKING_LEDGER_COLUMNS = [
@@ -1760,7 +1878,7 @@ const BOOKING_LEDGER_COLUMNS = [
   { key: "dueSource", label: "Stage", group: "ledger" },
   { key: "tripDays", label: "Days", group: "ledger" },
   { key: "currentDropAt", label: "Current Drop", group: "ledger" },
- 
+
   // ---- BILL (charges) ----
   { key: "rentCharge", label: "Rent", group: "ledger" },
   { key: "fastagCharge", label: "FASTag", group: "ledger" },
@@ -1770,7 +1888,7 @@ const BOOKING_LEDGER_COLUMNS = [
   { key: "depositCharge", label: "Deposit", group: "ledger" },
   { key: "discountGiven", label: "Discount", group: "ledger" },
   { key: "totalBill", label: "Total Bill", group: "ledger" },
- 
+
   // ---- PAYMENTS (by type) ----
   { key: "allBookingPaid", label: "Booking (All)", group: "ledger" },
   { key: "handoverPaid", label: "Handover", group: "ledger" },
@@ -1781,38 +1899,62 @@ const BOOKING_LEDGER_COLUMNS = [
   { key: "refundPaid", label: "Refund", group: "ledger" },
   { key: "totalReceived", label: "Total Received", group: "ledger" },
   { key: "netReceived", label: "Net Received", group: "ledger" },
-  { key: "returnCollectedUnlogged", label: "Return Collected (not in payments)", group: "ledger" },
+  {
+    key: "returnCollectedUnlogged",
+    label: "Return Collected (not in payments)",
+    group: "ledger",
+  },
   { key: "totalPaid", label: "Total Paid", group: "ledger" },
- 
+
   // ---- RESULT ----
   { key: "currentDue", label: "Current Due", group: "ledger" },
   { key: "refundDue", label: "Refund Due", group: "ledger" },
- 
+
   // ---- CHANNELS ----
   { key: "netCash", label: "Net Cash", group: "ledger" },
   { key: "netPhonePe", label: "Net PhonePe", group: "ledger" },
   { key: "netRazorpay", label: "Net Razorpay", group: "ledger" },
   { key: "splitDiff", label: "Unsplit Amount", group: "ledger" },
- 
+
   // ---- SYSTEM VALUES (for comparison only) ----
   { key: "handoverStatus", label: "Handover Status", group: "ledger" },
   { key: "handoverBill", label: "Handover Total (system)", group: "ledger" },
-  { key: "handoverBalance", label: "Handover Balance (system)", group: "ledger" },
+  {
+    key: "handoverBalance",
+    label: "Handover Balance (system)",
+    group: "ledger",
+  },
   { key: "returnStatus", label: "Settlement Status", group: "ledger" },
-  { key: "returnFinalBalance", label: "Return Balance (system)", group: "ledger" },
-  { key: "returnCollected", label: "Return Collected (system)", group: "ledger" },
+  {
+    key: "returnFinalBalance",
+    label: "Return Balance (system)",
+    group: "ledger",
+  },
+  {
+    key: "returnCollected",
+    label: "Return Collected (system)",
+    group: "ledger",
+  },
   { key: "returnedAt", label: "Returned At", group: "ledger" },
- 
+
   { key: "paymentCount", label: "Txns", group: "ledger" },
   { key: "lastPaymentAt", label: "Last Txn At", group: "ledger" },
 ];
- 
-const ALL_BOOKING_PAYMENT_COLUMNS = [...BOOKING_PAYMENT_COLUMNS, ...BOOKING_LEDGER_COLUMNS];
- 
-const SORTABLE_FIELDS = ["createdAt", "amount", "booking.fromDate", "bookingMonth"];
- 
+
+const ALL_BOOKING_PAYMENT_COLUMNS = [
+  ...BOOKING_PAYMENT_COLUMNS,
+  ...BOOKING_LEDGER_COLUMNS,
+];
+
+const SORTABLE_FIELDS = [
+  "createdAt",
+  "amount",
+  "booking.fromDate",
+  "bookingMonth",
+];
+
 const escapeRegex = (str) => str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
- 
+
 // ============================================================
 // LEDGER CONFIG & HELPERS
 // ============================================================
@@ -1825,7 +1967,7 @@ const PAYMENT_TYPES = [
   "receive",
   "refund",
 ];
- 
+
 const TYPE_TO_FIELD = {
   booking: "allBookingPaid",
   handover: "handoverPaid",
@@ -1835,10 +1977,12 @@ const TYPE_TO_FIELD = {
   receive: "receivePaid",
   refund: "refundPaid",
 };
- 
+
 // Money coming IN (everything except refund)
-const INFLOW_FIELDS = PAYMENT_TYPES.filter((t) => t !== "refund").map((t) => TYPE_TO_FIELD[t]);
- 
+const INFLOW_FIELDS = PAYMENT_TYPES.filter((t) => t !== "refund").map(
+  (t) => TYPE_TO_FIELD[t],
+);
+
 // Money fields summed in the footer (per distinct booking, never per row)
 const LEDGER_MONEY_FIELDS = [
   "rentCharge",
@@ -1871,19 +2015,19 @@ const LEDGER_MONEY_FIELDS = [
   "returnFinalBalance",
   "returnCollected",
 ];
- 
+
 // Round to paise to avoid floating point noise (e.g. 0.1 + 0.2)
 const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
 const numOrNull = (v) => (v === null || v === undefined ? null : round2(v));
 const num = (v) => Number(v) || 0;
- 
+
 const emptyLedger = () => ({
   bookingCode: "",
   bookingStatus: "",
   dueSource: "",
   tripDays: null,
   currentDropAt: null,
- 
+
   rentCharge: 0,
   fastagCharge: 0,
   pickupDropCharge: 0,
@@ -1892,7 +2036,7 @@ const emptyLedger = () => ({
   depositCharge: 0,
   discountGiven: 0,
   totalBill: 0,
- 
+
   allBookingPaid: 0,
   handoverPaid: 0,
   rentalPaid: 0,
@@ -1904,15 +2048,15 @@ const emptyLedger = () => ({
   netReceived: 0,
   returnCollectedUnlogged: 0,
   totalPaid: 0,
- 
+
   currentDue: 0,
   refundDue: 0,
- 
+
   netCash: 0,
   netPhonePe: 0,
   netRazorpay: 0,
   splitDiff: 0,
- 
+
   handoverStatus: "",
   handoverBill: null, // null = no handover yet
   handoverBalance: null,
@@ -1920,15 +2064,15 @@ const emptyLedger = () => ({
   returnFinalBalance: null, // null = not returned yet
   returnCollected: null,
   returnedAt: null,
- 
+
   // Trip dates from the handover (used only when the payment has no From/To)
   handoverPickupAt: null,
   handoverDropAt: null,
- 
+
   paymentCount: 0,
   lastPaymentAt: null,
 });
- 
+
 /**
  * Work out the customer's bill (charges) for one booking.
  *
@@ -1943,17 +2087,17 @@ const emptyLedger = () => ({
 const computeBill = ({ bk, ho, ret, additionalChargePaid }) => {
   const bp = bk?.payment || {};
   const bookingPickupDrop = num(bp.pickupCharge) + num(bp.dropCharge);
- 
+
   let rent = 0;
   let fastag = 0;
   let pickupDrop = 0;
   let extra = 0;
   let deposit = 0;
   let discount = 0;
- 
+
   if (ho) {
     const hp = ho.payment || {};
- 
+
     // Extensions: if totalFare was already updated to the last bill's
     // "totalFareAfterThisBill", it includes them. Otherwise add them.
     const bills = [...(ho.extensionBills || [])].sort(
@@ -1962,23 +2106,27 @@ const computeBill = ({ bk, ho, ret, additionalChargePaid }) => {
     const lastBill = bills[bills.length - 1];
     const extensionSum = bills.reduce((s, b) => s + num(b.extensionAmount), 0);
     const fareIncludesExtensions =
-      !lastBill || Math.abs(num(lastBill.totalFareAfterThisBill) - num(hp.totalFare)) <= 1;
- 
-    const hRent = num(hp.totalFare) + (fareIncludesExtensions ? 0 : extensionSum);
+      !lastBill ||
+      Math.abs(num(lastBill.totalFareAfterThisBill) - num(hp.totalFare)) <= 1;
+
+    const hRent =
+      num(hp.totalFare) + (fareIncludesExtensions ? 0 : extensionSum);
     const hFastag = num(hp.fastTagPayableAmount);
-    const hPickupDrop = num(hp.billSummary?.pickupCharge) + num(hp.billSummary?.dropCharge);
+    const hPickupDrop =
+      num(hp.billSummary?.pickupCharge) + num(hp.billSummary?.dropCharge);
     const hExtra = num(hp.extraCharges);
     const hDeposit = num(hp.securityDeposit);
     const hDiscount = num(hp.discountAmount);
     const hTotal = num(hp.totalAmount);
- 
+
     // Do the handover's own parts add up to its stored totalAmount
     // (either before or after discount)? Then trust them as they are.
     const hGross = hRent + hFastag + hPickupDrop + hExtra + hDeposit;
     const partsMatchTotal =
       hTotal > 0 &&
-      (Math.abs(hGross - hTotal) <= 1 || Math.abs(hGross - hDiscount - hTotal) <= 1);
- 
+      (Math.abs(hGross - hTotal) <= 1 ||
+        Math.abs(hGross - hDiscount - hTotal) <= 1);
+
     if (partsMatchTotal) {
       rent = hRent;
       fastag = hFastag;
@@ -1991,9 +2139,12 @@ const computeBill = ({ bk, ho, ret, additionalChargePaid }) => {
       pickupDrop = hPickupDrop > 0 ? hPickupDrop : bookingPickupDrop;
       extra = hExtra;
       deposit = hDeposit;
-      rent = hRent > 0 ? hRent : Math.max(0, hTotal - fastag - pickupDrop - extra - deposit);
+      rent =
+        hRent > 0
+          ? hRent
+          : Math.max(0, hTotal - fastag - pickupDrop - extra - deposit);
     }
- 
+
     // Discount given at booking carries over unless the handover sets its own
     discount = hDiscount > 0 ? hDiscount : num(bp.discountAmount);
   } else if (bk) {
@@ -2002,29 +2153,32 @@ const computeBill = ({ bk, ho, ret, additionalChargePaid }) => {
     pickupDrop = bookingPickupDrop;
     deposit = num(bp.securityDeposit);
     discount = num(bp.discountAmount);
- 
+
     // Old bookings that only stored totalAmount
     if (rent + fastag + pickupDrop === 0) rent = num(bp.totalAmount);
   }
- 
+
   // Money taken as "additional_charge" proves at least that much was charged
   extra = Math.max(extra, num(additionalChargePaid));
- 
+
   // Return: fines/fuel/damage are added; the deposit stops being a charge
   // (it is either refunded via a "refund" payment, or kept to cover these).
   let returnCharges = 0;
   if (ret) {
     const s = ret.settlementDetails || {};
     returnCharges =
-      num(s.lateReturnFine) + num(s.extraKmFine) + num(s.fuelUsageAmount) + num(s.damageAmount);
+      num(s.lateReturnFine) +
+      num(s.extraKmFine) +
+      num(s.fuelUsageAmount) +
+      num(s.damageAmount);
     deposit = 0;
   }
- 
+
   const totalBill = Math.max(
     0,
     rent + fastag + pickupDrop + extra + returnCharges + deposit - discount,
   );
- 
+
   return {
     rentCharge: round2(rent),
     fastagCharge: round2(fastag),
@@ -2036,7 +2190,7 @@ const computeBill = ({ bk, ho, ret, additionalChargePaid }) => {
     totalBill: round2(totalBill),
   };
 };
- 
+
 /**
  * Build a booking-level ledger for each bookingId.
  * Payments are linked to a booking by:
@@ -2050,28 +2204,36 @@ const buildBookingLedgers = async (bookingIds, companyId) => {
   const ids = (bookingIds || []).filter(Boolean);
   const ledgers = new Map();
   if (!ids.length) return ledgers;
- 
+
   const idSet = new Set(ids.map(String));
   const DAY = 24 * 60 * 60 * 1000;
   const toObjId = (v) => new mongoose.Types.ObjectId(String(v));
-  const normMobile = (s) => String(s || "").replace(/\D/g, "").slice(-10);
-  const normVehicle = (s) => String(s || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+  const normMobile = (s) =>
+    String(s || "")
+      .replace(/\D/g, "")
+      .slice(-10);
+  const normVehicle = (s) =>
+    String(s || "")
+      .toUpperCase()
+      .replace(/[^A-Z0-9]/g, "");
   const toMs = (d) => {
     const t = d ? new Date(d).getTime() : NaN;
     return Number.isNaN(t) ? null : t;
   };
- 
+
   // ---------- 1. Bookings ----------
   const bookings = await Booking.find({ _id: { $in: ids } })
-    .select("bookingCode status totalDays fromDate toDate isDeleted payment handover mobileNumber vehicleNumber")
+    .select(
+      "bookingCode status totalDays fromDate toDate isDeleted payment handover mobileNumber vehicleNumber",
+    )
     .lean();
   const bookingMap = new Map(bookings.map((b) => [String(b._id), b]));
- 
+
   const bookingByHandoverRef = new Map();
   for (const b of bookings) {
     if (b.handover) bookingByHandoverRef.set(String(b.handover), String(b._id));
   }
- 
+
   // ---------- 2. Handovers ----------
   const handovers = await Handover.find({
     isDeleted: { $ne: true },
@@ -2086,16 +2248,18 @@ const buildBookingLedgers = async (bookingIds, companyId) => {
     )
     .sort({ createdAt: -1, _id: -1 })
     .lean();
- 
+
   const handoverToBooking = new Map(); // handoverId -> bookingId
   const latestHandover = new Map(); // bookingId -> newest handover
   for (const h of handovers) {
-    const bid = h.bookingId ? String(h.bookingId) : bookingByHandoverRef.get(String(h._id));
+    const bid = h.bookingId
+      ? String(h.bookingId)
+      : bookingByHandoverRef.get(String(h._id));
     if (!bid || !idSet.has(bid)) continue;
     handoverToBooking.set(String(h._id), bid);
     if (!latestHandover.has(bid)) latestHandover.set(bid, h);
   }
- 
+
   // ---------- 3. Returns ----------
   // Look at returns of EVERY handover of the booking (not only the newest),
   // so a return saved against an earlier handover is never missed.
@@ -2106,113 +2270,121 @@ const buildBookingLedgers = async (bookingIds, companyId) => {
         .sort({ createdAt: -1, _id: -1 })
         .lean()
     : [];
- 
+
   const returnByBooking = new Map(); // bookingId -> newest return
   for (const r of returns) {
     const bid = handoverToBooking.get(String(r.handover));
     if (bid && !returnByBooking.has(bid)) returnByBooking.set(bid, r);
   }
- 
+
   // ---------- Payment accumulator (same rules for every link type) ----------
   const accs = new Map();
   const usedPaymentIds = new Set();
- 
+
   const addPayment = (bid, p, how) => {
     const key = String(p._id);
     if (usedPaymentIds.has(key)) return; // never count a payment twice
     usedPaymentIds.add(key);
- 
-    const acc =
-      accs.get(bid) ||
-      {
-        ...Object.fromEntries(Object.values(TYPE_TO_FIELD).map((f) => [f, 0])),
-        netCash: 0,
-        netPhonePe: 0,
-        netRazorpay: 0,
-        paymentCount: 0,
-        lastPaymentAt: null,
-        linkedById: 0,
-        linkedByHandover: 0,
-        linkedByMatch: 0,
-        items: [],
-      };
- 
+
+    const acc = accs.get(bid) || {
+      ...Object.fromEntries(Object.values(TYPE_TO_FIELD).map((f) => [f, 0])),
+      netCash: 0,
+      netPhonePe: 0,
+      netRazorpay: 0,
+      paymentCount: 0,
+      lastPaymentAt: null,
+      linkedById: 0,
+      linkedByHandover: 0,
+      linkedByMatch: 0,
+      items: [],
+    };
+
     const amt = num(p.amount);
     const sign = p.type === "refund" ? -1 : 1;
     const bd = p.paymentBreakdown || {};
     let cash = num(bd.cash);
     let phonePe = num(bd.phonePe);
     let razorpay = num(bd.razorpay);
- 
+
     // Empty breakdown on a single-method payment -> whole amount to that channel
     if (cash + phonePe + razorpay === 0) {
       if (p.paymentMethod === "cash") cash = amt;
       else if (p.paymentMethod === "phonepe") phonePe = amt;
       else if (p.paymentMethod === "razorpay") razorpay = amt;
     }
- 
+
     const field = TYPE_TO_FIELD[p.type];
     if (field) acc[field] += amt;
- 
+
     acc.netCash += sign * cash;
     acc.netPhonePe += sign * phonePe;
     acc.netRazorpay += sign * razorpay;
     acc.paymentCount += 1;
     acc[how] += 1;
     acc.items.push({ at: toMs(p.createdAt), amt, type: p.type });
- 
-    if (p.createdAt && (!acc.lastPaymentAt || p.createdAt > acc.lastPaymentAt)) {
+
+    if (
+      p.createdAt &&
+      (!acc.lastPaymentAt || p.createdAt > acc.lastPaymentAt)
+    ) {
       acc.lastPaymentAt = p.createdAt;
     }
     accs.set(bid, acc);
   };
- 
+
   const PAYMENT_FIELDS =
     "_id type amount paymentMethod paymentBreakdown bookingId handoverId customer.mobileNumber vehicle.vehicleNumber booking.fromDate booking.toDate createdAt";
   const companyMatch = companyId ? { company: companyId } : {};
- 
+
   // ---------- 4. Rules 1 + 2: linked by ID ----------
   const allHandoverIds = [...handoverToBooking.keys()].map(toObjId);
- 
+
   const idLinked = await PaymentHistory.find({
     ...companyMatch,
     $or: [
       { bookingId: { $in: ids } },
       ...(allHandoverIds.length
-        ? [{ handoverId: { $in: allHandoverIds } }, { bookingId: { $in: allHandoverIds } }]
+        ? [
+            { handoverId: { $in: allHandoverIds } },
+            { bookingId: { $in: allHandoverIds } },
+          ]
         : []),
     ],
   })
     .select(PAYMENT_FIELDS)
     .lean();
- 
+
   for (const p of idLinked) {
     const b = p.bookingId ? String(p.bookingId) : null;
     const h = p.handoverId ? String(p.handoverId) : null;
- 
-    if (h && handoverToBooking.has(h)) addPayment(handoverToBooking.get(h), p, "linkedByHandover");
+
+    if (h && handoverToBooking.has(h))
+      addPayment(handoverToBooking.get(h), p, "linkedByHandover");
     else if (b && idSet.has(b)) addPayment(b, p, "linkedById");
-    else if (b && handoverToBooking.has(b)) addPayment(handoverToBooking.get(b), p, "linkedByHandover");
+    else if (b && handoverToBooking.has(b))
+      addPayment(handoverToBooking.get(b), p, "linkedByHandover");
   }
- 
+
   // ---------- 5. Rule 3: same customer + same vehicle + same trip window ----------
   const windows = [];
   for (const id of ids) {
     const key = String(id);
     const bk = bookingMap.get(key);
     const ho = latestHandover.get(key);
- 
+
     const mobile = normMobile(ho?.customer?.mobileNumber || bk?.mobileNumber);
-    const vehicle = normVehicle(ho?.vehicle?.vehicleNumber || bk?.vehicleNumber);
+    const vehicle = normVehicle(
+      ho?.vehicle?.vehicleNumber || bk?.vehicleNumber,
+    );
     const start = toMs(ho?.trip?.pickupDateTime) ?? toMs(bk?.fromDate);
     let end = toMs(ho?.trip?.dropDateTime) ?? toMs(bk?.toDate);
     if (!ho?.trip?.dropDateTime && end !== null) end += DAY; // include the whole last day
- 
+
     if (mobile.length === 10 && vehicle && start !== null && end !== null) {
       windows.push({ bid: key, mobile, vehicle, start, end });
     }
   }
- 
+
   let fallbackChecked = 0;
   if (windows.length) {
     const byCustomerVehicle = new Map();
@@ -2221,11 +2393,11 @@ const buildBookingLedgers = async (bookingIds, companyId) => {
       if (!byCustomerVehicle.has(k)) byCustomerVehicle.set(k, []);
       byCustomerVehicle.get(k).push(w);
     }
- 
+
     const mobiles = [...new Set(windows.map((w) => w.mobile))];
     const minStart = Math.min(...windows.map((w) => w.start)) - 2 * DAY;
     const maxEnd = Math.max(...windows.map((w) => w.end)) + 15 * DAY;
- 
+
     const candidates = [];
     for (let i = 0; i < mobiles.length; i += 300) {
       const chunk = mobiles.slice(i, i + 300);
@@ -2238,10 +2410,12 @@ const buildBookingLedgers = async (bookingIds, companyId) => {
         .lean();
       candidates.push(...found);
     }
- 
-    const unlinked = candidates.filter((p) => !usedPaymentIds.has(String(p._id)));
+
+    const unlinked = candidates.filter(
+      (p) => !usedPaymentIds.has(String(p._id)),
+    );
     fallbackChecked = unlinked.length;
- 
+
     // Never take a payment that belongs to another real booking
     const otherIds = [
       ...new Set(
@@ -2252,38 +2426,45 @@ const buildBookingLedgers = async (bookingIds, companyId) => {
     ];
     const otherExisting = otherIds.length
       ? new Set(
-          (await Booking.find({ _id: { $in: otherIds.map(toObjId) } }).select("_id").lean()).map(
-            (b) => String(b._id),
-          ),
+          (
+            await Booking.find({ _id: { $in: otherIds.map(toObjId) } })
+              .select("_id")
+              .lean()
+          ).map((b) => String(b._id)),
         )
       : new Set();
- 
+
     for (const p of unlinked) {
       if (p.bookingId && otherExisting.has(String(p.bookingId))) continue;
- 
+
       const list = byCustomerVehicle.get(
         `${normMobile(p.customer?.mobileNumber)}|${normVehicle(p.vehicle?.vehicleNumber)}`,
       );
       if (!list) continue;
- 
+
       const paidAt = toMs(p.createdAt);
       const pFrom = toMs(p.booking?.fromDate);
       const pTo = toMs(p.booking?.toDate) ?? pFrom;
- 
+
       const fits = list.filter((w) => {
         if (pFrom !== null) return pFrom <= w.end + DAY && pTo >= w.start - DAY;
-        return paidAt !== null && paidAt >= w.start - 2 * DAY && paidAt <= w.end + 15 * DAY;
+        return (
+          paidAt !== null &&
+          paidAt >= w.start - 2 * DAY &&
+          paidAt <= w.end + 15 * DAY
+        );
       });
       if (!fits.length) continue;
- 
+
       fits.sort(
         (a, b) =>
-          Math.abs((paidAt ?? a.start) - a.start) - Math.abs((paidAt ?? b.start) - b.start),
+          Math.abs((paidAt ?? a.start) - a.start) -
+          Math.abs((paidAt ?? b.start) - b.start),
       );
       addPayment(fits[0].bid, p, "linkedByMatch");
     }
   }
- 
+
   // ---------- Debug summary in the server terminal ----------
   let byId = 0;
   let byHandover = 0;
@@ -2298,39 +2479,41 @@ const buildBookingLedgers = async (bookingIds, companyId) => {
       `payments linked: byId=${byId} byHandover=${byHandover} byCustomerVehicleDates=${byMatch} ` +
       `(fallback candidates checked=${fallbackChecked})`,
   );
- 
+
   // ---------- 6. Compose ledger per booking ----------
   let returnsWithCollection = 0;
   let returnsNotLogged = 0;
- 
+
   for (const id of ids) {
     const key = String(id);
     if (ledgers.has(key)) continue;
- 
+
     const pay = accs.get(key) || { items: [] };
     const bk = bookingMap.get(key) || null;
     const ho = latestHandover.get(key) || null;
     const ret = returnByBooking.get(key) || null;
- 
+
     const l = emptyLedger();
- 
+
     // ---- Payments ----
-    for (const field of Object.values(TYPE_TO_FIELD)) l[field] = round2(pay[field]);
- 
+    for (const field of Object.values(TYPE_TO_FIELD))
+      l[field] = round2(pay[field]);
+
     l.totalReceived = round2(INFLOW_FIELDS.reduce((s, f) => s + l[f], 0));
     l.netReceived = round2(l.totalReceived - l.refundPaid);
     l.paymentCount = pay.paymentCount || 0;
     l.lastPaymentAt = pay.lastPaymentAt || null;
- 
+
     let netCash = num(pay.netCash);
     let netPhonePe = num(pay.netPhonePe);
     let netRazorpay = num(pay.netRazorpay);
- 
+
     // Time the return happened (payments within 2 h before it count as "at return")
     const RETURN_WINDOW_MS = 2 * 60 * 60 * 1000;
-    const retAt = ret ? toMs(ret.receivingTime) ?? toMs(ret.createdAt) : null;
-    const atOrAfterReturn = (i) => retAt !== null && i.at !== null && i.at >= retAt - RETURN_WINDOW_MS;
- 
+    const retAt = ret ? (toMs(ret.receivingTime) ?? toMs(ret.createdAt)) : null;
+    const atOrAfterReturn = (i) =>
+      retAt !== null && i.at !== null && i.at >= retAt - RETURN_WINDOW_MS;
+
     // ---- Return collection ----
     // settlementDetails.amountCollected is what was taken at return.
     // If the return screen did not save it as a PaymentHistory record,
@@ -2338,28 +2521,28 @@ const buildBookingLedgers = async (bookingIds, companyId) => {
     if (ret) {
       const st = ret.settlementDetails || {};
       const collected = num(st.amountCollected);
- 
+
       l.returnCollected = round2(collected);
       l.returnedAt = ret.receivingTime || ret.createdAt || null;
- 
+
       const loggedAtReturn = pay.items
         .filter((i) => i.type !== "refund" && atOrAfterReturn(i))
         .reduce((s, i) => s + i.amt, 0);
- 
+
       const unlogged = round2(Math.max(0, collected - loggedAtReturn));
       l.returnCollectedUnlogged = unlogged;
- 
+
       if (collected > 0) returnsWithCollection += 1;
       if (unlogged > 0) {
         returnsNotLogged += 1;
- 
+
         // Put the unlogged part into the right channels
         const bd = st.paymentBreakdown || {};
         const bdCash = num(bd.cash);
         const bdPhonePe = num(bd.phonePe);
         const bdRazorpay = num(bd.razorpay);
         const bdTotal = bdCash + bdPhonePe + bdRazorpay;
- 
+
         if (bdTotal > 0) {
           const share = unlogged / bdTotal;
           netCash += bdCash * share;
@@ -2374,19 +2557,21 @@ const buildBookingLedgers = async (bookingIds, companyId) => {
         }
       }
     }
- 
+
     l.totalPaid = round2(l.netReceived + l.returnCollectedUnlogged);
     l.netCash = round2(netCash);
     l.netPhonePe = round2(netPhonePe);
     l.netRazorpay = round2(netRazorpay);
-    l.splitDiff = round2(l.totalPaid - l.netCash - l.netPhonePe - l.netRazorpay);
- 
+    l.splitDiff = round2(
+      l.totalPaid - l.netCash - l.netPhonePe - l.netRazorpay,
+    );
+
     // "additional_charge" money taken at return pays the return fines,
     // so only the part paid BEFORE the return proves an extra charge.
     const additionalBeforeReturn = pay.items
       .filter((i) => i.type === "additional_charge" && !atOrAfterReturn(i))
       .reduce((s, i) => s + i.amt, 0);
- 
+
     // ---- Snapshot info ----
     if (bk) {
       l.bookingCode = bk.bookingCode || "";
@@ -2401,18 +2586,18 @@ const buildBookingLedgers = async (bookingIds, companyId) => {
       l.returnStatus = ret.settlementDetails?.status || "";
       l.returnFinalBalance = numOrNull(ret.settlementDetails?.finalBalance);
     }
- 
+
     l.handoverPickupAt = ho?.trip?.pickupDateTime ?? null;
     l.handoverDropAt = ho?.trip?.dropDateTime ?? null;
- 
+
     l.tripDays = ho?.trip?.numberOfDays ?? bk?.totalDays ?? null;
     l.currentDropAt = ho?.trip?.dropDateTime ?? bk?.toDate ?? null;
- 
+
     // ---- Bill and balance ----
     const cancelled =
       (ho && ho.handoverStatus === "cancelled") ||
       (!ho && bk && (bk.isDeleted || bk.status === "cancelled"));
- 
+
     if (cancelled) {
       l.dueSource = "cancelled";
       // No bill on a cancelled booking; money still held shows as Refund Due
@@ -2422,26 +2607,31 @@ const buildBookingLedgers = async (bookingIds, companyId) => {
     } else {
       Object.assign(
         l,
-        computeBill({ bk, ho, ret, additionalChargePaid: additionalBeforeReturn }),
+        computeBill({
+          bk,
+          ho,
+          ret,
+          additionalChargePaid: additionalBeforeReturn,
+        }),
       );
       l.dueSource = ret ? "return" : ho ? "handover" : "booking";
- 
+
       const balance = round2(l.totalBill - l.totalPaid);
       l.currentDue = balance > 0 ? balance : 0;
       l.refundDue = balance < 0 ? round2(-balance) : 0;
     }
- 
+
     ledgers.set(key, l);
   }
- 
+
   console.log(
     `[ledger] returns found=${returns.length} withCollection=${returnsWithCollection} ` +
       `collectionNotInPayments=${returnsNotLogged}`,
   );
- 
+
   return ledgers;
 };
- 
+
 // Totals over DISTINCT bookings (no double counting when a booking has
 // more than one "booking" type payment row)
 const summarizeLedgers = (ledgers) => {
@@ -2450,7 +2640,7 @@ const summarizeLedgers = (ledgers) => {
   s.paymentCount = 0;
   s.dueBookingCount = 0;
   s.refundBookingCount = 0;
- 
+
   for (const l of ledgers.values()) {
     s.bookingCount += 1;
     s.paymentCount += l.paymentCount || 0;
@@ -2458,11 +2648,11 @@ const summarizeLedgers = (ledgers) => {
     if (num(l.refundDue) > 0) s.refundBookingCount += 1;
     for (const f of LEDGER_MONEY_FIELDS) s[f] += num(l[f]);
   }
- 
+
   for (const f of LEDGER_MONEY_FIELDS) s[f] = round2(s[f]);
   return s;
 };
- 
+
 // ============================================================
 // CONTROLLER
 // ============================================================
@@ -2481,21 +2671,23 @@ export const getBookingPayments = async (req, res) => {
       sortBy = "createdAt",
       sortOrder = "desc",
     } = req.query;
- 
+
     // ---------- Company scope (optional, no auth) ----------
     const { company } = req.query;
- 
+
     const filter = { type: "booking" };
- 
+
     if (company) {
       if (!mongoose.Types.ObjectId.isValid(company)) {
-        return res.status(400).json({ success: false, message: "Invalid company id" });
+        return res
+          .status(400)
+          .json({ success: false, message: "Invalid company id" });
       }
       filter.company = new mongoose.Types.ObjectId(company);
     }
- 
+
     const and = [];
- 
+
     // ---------- Month filter: by the booking's FROM date (trip start) ----------
     // The trip start date is taken from, in order:
     //   1. Booking.fromDate (current, even if the trip was rescheduled)
@@ -2506,7 +2698,9 @@ export const getBookingPayments = async (req, res) => {
     // whether the date was saved at UTC midnight or IST midnight.
     if (month) {
       if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) {
-        return res.status(400).json({ success: false, message: "month must be YYYY-MM" });
+        return res
+          .status(400)
+          .json({ success: false, message: "month must be YYYY-MM" });
       }
       const [y, m] = month.split("-").map(Number);
       const IST_MS = 330 * 60 * 1000;
@@ -2514,39 +2708,54 @@ export const getBookingPayments = async (req, res) => {
       const end = new Date(Date.UTC(y, m, 1) - IST_MS); // 1st of next month, 00:00 IST
       const fromRange = { $gte: start, $lt: end };
       const toObjectId = (v) => new mongoose.Types.ObjectId(String(v));
- 
-      const [monthBookingIds, snapshotBookingIds, handoversInMonth] = await Promise.all([
-        // 1. Bookings whose trip starts in this month
-        Booking.distinct("_id", { fromDate: fromRange }),
-        // 2. Booking payments whose saved trip start is in this month
-        PaymentHistory.distinct("bookingId", { type: "booking", "booking.fromDate": fromRange }),
-        // 3. Handovers whose pickup is in this month
-        Handover.find({ isDeleted: { $ne: true }, "trip.pickupDateTime": fromRange })
-          .select("_id bookingId")
-          .lean(),
-      ]);
- 
+
+      const [monthBookingIds, snapshotBookingIds, handoversInMonth] =
+        await Promise.all([
+          // 1. Bookings whose trip starts in this month
+          Booking.distinct("_id", { fromDate: fromRange }),
+          // 2. Booking payments whose saved trip start is in this month
+          PaymentHistory.distinct("bookingId", {
+            type: "booking",
+            "booking.fromDate": fromRange,
+          }),
+          // 3. Handovers whose pickup is in this month
+          Handover.find({
+            isDeleted: { $ne: true },
+            "trip.pickupDateTime": fromRange,
+          })
+            .select("_id bookingId")
+            .lean(),
+        ]);
+
       // Booking payments with NO saved From date, linked to those handovers
-      const hoBookingIds = handoversInMonth.map((h) => h.bookingId).filter(Boolean);
+      const hoBookingIds = handoversInMonth
+        .map((h) => h.bookingId)
+        .filter(Boolean);
       const hoIds = handoversInMonth.map((h) => h._id);
       const handoverBookingIds = hoIds.length
         ? await PaymentHistory.distinct("bookingId", {
             type: "booking",
             "booking.fromDate": null, // missing or empty
             $or: [
-              ...(hoBookingIds.length ? [{ bookingId: { $in: hoBookingIds } }] : []),
+              ...(hoBookingIds.length
+                ? [{ bookingId: { $in: hoBookingIds } }]
+                : []),
               { handoverId: { $in: hoIds } },
               { bookingId: { $in: hoIds } },
             ],
           })
         : [];
- 
+
       // Sources 2 and 3 apply only when the Booking itself has no From date
       const inMonth = new Set(monthBookingIds.map(String));
       const candidates = [
-        ...new Set([...snapshotBookingIds, ...handoverBookingIds].filter(Boolean).map(String)),
+        ...new Set(
+          [...snapshotBookingIds, ...handoverBookingIds]
+            .filter(Boolean)
+            .map(String),
+        ),
       ].filter((bid) => !inMonth.has(bid));
- 
+
       const haveOwnFromDate = candidates.length
         ? new Set(
             (
@@ -2557,12 +2766,14 @@ export const getBookingPayments = async (req, res) => {
             ).map(String),
           )
         : new Set();
- 
-      const fallbackIds = candidates.filter((bid) => !haveOwnFromDate.has(bid)).map(toObjectId);
- 
+
+      const fallbackIds = candidates
+        .filter((bid) => !haveOwnFromDate.has(bid))
+        .map(toObjectId);
+
       and.push({ bookingId: { $in: [...monthBookingIds, ...fallbackIds] } });
     }
- 
+
     // ---------- Payment date range ----------
     if (fromDate || toDate) {
       const range = {};
@@ -2579,16 +2790,19 @@ export const getBookingPayments = async (req, res) => {
       }
       if (Object.keys(range).length) filter.createdAt = range;
     }
- 
+
     // ---------- Other filters ----------
-    if (paymentMethod && ["cash", "phonepe", "razorpay", "mixed"].includes(paymentMethod)) {
+    if (
+      paymentMethod &&
+      ["cash", "phonepe", "razorpay", "mixed"].includes(paymentMethod)
+    ) {
       filter.paymentMethod = paymentMethod;
     }
- 
+
     if (isCollected === "true" || isCollected === "false") {
       filter.isCollected = isCollected === "true";
     }
- 
+
     if (search?.trim()) {
       const rx = new RegExp(escapeRegex(search.trim()), "i");
       and.push({
@@ -2600,47 +2814,50 @@ export const getBookingPayments = async (req, res) => {
         ],
       });
     }
- 
+
     if (and.length) filter.$and = and;
- 
+
     // ---------- Sorting & pagination ----------
     const sortField = SORTABLE_FIELDS.includes(sortBy) ? sortBy : "createdAt";
     const sort = { [sortField]: sortOrder === "asc" ? 1 : -1, _id: -1 };
- 
+
     const exportAll = all === "true";
     const pageNum = Math.max(parseInt(page, 10) || 1, 1);
     const limitNum = Math.min(Math.max(parseInt(limit, 10) || 50, 1), 500);
- 
+
     let query = PaymentHistory.find(filter)
       .select("-collectionHistory -__v")
       .populate("createdBy", "name")
       .sort(sort)
       .lean();
- 
-    if (!exportAll) query = query.skip((pageNum - 1) * limitNum).limit(limitNum);
- 
-    const [payments, total, summaryAgg, filteredBookingIds] = await Promise.all([
-      query,
-      PaymentHistory.countDocuments(filter),
-      PaymentHistory.aggregate([
-        { $match: filter },
-        {
-          $group: {
-            _id: null,
-            totalAmount: { $sum: "$amount" },
-            totalCash: { $sum: "$paymentBreakdown.cash" },
-            totalPhonePe: { $sum: "$paymentBreakdown.phonePe" },
-            totalRazorpay: { $sum: "$paymentBreakdown.razorpay" },
-            totalCollected: { $sum: "$collectedAmount" },
-            totalCollectedPhonePe: { $sum: "$collectedPhonePe" },
-            collectedCount: { $sum: { $cond: ["$isCollected", 1, 0] } },
+
+    if (!exportAll)
+      query = query.skip((pageNum - 1) * limitNum).limit(limitNum);
+
+    const [payments, total, summaryAgg, filteredBookingIds] = await Promise.all(
+      [
+        query,
+        PaymentHistory.countDocuments(filter),
+        PaymentHistory.aggregate([
+          { $match: filter },
+          {
+            $group: {
+              _id: null,
+              totalAmount: { $sum: "$amount" },
+              totalCash: { $sum: "$paymentBreakdown.cash" },
+              totalPhonePe: { $sum: "$paymentBreakdown.phonePe" },
+              totalRazorpay: { $sum: "$paymentBreakdown.razorpay" },
+              totalCollected: { $sum: "$collectedAmount" },
+              totalCollectedPhonePe: { $sum: "$collectedPhonePe" },
+              collectedCount: { $sum: { $cond: ["$isCollected", 1, 0] } },
+            },
           },
-        },
-      ]),
-      // Every distinct booking in the filtered set (for ledger + footer totals)
-      PaymentHistory.distinct("bookingId", filter),
-    ]);
- 
+        ]),
+        // Every distinct booking in the filtered set (for ledger + footer totals)
+        PaymentHistory.distinct("bookingId", filter),
+      ],
+    );
+
     // ---------- Booking ledger (bill + all payment types) ----------
     let ledgers = new Map();
     let ledgerError = false;
@@ -2653,48 +2870,48 @@ export const getBookingPayments = async (req, res) => {
       ledgerError = true;
       ledgerErrorMessage = err.message;
     }
- 
+
     // ---------- Flatten for sheet ----------
     const rows = payments.map((p) => {
       const ledger = ledgers.get(String(p.bookingId)) || emptyLedger();
- 
+
       return {
-      _id: p._id,
-      bookingId: p.bookingId,
-      paymentDate: p.createdAt,
-      bookingMonth:
-        p.bookingMonth ||
-        toBookingMonth(p.booking?.fromDate) ||
-        toBookingMonth(p.booking?.toDate) ||
-        toBookingMonth(ledger.handoverPickupAt) ||
-        toBookingMonth(ledger.handoverDropAt) ||
-        "",
-      customerName: p.customer?.fullName || "",
-      mobileNumber: p.customer?.mobileNumber || "",
-      vehicleName: p.vehicle?.vehicleName || "",
-      vehicleNumber: p.vehicle?.vehicleNumber || "",
-      // From / To: saved on the payment, else taken from the handover
-      fromDate: p.booking?.fromDate || ledger.handoverPickupAt || null,
-      toDate: p.booking?.toDate || ledger.handoverDropAt || null,
-      bookingAmount: p.booking?.bookingAmount || 0,
-      amount: p.amount || 0,
-      paymentMethod: p.paymentMethod,
-      cash: p.paymentBreakdown?.cash || 0,
-      phonePe: p.paymentBreakdown?.phonePe || 0,
-      razorpay: p.paymentBreakdown?.razorpay || 0,
-      upiLast4: (p.upiLast4 || []).join(", "),
-      isCollected: !!p.isCollected,
-      collectedAmount: p.collectedAmount || 0,
-      collectedPhonePe: p.collectedPhonePe || 0,
-      lastCollectedAt: p.lastCollectedAt || null,
-      createdByName: p.createdBy?.name || "",
-      note: p.note || "",
- 
-      // Booking-level ledger (same values on every row of the same booking)
-      ...ledger,
+        _id: p._id,
+        bookingId: p.bookingId,
+        paymentDate: p.createdAt,
+        bookingMonth:
+          p.bookingMonth ||
+          toBookingMonth(p.booking?.fromDate) ||
+          toBookingMonth(p.booking?.toDate) ||
+          toBookingMonth(ledger.handoverPickupAt) ||
+          toBookingMonth(ledger.handoverDropAt) ||
+          "",
+        customerName: p.customer?.fullName || "",
+        mobileNumber: p.customer?.mobileNumber || "",
+        vehicleName: p.vehicle?.vehicleName || "",
+        vehicleNumber: p.vehicle?.vehicleNumber || "",
+        // From / To: saved on the payment, else taken from the handover
+        fromDate: p.booking?.fromDate || ledger.handoverPickupAt || null,
+        toDate: p.booking?.toDate || ledger.handoverDropAt || null,
+        bookingAmount: p.booking?.bookingAmount || 0,
+        amount: p.amount || 0,
+        paymentMethod: p.paymentMethod,
+        cash: p.paymentBreakdown?.cash || 0,
+        phonePe: p.paymentBreakdown?.phonePe || 0,
+        razorpay: p.paymentBreakdown?.razorpay || 0,
+        upiLast4: (p.upiLast4 || []).join(", "),
+        isCollected: !!p.isCollected,
+        collectedAmount: p.collectedAmount || 0,
+        collectedPhonePe: p.collectedPhonePe || 0,
+        lastCollectedAt: p.lastCollectedAt || null,
+        createdByName: p.createdBy?.name || "",
+        note: p.note || "",
+
+        // Booking-level ledger (same values on every row of the same booking)
+        ...ledger,
       };
     });
- 
+
     const summary = summaryAgg[0] || {
       totalAmount: 0,
       totalCash: 0,
@@ -2705,7 +2922,7 @@ export const getBookingPayments = async (req, res) => {
       collectedCount: 0,
     };
     delete summary._id;
- 
+
     return res.status(200).json({
       success: true,
       columns: ALL_BOOKING_PAYMENT_COLUMNS,
@@ -2721,11 +2938,18 @@ export const getBookingPayments = async (req, res) => {
       },
       pagination: exportAll
         ? { total, page: 1, limit: total, totalPages: 1 }
-        : { total, page: pageNum, limit: limitNum, totalPages: Math.ceil(total / limitNum) },
+        : {
+            total,
+            page: pageNum,
+            limit: limitNum,
+            totalPages: Math.ceil(total / limitNum),
+          },
     });
   } catch (error) {
     console.error("getBookingPayments error:", error);
-    return res.status(500).json({ success: false, message: "Failed to fetch booking payments" });
+    return res
+      .status(500)
+      .json({ success: false, message: "Failed to fetch booking payments" });
   }
 };
 // Aliases so older route imports keep working.
