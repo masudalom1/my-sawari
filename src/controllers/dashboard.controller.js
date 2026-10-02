@@ -26,6 +26,28 @@ import {
   loadRevenueServiceDays,
 } from "../services/revenue.service.js";
 
+function resolveStatus(bookingStatus, handover) {
+  if (!handover) return bookingStatus;
+  if (handover.handoverStatus === "returned" || handover.returnDetails?.returnedAt) {
+    return "completed";
+  }
+  if (bookingStatus === "completed") return "completed";
+  return "vehicle_handover"; // handed over, not yet returned
+}
+
+function handoverFields(handover) {
+  return {
+    handoverId: handover?._id || null,
+    // When the vehicle was actually handed over
+    handoverDateTime: handover?.trip?.pickupDateTime || handover?.createdAt || null,
+    // Return date & time (includes any extensions)
+    returnDateTime: handover?.trip?.dropDateTime || null,
+    // When the vehicle actually came back
+    actualReturnDateTime: handover?.returnDetails?.returnedAt || null,
+    handoverStatus: handover?.handoverStatus || null,
+  };
+}
+
 export const getVehiclesForImport = async (req, res) => {
   try {
     const vehicles = await Vehicle.find({
@@ -70,9 +92,7 @@ export const getBookingsForImport = async (req, res) => {
   try {
     const bookings = await Booking.find({
       isDeleted: false,
-      status: {
-        $ne: "cancelled",
-      },
+      status: { $ne: "cancelled" },
     })
       .select(
         `
@@ -103,40 +123,106 @@ export const getBookingsForImport = async (req, res) => {
       .sort({ fromDate: 1 })
       .lean();
 
-    const formattedBookings = bookings.map((booking) => ({
-      _id: booking._id,
-      bookingCode: booking.bookingCode,
+    // Handovers for these bookings + walk-in handovers (no booking)
+    const handovers = await Handover.find({
+      isDeleted: false,
+      handoverStatus: { $ne: "cancelled" },
+      $or: [
+        { bookingId: { $in: bookings.map((b) => b._id) } },
+        { bookingId: null },
+      ],
+    })
+      .select("_id bookingId customer vehicle trip payment handoverStatus returnDetails createdAt")
+      .sort({ createdAt: -1 }) // latest handover first
+      .lean();
 
-      customerName: booking.customerName,
-      mobileNumber: booking.mobileNumber,
+    // bookingId -> latest handover
+    const handoverByBooking = new Map();
+    const walkInHandovers = [];
+    for (const h of handovers) {
+      if (!h.bookingId) {
+        walkInHandovers.push(h);
+        continue;
+      }
+      const key = String(h.bookingId);
+      if (!handoverByBooking.has(key)) handoverByBooking.set(key, h);
+    }
 
-      destination: booking.destination,
+    const formattedBookings = bookings.map((booking) => {
+      const handover = handoverByBooking.get(String(booking._id)) || null;
 
-      fromDate: booking.fromDate,
-      toDate: booking.toDate,
+      return {
+        _id: booking._id,
+        bookingCode: booking.bookingCode,
 
-      pickupTime: booking.pickupTime,
-      dropTime: booking.dropTime,
+        customerName: booking.customerName,
+        mobileNumber: booking.mobileNumber,
 
-      totalDays: booking.totalDays,
+        destination: booking.destination,
 
-      vehicleId: booking.vehicleId?._id || booking.vehicleId,
-      vehicleName: booking.vehicleId?.vehicleName || booking.vehicleName || "",
-      vehicleNumber:
-        booking.vehicleId?.vehicleNumber || booking.vehicleNumber || "",
+        fromDate: booking.fromDate,
+        toDate: booking.toDate,
 
-      status: booking.status,
+        pickupTime: booking.pickupTime,
+        dropTime: booking.dropTime,
 
-      pickup: booking.pickup,
-      drop: booking.drop,
+        totalDays: booking.totalDays,
 
-      payment: booking.payment,
+        vehicleId: booking.vehicleId?._id || booking.vehicleId,
+        vehicleName: booking.vehicleId?.vehicleName || booking.vehicleName || "",
+        vehicleNumber: booking.vehicleId?.vehicleNumber || booking.vehicleNumber || "",
+
+        status: resolveStatus(booking.status, handover),
+
+        pickup: booking.pickup,
+        drop: booking.drop,
+
+        payment: booking.payment,
+
+        isWalkIn: false,
+        ...handoverFields(handover),
+      };
+    });
+
+    // Walk-in handovers (no prior booking) so they still show on the timeline
+    const formattedWalkIns = walkInHandovers.map((h) => ({
+      _id: h._id,
+      bookingCode: "",
+
+      customerName: h.customer?.fullName || "",
+      mobileNumber: h.customer?.mobileNumber || "",
+
+      destination: h.customer?.destination || "",
+
+      fromDate: h.trip?.pickupDateTime || null,
+      toDate: h.trip?.dropDateTime || null,
+
+      pickupTime: null, // full date-times already
+      dropTime: null,
+
+      totalDays: h.trip?.numberOfDays || 0,
+
+      vehicleId: h.vehicle?.vehicleId || null,
+      vehicleName: h.vehicle?.vehicleName || "",
+      vehicleNumber: h.vehicle?.vehicleNumber || "",
+
+      status: resolveStatus("active", h),
+
+      pickup: null,
+      drop: null,
+
+      payment: h.payment,
+
+      isWalkIn: true,
+      ...handoverFields(h),
     }));
+
+    const allBookings = [...formattedBookings, ...formattedWalkIns];
 
     return res.status(200).json({
       success: true,
-      count: formattedBookings.length,
-      bookings: formattedBookings,
+      count: allBookings.length,
+      bookings: allBookings,
     });
   } catch (error) {
     console.error("Get bookings for import error:", error);
