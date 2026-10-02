@@ -38,8 +38,8 @@ function resolveStatus(bookingStatus, handover) {
 function handoverFields(handover) {
   return {
     handoverId: handover?._id || null,
-    // When the vehicle was actually handed over
-    handoverDateTime: handover?.trip?.pickupDateTime || handover?.createdAt || null,
+    // Handover date & time = when the handover record was created
+    handoverDateTime: handover?.createdAt || null,
     // Return date & time (includes any extensions)
     returnDateTime: handover?.trip?.dropDateTime || null,
     // When the vehicle actually came back
