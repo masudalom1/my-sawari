@@ -66,90 +66,72 @@ export const getVehiclesForImport = async (req, res) => {
     });
   }
 };
-
-function mapHandoverStatus(handover) {
-  if (
-    handover.handoverStatus === "cancelled" ||
-    handover.bookingStatus === "cancelled"
-  ) {
-    return "cancelled";
-  }
-  if (
-    handover.handoverStatus === "returned" ||
-    handover.bookingStatus === "completed"
-  ) {
-    return "completed";
-  }
-  return "active";
-}
-
 export const getBookingsForImport = async (req, res) => {
   try {
-    const handovers = await Handover.find({
+    const bookings = await Booking.find({
       isDeleted: false,
-      handoverStatus: { $ne: "cancelled" },
-      bookingStatus: { $ne: "cancelled" },
+      status: {
+        $ne: "cancelled",
+      },
     })
       .select(
         `
         _id
-        bookingId
-        customer
-        vehicle
-        trip
+        bookingCode
+        customerName
+        mobileNumber
+        alternateMobileNumber
+        destination
+        fromDate
+        toDate
+        pickupTime
+        dropTime
+        totalDays
+        vehicleId
+        vehicleName
+        vehicleNumber
+        status
+        pickup
+        drop
         payment
-        bookingStatus
-        handoverStatus
-        returnDetails
-        `,
+      `,
       )
-      // Pull bookingCode / pickup / drop from the original booking, if linked
       .populate({
-        path: "bookingId",
-        select: "_id bookingCode pickup drop",
+        path: "vehicleId",
+        select: "_id vehicleName vehicleNumber vehicleType images status",
       })
-      .sort({ "trip.pickupDateTime": 1 })
+      .sort({ fromDate: 1 })
       .lean();
 
-    const formattedBookings = handovers.map((handover) => {
-      const linkedBooking =
-        handover.bookingId && typeof handover.bookingId === "object"
-          ? handover.bookingId
-          : null;
+    const formattedBookings = bookings.map((booking) => ({
+      _id: booking._id,
+      bookingCode: booking.bookingCode,
 
-      return {
-        _id: handover._id,
-        bookingCode: linkedBooking?.bookingCode || "",
+      customerName: booking.customerName,
+      mobileNumber: booking.mobileNumber,
 
-        customerName: handover.customer?.fullName || "",
-        mobileNumber: handover.customer?.mobileNumber || "",
+      destination: booking.destination,
 
-        destination: handover.customer?.destination || "",
+      fromDate: booking.fromDate,
+      toDate: booking.toDate,
 
-        // Handover stores full date-times, so the time fields are left
-        // empty — combineDateAndTime() on the frontend then uses the
-        // date-time as-is.
-        fromDate: handover.trip?.pickupDateTime || null,
-        toDate: handover.trip?.dropDateTime || null,
+      pickupTime: booking.pickupTime,
+      dropTime: booking.dropTime,
 
-        pickupTime: null,
-        dropTime: null,
+      totalDays: booking.totalDays,
 
-        totalDays: handover.trip?.numberOfDays || 0,
+      vehicleId: booking.vehicleId?._id || booking.vehicleId,
+      vehicleName: booking.vehicleId?.vehicleName || booking.vehicleName || "",
+      vehicleNumber:
+        booking.vehicleId?.vehicleNumber || booking.vehicleNumber || "",
 
-        // Current vehicle on the handover (updated on vehicle exchange)
-        vehicleId: handover.vehicle?.vehicleId || null,
-        vehicleName: handover.vehicle?.vehicleName || "",
-        vehicleNumber: handover.vehicle?.vehicleNumber || "",
+      status: booking.status,
 
-        status: mapHandoverStatus(handover),
+      pickup: booking.pickup,
+      drop: booking.drop,
 
-        pickup: linkedBooking?.pickup || null,
-        drop: linkedBooking?.drop || null,
-
-        payment: handover.payment,
-      };
-    });
+      payment: booking.payment,
+    }));
 
     return res.status(200).json({
       success: true,
