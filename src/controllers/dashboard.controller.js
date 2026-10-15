@@ -88,6 +88,297 @@ export const getVehiclesForImport = async (req, res) => {
     });
   }
 };
+
+
+
+// new time line 
+
+
+const TIMELINE_DAY_MS = 24 * 60 * 60 * 1000;
+const RECENT_CHANGE_MS = 2 * TIMELINE_DAY_MS; // recently returned / completed / cancelled
+const LIVE_LOOKBACK_MS = 30 * TIMELINE_DAY_MS; // not-handed-over bookings this old still count
+const RANGE_PAD_MS = 2 * TIMELINE_DAY_MS;
+const MAX_RANGE_MS = 400 * TIMELINE_DAY_MS;
+ 
+const BOOKING_FIELDS =
+  "_id bookingCode customerName mobileNumber destination fromDate toDate " +
+  "pickupTime dropTime totalDays vehicleId vehicleName vehicleNumber status " +
+  "pickup.location pickup.landmark";
+ 
+const HANDOVER_FIELDS =
+  "_id bookingId customer.fullName customer.mobileNumber customer.destination " +
+  "vehicle.vehicleId vehicle.vehicleName vehicle.vehicleNumber " +
+  "trip.pickupDateTime trip.dropDateTime trip.numberOfDays " +
+  "handoverStatus returnDetails.returnedAt createdAt";
+ 
+// ---------- Same rules as dashboard.controller.js ----------
+
+ 
+function formatBooking(booking, handover) {
+  return {
+    _id: booking._id,
+    bookingCode: booking.bookingCode,
+    customerName: booking.customerName,
+    mobileNumber: booking.mobileNumber,
+    destination: booking.destination,
+    fromDate: booking.fromDate,
+    toDate: booking.toDate,
+    pickupTime: booking.pickupTime,
+    dropTime: booking.dropTime,
+    totalDays: booking.totalDays,
+    vehicleId: booking.vehicleId?._id || booking.vehicleId,
+    vehicleName: booking.vehicleName || "",
+    vehicleNumber: booking.vehicleNumber || "",
+    status: resolveStatus(booking.status, handover),
+    pickup: booking.pickup,
+    isWalkIn: false,
+    ...handoverFields(handover),
+  };
+}
+ 
+function formatWalkIn(h) {
+  return {
+    _id: h._id,
+    bookingCode: "",
+    customerName: h.customer?.fullName || "",
+    mobileNumber: h.customer?.mobileNumber || "",
+    destination: h.customer?.destination || "",
+    fromDate: h.trip?.pickupDateTime || null,
+    toDate: h.trip?.dropDateTime || null,
+    pickupTime: null,
+    dropTime: null,
+    totalDays: h.trip?.numberOfDays || 0,
+    vehicleId: h.vehicle?.vehicleId || null,
+    vehicleName: h.vehicle?.vehicleName || "",
+    vehicleNumber: h.vehicle?.vehicleNumber || "",
+    status: resolveStatus("active", h),
+    pickup: null,
+    isWalkIn: true,
+    ...handoverFields(h),
+  };
+}
+ 
+// Latest non-cancelled handover per booking (same as /bookings/import)
+async function withHandovers(bookings, walkIns) {
+  const ids = bookings.map((b) => b._id);
+ 
+  const handovers = ids.length
+    ? await Handover.find({
+        isDeleted: false,
+        handoverStatus: { $ne: "cancelled" },
+        bookingId: { $in: ids },
+      })
+        .select(HANDOVER_FIELDS)
+        .sort({ createdAt: -1 })
+        .lean()
+    : [];
+ 
+  const latest = new Map();
+  for (const h of handovers) {
+    const key = String(h.bookingId);
+    if (!latest.has(key)) latest.set(key, h);
+  }
+ 
+  return [
+    ...bookings.map((b) => formatBooking(b, latest.get(String(b._id)) || null)),
+    ...walkIns.map(formatWalkIn),
+  ];
+}
+ 
+// ---------- scope=live ----------
+async function loadLiveBookings(now) {
+  const recent = new Date(now.getTime() - RECENT_CHANGE_MS);
+  const lookback = new Date(now.getTime() - LIVE_LOOKBACK_MS);
+ 
+  const [liveHandovers, removedBookings, removedWalkIns] = await Promise.all([
+    // Vehicles out right now (ongoing / overdue) + recently returned
+    Handover.find({
+      isDeleted: false,
+      handoverStatus: { $ne: "cancelled" },
+      $or: [
+        {
+          handoverStatus: { $ne: "returned" },
+          "returnDetails.returnedAt": null,
+        },
+        { "returnDetails.returnedAt": { $gte: recent } },
+        { updatedAt: { $gte: recent } },
+      ],
+    })
+      .select(HANDOVER_FIELDS)
+      .sort({ createdAt: -1 })
+      .lean(),
+ 
+    // Recently cancelled / deleted bookings -> frontend drops them
+    Booking.find({
+      updatedAt: { $gte: recent },
+      $or: [{ isDeleted: true }, { status: "cancelled" }],
+    })
+      .select("_id")
+      .lean(),
+ 
+    // Recently cancelled / deleted walk-ins
+    Handover.find({
+      bookingId: null,
+      updatedAt: { $gte: recent },
+      $or: [{ isDeleted: true }, { handoverStatus: "cancelled" }],
+    })
+      .select("_id")
+      .lean(),
+  ]);
+ 
+  const walkIns = liveHandovers.filter((h) => !h.bookingId);
+  const handoverBookingIds = liveHandovers
+    .filter((h) => h.bookingId)
+    .map((h) => h.bookingId);
+ 
+  const bookings = await Booking.find({
+    isDeleted: false,
+    status: { $ne: "cancelled" },
+    $or: [
+      ...(handoverBookingIds.length
+        ? [{ _id: { $in: handoverBookingIds } }]
+        : []),
+      { status: { $in: HANDED_OVER_STATUSES } }, // ongoing / overdue
+      { status: { $ne: "completed" }, toDate: { $gte: lookback } }, // upcoming
+      { updatedAt: { $gte: recent } }, // just changed
+    ],
+  })
+    .select(BOOKING_FIELDS)
+    .sort({ fromDate: 1 })
+    .lean();
+ 
+  return {
+    bookings: await withHandovers(bookings, walkIns),
+    removedIds: [...removedBookings, ...removedWalkIns].map((d) =>
+      String(d._id),
+    ),
+  };
+}
+ 
+// ---------- scope=range ----------
+async function loadRangeBookings(from, to) {
+  const lo = new Date(from.getTime() - RANGE_PAD_MS);
+  const hi = new Date(to.getTime() + RANGE_PAD_MS);
+ 
+  const [bookings, walkIns] = await Promise.all([
+    Booking.find({
+      isDeleted: false,
+      status: { $ne: "cancelled" },
+      fromDate: { $lt: hi },
+      toDate: { $gt: lo },
+    })
+      .select(BOOKING_FIELDS)
+      .sort({ fromDate: 1 })
+      .lean(),
+ 
+    Handover.find({
+      isDeleted: false,
+      handoverStatus: { $ne: "cancelled" },
+      bookingId: null,
+      $and: [
+        {
+          $or: [
+            { "trip.pickupDateTime": { $lt: hi } },
+            { createdAt: { $lt: hi } },
+          ],
+        },
+        {
+          $or: [
+            { "trip.dropDateTime": { $gt: lo } },
+            { "returnDetails.returnedAt": { $gt: lo } },
+            {
+              handoverStatus: { $ne: "returned" },
+              "returnDetails.returnedAt": null,
+            },
+          ],
+        },
+      ],
+    })
+      .select(HANDOVER_FIELDS)
+      .sort({ createdAt: -1 })
+      .lean(),
+  ]);
+ 
+  return { bookings: await withHandovers(bookings, walkIns), removedIds: [] };
+}
+ 
+function parseDateParam(value) {
+  if (!value) return null;
+  const d = new Date(String(value));
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+ 
+export const getTimelineBookings = async (req, res) => {
+  try {
+    const now = new Date();
+    const scope = req.query.scope === "range" ? "range" : "live";
+ 
+    let result;
+ 
+    if (scope === "range") {
+      const from = parseDateParam(req.query.from);
+      const to = parseDateParam(req.query.to);
+ 
+      if (!from || !to || to <= from) {
+        return res.status(400).json({
+          success: false,
+          message: "range needs valid 'from' and 'to' dates (to after from).",
+        });
+      }
+      if (to.getTime() - from.getTime() > MAX_RANGE_MS) {
+        return res.status(400).json({
+          success: false,
+          message: "range is too large (max ~13 months).",
+        });
+      }
+ 
+      result = await loadRangeBookings(from, to);
+    } else {
+      result = await loadLiveBookings(now);
+    }
+ 
+    return res.status(200).json({
+      success: true,
+      scope,
+      generatedAt: now,
+      count: result.bookings.length,
+      bookings: result.bookings,
+      removedIds: result.removedIds,
+    });
+  } catch (error) {
+    console.error("Get timeline bookings error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to fetch timeline bookings",
+      error: error.message,
+    });
+  }
+};
+ 
+// Same records as getMaintenances, without populate (timeline needs ids only)
+export const getTimelineMaintenances = async (req, res) => {
+  try {
+    const maintenances = await Maintenance.find({ isDeleted: false })
+      .select("_id vehicle startDate endDate status")
+      .sort({ startDate: 1 })
+      .lean();
+ 
+    return res.status(200).json({
+      success: true,
+      count: maintenances.length,
+      data: maintenances,
+    });
+  } catch (error) {
+    console.error("Get timeline maintenances error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to fetch maintenance",
+      error: error.message,
+    });
+  }
+};
+
+// end time line code 
 export const getBookingsForImport = async (req, res) => {
   try {
     const bookings = await Booking.find({
