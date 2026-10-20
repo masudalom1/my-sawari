@@ -1,8 +1,12 @@
-import dotenv from "dotenv";
+// Must stay the first import: modules such as config/cloudinary.js and
+// services/wati.service.js read process.env while they are being imported.
+import "dotenv/config";
+import mongoose from "mongoose";
+import { validateEnv } from "./config/env.js";
 import app from "./app.js";
 import connectDB from "./config/db.js";
 
-dotenv.config();
+validateEnv();
 
 const PORT = process.env.PORT || 5000;
 
@@ -14,3 +18,19 @@ const server = app.listen(PORT, () => {
 
 server.keepAliveTimeout = 65000;
 server.headersTimeout = 66000;
+
+process.on("unhandledRejection", (reason) => {
+  console.error("Unhandled promise rejection:", reason);
+});
+
+const shutdown = (signal) => {
+  console.log(`${signal} received, shutting down`);
+  server.close(() => {
+    mongoose.connection.close(false).finally(() => process.exit(0));
+  });
+  // Don't hang forever on keep-alive connections.
+  setTimeout(() => process.exit(1), 10000).unref();
+};
+
+process.on("SIGTERM", () => shutdown("SIGTERM"));
+process.on("SIGINT", () => shutdown("SIGINT"));

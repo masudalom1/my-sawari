@@ -539,11 +539,14 @@ export const getLeads = async (req, res) => {
     // Search
     // ==========================================
 
-    if (search && search.trim() !== "") {
+    // Escaped: typed text such as "+91 98..." or "(" is not a valid regex.
+    const searchTerm = escapeRegex(String(search || "").trim());
+
+    if (searchTerm !== "") {
       query.$or = [
-        { customerName: { $regex: search.trim(), $options: "i" } },
-        { mobileNumber: { $regex: search.trim(), $options: "i" } },
-        { vehicleName: { $regex: search.trim(), $options: "i" } },
+        { customerName: { $regex: searchTerm, $options: "i" } },
+        { mobileNumber: { $regex: searchTerm, $options: "i" } },
+        { vehicleName: { $regex: searchTerm, $options: "i" } },
       ];
     }
 
@@ -565,7 +568,7 @@ export const getLeads = async (req, res) => {
 
     if (priority && priority !== "all") {
       query.priority = {
-        $regex: new RegExp(`^${priority}$`, "i"),
+        $regex: new RegExp(`^${escapeRegex(String(priority))}$`, "i"),
       };
     }
 
@@ -2029,15 +2032,17 @@ export const createLeadBooking = async (req, res, next) => {
 
           bookingId: booking._id,
 
+          // Booking's resolved values: customerName/mobileNumber are optional
+          // in this request and fall back to the lead.
           customer: {
-            fullName: customerName.trim(),
-            mobileNumber: mobileNumber.trim(),
+            fullName: booking.customerName,
+            mobileNumber: booking.mobileNumber,
           },
 
           vehicle: {
-            vehicleId: selectedVehicle._id,
-            vehicleName: selectedVehicle.vehicleName,
-            vehicleNumber: selectedVehicle.vehicleNumber,
+            vehicleId: vehicle._id,
+            vehicleName: vehicle.vehicleName,
+            vehicleNumber: vehicle.vehicleNumber,
           },
 
           amount: advancePaid,

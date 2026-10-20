@@ -13,7 +13,7 @@ const fileFilter = (req, file, cb) => {
   if (allowedTypes.includes(file.mimetype)) {
     cb(null, true);
   } else {
-    cb(new Error("Only image files are allowed"), false);
+    cb(Object.assign(new Error("Only image files are allowed"), { statusCode: 400 }), false);
   }
 };
 

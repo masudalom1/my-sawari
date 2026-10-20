@@ -1,5 +1,6 @@
 import mongoose from "mongoose";
 import PaymentHistory from "../models/paymentHistory.model.js";
+import { toDayKey, dayStartIST, dayEndIST } from "../utils/revenue.utils.js";
 
 const AMOUNT_EPSILON = 0.01;
 const MAX_PAGE_LIMIT = 50;
@@ -37,17 +38,20 @@ const computePaymentFields = (payment) => {
   };
 };
 
-const startOfToday = () => {
-  const date = new Date();
-  date.setHours(0, 0, 0, 0);
-  return date;
-};
+// "Today" is the IST calendar day whatever timezone the server runs in
+// (Render runs in UTC, which shifted the day boundary by 5h30).
+const startOfToday = () => dayStartIST(toDayKey(new Date()));
 
-const endOfToday = () => {
-  const date = new Date();
-  date.setHours(23, 59, 59, 999);
-  return date;
-};
+const endOfToday = () => dayEndIST(toDayKey(new Date()));
+
+// Matches a stored amount, treating a missing field on old records as 0.
+const storedAmountIs = (value) => (value === 0 ? { $in: [0, null] } : value);
+
+// The guarded save matched nothing: Mongoose reports VersionError when the
+// save also bumps __v (array push), DocumentNotFoundError otherwise.
+const isConcurrentUpdate = (error) =>
+  error instanceof mongoose.Error.DocumentNotFoundError ||
+  error instanceof mongoose.Error.VersionError;
 
 export const collectCashPayment = async (req, res, next) => {
   try {
@@ -148,7 +152,23 @@ export const collectCashPayment = async (req, res, next) => {
     payment.isCollected =
       payment.collectedAmount >= collectibleAmount - AMOUNT_EPSILON;
 
-    await payment.save();
+    // Save only if nobody collected since we read the payment; otherwise two
+    // taps would both $push a collection entry for the same cash.
+    payment.$where = {
+      collectedAmount: storedAmountIs(alreadyCollected),
+      isCollected: { $ne: true },
+    };
+
+    try {
+      await payment.save();
+    } catch (error) {
+      if (!isConcurrentUpdate(error)) throw error;
+      return res.status(409).json({
+        success: false,
+        message:
+          "This payment was just collected by someone else. Refresh and try again.",
+      });
+    }
 
     const latestEntry =
       payment.collectionHistory[payment.collectionHistory.length - 1];
@@ -187,11 +207,8 @@ export const getPaymentHistory = async (req, res, next) => {
     );
     const skip = (page - 1) * limit;
 
-    const startOfToday = new Date();
-    startOfToday.setHours(0, 0, 0, 0);
-
-    const endOfToday = new Date();
-    endOfToday.setHours(23, 59, 59, 999);
+    const todayStart = startOfToday();
+    const todayEnd = endOfToday();
     const listQuery = PaymentHistory.find({})
       .populate("createdBy", "name fullName email")
       .sort({ createdAt: -1 })
@@ -202,7 +219,7 @@ export const getPaymentHistory = async (req, res, next) => {
     const summaryPromise =
       page === 1
         ? PaymentHistory.aggregate([
-            { $match: { createdAt: { $gte: startOfToday, $lte: endOfToday } } },
+            { $match: { createdAt: { $gte: todayStart, $lte: todayEnd } } },
             {
               $project: {
                 amount: { $ifNull: ["$amount", 0] },
@@ -573,6 +590,10 @@ export const collectPhonePePayment = async (req, res, next) => {
       return res.status(400).json({ success: false, message: "Payment ID is required" });
     }
 
+    if (!mongoose.Types.ObjectId.isValid(paymentId)) {
+      return res.status(400).json({ success: false, message: "Invalid payment id" });
+    }
+
     if (!Number.isFinite(numericAmount) || numericAmount <= 0) {
       return res.status(400).json({ success: false, message: "A valid amount is required" });
     }
@@ -644,7 +665,18 @@ export const collectPhonePePayment = async (req, res, next) => {
     payment.lastCollectedAt = new Date();
     payment.lastCollectedBy = req.user?._id;
 
-    await payment.save();
+    // Same guard as cash: only save if the PhonePe total is still what we read.
+    payment.$where = { collectedPhonePe: storedAmountIs(alreadyCollected) };
+
+    try {
+      await payment.save();
+    } catch (error) {
+      if (!isConcurrentUpdate(error)) throw error;
+      return res.status(409).json({
+        success: false,
+        message: "This payment has already been verified by someone else.",
+      });
+    }
 
     return res.status(200).json({
       success: true,

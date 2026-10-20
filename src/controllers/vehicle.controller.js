@@ -52,7 +52,7 @@ export const createVehicle = async (req, res, next) => {
     const images =
       req.files?.map((file) => ({
         url: file.path,
-        public_id: file.filename,
+        publicId: file.filename, // schema field name; "public_id" was silently dropped
       })) || [];
 
     const vehicle = await Vehicle.create({

@@ -3,7 +3,9 @@
   "version": "1.0.0",
   "main": "src/server.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "dev": "nodemon src/server.js",
+    "start": "node src/server.js",
+    "test": "node --test --test-concurrency=1 \"tests/*.test.mjs\""
   },
   "keywords": [],
   "author": "",
@@ -31,5 +33,8 @@
     "nodemon": "^3.1.14",
     "validator": "^13.15.35",
     "xss-clean": "^0.1.4"
+  },
+  "devDependencies": {
+    "mongodb-memory-server": "^10.1.4"
   }
 }

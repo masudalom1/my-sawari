@@ -863,7 +863,7 @@ export const createHandover = async (req, res, next) => {
     // have been collected previously during booking.
     if (Number(payment?.amountReceivedNow) > 0) {
       try {
-        await PaymentHistory.create({
+        const paymentHistory = await PaymentHistory.create({
           company: req.user.company || req.user._id,
 
           bookingId,

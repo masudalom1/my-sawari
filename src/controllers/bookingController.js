@@ -324,13 +324,9 @@ export const assignDriverHandover = async (req, res) => {
 
     handover.assignedDriver = driver._id;
 
-    console.log("Before Save:", handover.toObject());
-
     await handover.save();
 
     const verify = await Handover.findById(handoverId).lean();
-
-    console.log("After Save:", verify);
 
     return res.status(200).json({
       success: true,

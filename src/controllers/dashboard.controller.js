@@ -2580,10 +2580,15 @@ const buildBookingLedgers = async (bookingIds, companyId) => {
     return Number.isNaN(t) ? null : t;
   };
 
+  // Fetch only the nested fields the ledger reads (computeBill + compose below).
+  // Whole sub-documents made every request pull megabytes from the database.
+
   // ---------- 1. Bookings ----------
   const bookings = await Booking.find({ _id: { $in: ids } })
     .select(
-      "bookingCode status totalDays fromDate toDate isDeleted payment handover mobileNumber vehicleNumber",
+      "bookingCode status totalDays fromDate toDate isDeleted handover mobileNumber vehicleNumber " +
+        "payment.vehicleRent payment.fastagAmount payment.pickupCharge payment.dropCharge " +
+        "payment.securityDeposit payment.discountAmount payment.totalAmount",
     )
     .lean();
   const bookingMap = new Map(bookings.map((b) => [String(b._id), b]));
@@ -2602,7 +2607,11 @@ const buildBookingLedgers = async (bookingIds, companyId) => {
     ],
   })
     .select(
-      "_id bookingId handoverStatus payment trip createdAt customer.mobileNumber vehicle.vehicleNumber " +
+      "_id bookingId handoverStatus createdAt customer.mobileNumber vehicle.vehicleNumber " +
+        "payment.totalFare payment.fastTagPayableAmount payment.billSummary.pickupCharge " +
+        "payment.billSummary.dropCharge payment.extraCharges payment.securityDeposit " +
+        "payment.discountAmount payment.totalAmount payment.balanceAmount " +
+        "trip.pickupDateTime trip.dropDateTime trip.numberOfDays " +
         "extensionBills.billNumber extensionBills.extensionAmount extensionBills.totalFareAfterThisBill",
     )
     .sort({ createdAt: -1, _id: -1 })
@@ -2625,7 +2634,13 @@ const buildBookingLedgers = async (bookingIds, companyId) => {
   const bookingHandoverIds = [...handoverToBooking.keys()].map(toObjId);
   const returns = bookingHandoverIds.length
     ? await VehicleReturn.find({ handover: { $in: bookingHandoverIds } })
-        .select("handover createdAt receivingTime settlementDetails")
+        .select(
+          "handover createdAt receivingTime " +
+            "settlementDetails.amountCollected settlementDetails.paymentBreakdown " +
+            "settlementDetails.paymentMode settlementDetails.status settlementDetails.finalBalance " +
+            "settlementDetails.lateReturnFine settlementDetails.extraKmFine " +
+            "settlementDetails.fuelUsageAmount settlementDetails.damageAmount",
+        )
         .sort({ createdAt: -1, _id: -1 })
         .lean()
     : [];
@@ -2693,6 +2708,10 @@ const buildBookingLedgers = async (bookingIds, companyId) => {
 
   const PAYMENT_FIELDS =
     "_id type amount paymentMethod paymentBreakdown bookingId handoverId customer.mobileNumber vehicle.vehicleNumber booking.fromDate booking.toDate createdAt";
+  // ID-linked payments only go through addPayment, which never reads the
+  // customer / vehicle / trip-date fields (only the rule 3 match does)
+  const ID_LINK_FIELDS =
+    "_id type amount paymentMethod paymentBreakdown bookingId handoverId createdAt";
   const companyMatch = companyId ? { company: companyId } : {};
 
   // ---------- 4. Rules 1 + 2: linked by ID ----------
@@ -2710,7 +2729,7 @@ const buildBookingLedgers = async (bookingIds, companyId) => {
         : []),
     ],
   })
-    .select(PAYMENT_FIELDS)
+    .select(ID_LINK_FIELDS)
     .lean();
 
   for (const p of idLinked) {
@@ -2757,11 +2776,16 @@ const buildBookingLedgers = async (bookingIds, companyId) => {
     const minStart = Math.min(...windows.map((w) => w.start)) - 2 * DAY;
     const maxEnd = Math.max(...windows.map((w) => w.end)) + 15 * DAY;
 
+    // Payments already linked above are dropped right after this query
+    // (see `unlinked`), so leave them out in the database instead of downloading them.
+    const alreadyLinked = [...usedPaymentIds].map(toObjId);
+
     const candidates = [];
     for (let i = 0; i < mobiles.length; i += 300) {
       const chunk = mobiles.slice(i, i + 300);
       const found = await PaymentHistory.find({
         ...companyMatch,
+        _id: { $nin: alreadyLinked },
         createdAt: { $gte: new Date(minStart), $lte: new Date(maxEnd) },
         "customer.mobileNumber": { $regex: `(${chunk.join("|")})$` },
       })
@@ -3258,7 +3282,8 @@ export const getBookingPayments = async (req, res) => {
         cash: p.paymentBreakdown?.cash || 0,
         phonePe: p.paymentBreakdown?.phonePe || 0,
         razorpay: p.paymentBreakdown?.razorpay || 0,
-        upiLast4: (p.upiLast4 || []).join(", "),
+        // Older records store upiLast4 as a plain string instead of an array
+        upiLast4: Array.isArray(p.upiLast4) ? p.upiLast4.join(", ") : p.upiLast4 || "",
         isCollected: !!p.isCollected,
         collectedAmount: p.collectedAmount || 0,
         collectedPhonePe: p.collectedPhonePe || 0,

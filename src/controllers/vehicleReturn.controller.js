@@ -1015,6 +1015,10 @@ export const getVehicleReturnsDashboard = async (req, res) => {
     const yesterdayStart = istStart(yesterday);
     const tomorrowStart = new Date(todayStart.getTime() + 86400000);
 
+    // VehicleReturn has no isDue / balanceAmount fields — the outstanding
+    // amount saved at return time is settlementDetails.finalBalance.
+    const DUE_MATCH = { "settlementDetails.finalBalance": { $gt: 0 } };
+
     // Build the filter for the tab that's actually being viewed — we only
     // ever query the slice the user is looking at, never the whole table.
     const match = {};
@@ -1022,7 +1026,7 @@ export const getVehicleReturnsDashboard = async (req, res) => {
       match.createdAt = { $gte: todayStart, $lt: tomorrowStart };
     else if (tab === "Yesterday")
       match.createdAt = { $gte: yesterdayStart, $lt: todayStart };
-    else if (tab === "Due") match.isDue = true;
+    else if (tab === "Due") Object.assign(match, DUE_MATCH);
 
     // ---- Stats: pure indexed counts, no document bodies fetched at all ----
     // These run in parallel and stay fast at any collection size because
@@ -1035,7 +1039,7 @@ export const getVehicleReturnsDashboard = async (req, res) => {
       VehicleReturn.countDocuments({
         createdAt: { $gte: yesterdayStart, $lt: todayStart },
       }),
-      VehicleReturn.countDocuments({ isDue: true }),
+      VehicleReturn.countDocuments(DUE_MATCH),
     ]);
     const stats = {
       total,
@@ -1052,7 +1056,7 @@ export const getVehicleReturnsDashboard = async (req, res) => {
       .select(
         "vehicle handover receivedBy fuelLevel kilometersAtReturn receivingTime " +
           "scheduledReturnTime timeStatus delayText hasDamage damageCostDetails " +
-          "customerName mobileNumber balanceAmount isDue createdAt updatedAt",
+          "customerName settlementDetails.finalBalance createdAt updatedAt",
       )
       .populate({
         path: "vehicle",
@@ -1080,8 +1084,8 @@ export const getVehicleReturnsDashboard = async (req, res) => {
       const totalAmount = billSummary.totalAmount || 0;
       const amountReceivedNow = billSummary.amountReceivedNow || 0;
       const totalCollected = billSummary.totalCollected || 0;
-      const balanceAmount = item.balanceAmount || 0;
-      const isDue = !!item.isDue;
+      const balanceAmount = Number(item.settlementDetails?.finalBalance) || 0;
+      const isDue = balanceAmount > 0;
 
       return {
         _id: item._id,
@@ -1090,8 +1094,7 @@ export const getVehicleReturnsDashboard = async (req, res) => {
         isDue,
         customerName:
           item.customerName || item.handover?.customer?.fullName || "",
-        mobileNumber:
-          item.mobileNumber || item.handover?.customer?.mobileNumber || "",
+        mobileNumber: item.handover?.customer?.mobileNumber || "",
         vehicleName: item.vehicle?.vehicleName || "",
         vehicleNumber: item.vehicle?.vehicleNumber || "",
         manufacturer: item.vehicle?.manufacturer || "",

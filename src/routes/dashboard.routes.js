@@ -22,7 +22,7 @@ router.get("/import", getVehiclesForImport);
 router.get("/bookings/import", getBookingsForImport);
 router.get("/bookings/timeline", getTimelineBookings); // fast: live / range
 router.get("/payments/import", getPaymentsForImport);
-router.post("/maintenance", createMaintenance);
+router.post("/maintenance", protect, createMaintenance);
 router.get("/maintenance", getMaintenances);
 router.get("/maintenance/timeline", getTimelineMaintenances); // fast: no populate
 router.get("/stats", getDashboardStats);

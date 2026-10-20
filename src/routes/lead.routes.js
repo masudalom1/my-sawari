@@ -23,7 +23,7 @@ import { createLeadActivity, getLeadActivities } from "../controllers/leadActivi
 const router = express.Router();
 
 router.get("/dashboard", protect, getLeadDashboardStats);
-router.get("/booking", getBookingsDashboard);
+router.get("/booking", protect, getBookingsDashboard);
 router.get("/", protect, getLeads);
 router.post("/", protect, createLead);
 router.get("/:id", protect, getLeadById);

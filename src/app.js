@@ -5,7 +5,7 @@ import helmet from "helmet";
 import morgan from "morgan";
 import compression from "compression";
 import cookieParser from "cookie-parser";
-import rateLimit from "express-rate-limit";
+import rateLimit, { ipKeyGenerator } from "express-rate-limit";
 import hpp from "hpp";
 import path from "path";
 
@@ -18,8 +18,8 @@ import vehicleReturnRoutes from "./routes/vehicleReturn.routes.js";
 import customerRoutes from "./routes/customer.routes.js";
 import leadRoutes from "./routes/lead.routes.js";
 import bookingRoutes from "./routes/bookingRoutes.js";
-import paymentHistoryRoutes from "./routes/paymentHistory.routes.js"
-import dashboardRoutes from "./routes/dashboard.routes.js"
+import paymentHistoryRoutes from "./routes/paymentHistory.routes.js";
+import dashboardRoutes from "./routes/dashboard.routes.js";
 
 dotenv.config();
 
@@ -33,7 +33,7 @@ app.use(
   cors({
     origin: true,
     credentials: true,
-  })
+  }),
 );
 
 // security headers
@@ -52,14 +52,14 @@ app.use(cookieParser());
 app.use(
   express.json({
     limit: "10kb",
-  })
+  }),
 );
 
 app.use(
   express.urlencoded({
     extended: true,
     limit: "10kb",
-  })
+  }),
 );
 
 // prevent HTTP param pollution
@@ -84,7 +84,8 @@ const generalLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   // 🔧 CHANGED: key by logged-in user if available, else fall back to IP
-  keyGenerator: (req) => req.user?._id?.toString() || req.ip,
+  // (ipKeyGenerator groups IPv6 addresses by subnet, as express-rate-limit v8 requires)
+  keyGenerator: (req) => req.user?._id?.toString() || ipKeyGenerator(req.ip),
   message: {
     success: false,
     message: "Too many requests, please try again later.",
@@ -97,7 +98,7 @@ const uploadLimiter = rateLimit({
   max: 300, // room for 9 images x multiple handovers x retries
   standardHeaders: true,
   legacyHeaders: false,
-  keyGenerator: (req) => req.user?._id?.toString() || req.ip,
+  keyGenerator: (req) => req.user?._id?.toString() || ipKeyGenerator(req.ip),
   message: {
     success: false,
     message: "Too many uploads, please slow down and try again shortly.",
@@ -119,11 +120,41 @@ app.use((req, res, next) => {
   console.log("REQUEST:", req.method, req.originalUrl);
   next();
 });
+// Request bodies carry passwords, tokens and customer ID numbers: never log
+// them in production, and mask those fields everywhere else.
+const SENSITIVE_BODY_KEYS = new Set([
+  "password",
+  "confirmPassword",
+  "refreshToken",
+  "accessToken",
+  "token",
+  "aadhaarNumber",
+  "drivingLicenseNumber",
+  "upiLast4",
+]);
+
+const redactBody = (value) => {
+  if (Array.isArray(value)) return value.map(redactBody);
+  if (!value || typeof value !== "object") return value;
+  return Object.fromEntries(
+    Object.entries(value).map(([key, v]) => [
+      key,
+      SENSITIVE_BODY_KEYS.has(key) ? "[REDACTED]" : redactBody(v),
+    ]),
+  );
+};
+
 app.use((req, res, next) => {
-  console.log("BODY:", req.body);
+  if (process.env.NODE_ENV !== "production") {
+    console.log("BODY:", redactBody(req.body));
+  }
   next();
 });
+
 // routes
+app.get("/test", (req, res) => {
+  res.send("This is a Test Route!");
+});
 app.use("/api/v1/auth", authRoutes);
 app.use("/api/v1/handover", handoverRoutes);
 app.use("/api/v1/vehicles", vehicleRoutes);
@@ -133,7 +164,6 @@ app.use("/api/v1/leads", leadRoutes);
 app.use("/api/v1/bookings", bookingRoutes);
 app.use("/api/v1/payments", paymentHistoryRoutes);
 app.use("/api/v1/dashboard", dashboardRoutes);
-
 
 // 404
 app.use(notFound);

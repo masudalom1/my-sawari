@@ -14,8 +14,11 @@ const imageFileFilter = (req, file, cb) => {
     return cb(null, true);
   }
 
+  // statusCode: a rejected file is a client error, not a 500.
   return cb(
-    new Error("Only JPG, JPEG, PNG and WEBP image files are allowed"),
+    Object.assign(new Error("Only JPG, JPEG, PNG and WEBP image files are allowed"), {
+      statusCode: 400,
+    }),
     false,
   );
 };
