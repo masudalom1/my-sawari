@@ -41,6 +41,7 @@ export async function startTestApp(envOverrides = {}) {
 
   return {
     base,
+    server,
     mongoose,
     watiCalls,
     cloudinary,

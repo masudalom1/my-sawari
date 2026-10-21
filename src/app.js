@@ -20,6 +20,7 @@ import leadRoutes from "./routes/lead.routes.js";
 import bookingRoutes from "./routes/bookingRoutes.js";
 import paymentHistoryRoutes from "./routes/paymentHistory.routes.js";
 import dashboardRoutes from "./routes/dashboard.routes.js";
+import { trackWriteRequests } from "./realtime/changeFeed.js";
 
 dotenv.config();
 
@@ -150,6 +151,9 @@ app.use((req, res, next) => {
   }
   next();
 });
+
+// Real-time dashboard updates + cache invalidation on writes
+app.use(trackWriteRequests);
 
 // routes
 app.get("/test", (req, res) => {

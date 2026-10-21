@@ -1,4 +1,7 @@
+import { createHash } from "node:crypto";
 import mongoose from "mongoose";
+import { cachedValue } from "../realtime/responseCache.js";
+import { parallelFind, parallelFindIn, sortLikeMongo } from "../utils/parallelFind.js";
 import Maintenance from "../models/maintenance.model.js";
 import Vehicle from "../models/vehicle.model.js";
 import Booking from "../models/booking.model.js";
@@ -53,9 +56,15 @@ export const getVehiclesForImport = async (req, res) => {
     const vehicles = await Vehicle.find({
       isDeleted: false,
     })
-      .select(
-        "_id vehicleName vehicleNumber vehicleType category images status pricePerDay",
-      )
+      .select({
+        vehicleName: 1,
+        vehicleNumber: 1,
+        vehicleType: 1,
+        category: 1,
+        status: 1,
+        pricePerDay: 1,
+        images: { $slice: 1 }, // only the first image is returned below
+      })
       .sort({ pricePerDay: 1 })
       .lean();
 
@@ -110,7 +119,11 @@ const HANDOVER_FIELDS =
   "vehicle.vehicleId vehicle.vehicleName vehicle.vehicleNumber " +
   "trip.pickupDateTime trip.dropDateTime trip.numberOfDays " +
   "handoverStatus returnDetails.returnedAt createdAt";
- 
+
+// A booking's handover only feeds handoverFields() + resolveStatus()
+const BOOKING_HANDOVER_FIELDS =
+  "_id bookingId trip.dropDateTime handoverStatus returnDetails.returnedAt createdAt";
+
 // ---------- Same rules as dashboard.controller.js ----------
 
  
@@ -159,55 +172,72 @@ function formatWalkIn(h) {
 }
  
 // Latest non-cancelled handover per booking (same as /bookings/import)
-async function withHandovers(bookings, walkIns) {
-  const ids = bookings.map((b) => b._id);
- 
-  const handovers = ids.length
-    ? await Handover.find({
-        isDeleted: false,
-        handoverStatus: { $ne: "cancelled" },
-        bookingId: { $in: ids },
-      })
-        .select(HANDOVER_FIELDS)
-        .sort({ createdAt: -1 })
-        .lean()
-    : [];
- 
+async function latestHandoverByBooking(ids) {
   const latest = new Map();
+  if (!ids.length) return latest;
+
+  const handovers = await parallelFindIn(
+    Handover,
+    "bookingId",
+    ids,
+    { isDeleted: false, handoverStatus: { $ne: "cancelled" } },
+    { select: BOOKING_HANDOVER_FIELDS, sort: { createdAt: -1 } },
+  );
+
   for (const h of handovers) {
     const key = String(h.bookingId);
     if (!latest.has(key)) latest.set(key, h);
   }
- 
+  return latest;
+}
+
+function formatTimeline(bookings, walkIns, latest) {
   return [
     ...bookings.map((b) => formatBooking(b, latest.get(String(b._id)) || null)),
     ...walkIns.map(formatWalkIn),
   ];
 }
- 
+
+// Bookings (sorted by fromDate) + their latest handovers
+async function loadBookingsWithHandovers(filter) {
+  const bookings = await parallelFind(Booking, filter, {
+    select: BOOKING_FIELDS,
+    sort: { fromDate: 1 },
+  });
+  return [bookings, await latestHandoverByBooking(bookings.map((b) => b._id))];
+}
+
 // ---------- scope=live ----------
 async function loadLiveBookings(now) {
   const recent = new Date(now.getTime() - RECENT_CHANGE_MS);
   const lookback = new Date(now.getTime() - LIVE_LOOKBACK_MS);
- 
-  const [liveHandovers, removedBookings, removedWalkIns] = await Promise.all([
+
+  const liveBase = { isDeleted: false, status: { $ne: "cancelled" } };
+  const liveRules = [
+    { status: { $in: HANDED_OVER_STATUSES } }, // ongoing / overdue
+    { status: { $ne: "completed" }, toDate: { $gte: lookback } }, // upcoming
+    { updatedAt: { $gte: recent } }, // just changed
+  ];
+
+  const firstRound = Promise.all([
     // Vehicles out right now (ongoing / overdue) + recently returned
-    Handover.find({
-      isDeleted: false,
-      handoverStatus: { $ne: "cancelled" },
-      $or: [
-        {
-          handoverStatus: { $ne: "returned" },
-          "returnDetails.returnedAt": null,
-        },
-        { "returnDetails.returnedAt": { $gte: recent } },
-        { updatedAt: { $gte: recent } },
-      ],
-    })
-      .select(HANDOVER_FIELDS)
-      .sort({ createdAt: -1 })
-      .lean(),
- 
+    parallelFind(
+      Handover,
+      {
+        isDeleted: false,
+        handoverStatus: { $ne: "cancelled" },
+        $or: [
+          {
+            handoverStatus: { $ne: "returned" },
+            "returnDetails.returnedAt": null,
+          },
+          { "returnDetails.returnedAt": { $gte: recent } },
+          { updatedAt: { $gte: recent } },
+        ],
+      },
+      { select: HANDOVER_FIELDS, sort: { createdAt: -1 } },
+    ),
+
     // Recently cancelled / deleted bookings -> frontend drops them
     Booking.find({
       updatedAt: { $gte: recent },
@@ -225,30 +255,38 @@ async function loadLiveBookings(now) {
       .select("_id")
       .lean(),
   ]);
- 
+
+  // The booking set is the same as one query with
+  //   $or: [{ _id: { $in: <live handovers' bookingIds> } }, ...liveRules]
+  // run as two disjoint parts, so the big part doesn't wait for the
+  // handovers above (the second part is usually a handful of bookings).
+  const [
+    [liveHandovers, removedBookings, removedWalkIns],
+    [ruleBookings, ruleLatest],
+    [handoverOnlyBookings, handoverOnlyLatest],
+  ] = await Promise.all([
+    firstRound,
+    loadBookingsWithHandovers({ ...liveBase, $or: liveRules }),
+    firstRound.then(([handovers]) => {
+      const ids = handovers.filter((h) => h.bookingId).map((h) => h.bookingId);
+      return ids.length
+        ? loadBookingsWithHandovers({
+            ...liveBase,
+            _id: { $in: ids },
+            $nor: liveRules,
+          })
+        : [[], new Map()];
+    }),
+  ]);
+
   const walkIns = liveHandovers.filter((h) => !h.bookingId);
-  const handoverBookingIds = liveHandovers
-    .filter((h) => h.bookingId)
-    .map((h) => h.bookingId);
- 
-  const bookings = await Booking.find({
-    isDeleted: false,
-    status: { $ne: "cancelled" },
-    $or: [
-      ...(handoverBookingIds.length
-        ? [{ _id: { $in: handoverBookingIds } }]
-        : []),
-      { status: { $in: HANDED_OVER_STATUSES } }, // ongoing / overdue
-      { status: { $ne: "completed" }, toDate: { $gte: lookback } }, // upcoming
-      { updatedAt: { $gte: recent } }, // just changed
-    ],
-  })
-    .select(BOOKING_FIELDS)
-    .sort({ fromDate: 1 })
-    .lean();
- 
+  const bookings = sortLikeMongo([...ruleBookings, ...handoverOnlyBookings], {
+    fromDate: 1,
+  });
+  const latest = new Map([...ruleLatest, ...handoverOnlyLatest]);
+
   return {
-    bookings: await withHandovers(bookings, walkIns),
+    bookings: formatTimeline(bookings, walkIns, latest),
     removedIds: [...removedBookings, ...removedWalkIns].map((d) =>
       String(d._id),
     ),
@@ -260,18 +298,15 @@ async function loadRangeBookings(from, to) {
   const lo = new Date(from.getTime() - RANGE_PAD_MS);
   const hi = new Date(to.getTime() + RANGE_PAD_MS);
  
-  const [bookings, walkIns] = await Promise.all([
-    Booking.find({
+  const [[bookings, latest], walkIns] = await Promise.all([
+    loadBookingsWithHandovers({
       isDeleted: false,
       status: { $ne: "cancelled" },
       fromDate: { $lt: hi },
       toDate: { $gt: lo },
-    })
-      .select(BOOKING_FIELDS)
-      .sort({ fromDate: 1 })
-      .lean(),
- 
-    Handover.find({
+    }),
+
+    parallelFind(Handover, {
       isDeleted: false,
       handoverStatus: { $ne: "cancelled" },
       bookingId: null,
@@ -293,13 +328,10 @@ async function loadRangeBookings(from, to) {
           ],
         },
       ],
-    })
-      .select(HANDOVER_FIELDS)
-      .sort({ createdAt: -1 })
-      .lean(),
+    }, { select: HANDOVER_FIELDS, sort: { createdAt: -1 } }),
   ]);
- 
-  return { bookings: await withHandovers(bookings, walkIns), removedIds: [] };
+
+  return { bookings: formatTimeline(bookings, walkIns, latest), removedIds: [] };
 }
  
 function parseDateParam(value) {
@@ -381,61 +413,54 @@ export const getTimelineMaintenances = async (req, res) => {
 // end time line code 
 export const getBookingsForImport = async (req, res) => {
   try {
-    const bookings = await Booking.find({
-      isDeleted: false,
-      status: { $ne: "cancelled" },
-    })
-      .select(
-        `
-        _id
-        bookingCode
-        customerName
-        mobileNumber
-        alternateMobileNumber
-        destination
-        fromDate
-        toDate
-        pickupTime
-        dropTime
-        totalDays
-        vehicleId
-        vehicleName
-        vehicleNumber
-        status
-        pickup
-        drop
-        payment
-      `,
-      )
-      .populate({
-        path: "vehicleId",
-        select: "_id vehicleName vehicleNumber vehicleType images status",
-      })
-      .sort({ fromDate: 1 })
-      .lean();
+    // Bookings, their handovers and walk-in handovers (no booking) are read
+    // at the same time, each as parallel parts (see utils/parallelFind.js).
+    // Booking handovers only feed handoverFields/resolveStatus, so they skip
+    // the large customer / vehicle / payment sub-documents that walk-ins
+    // need (~6x less data from the database).
+    const [bookings, linkedHandovers, walkInHandovers] = await Promise.all([
+      parallelFind(
+        Booking,
+        { isDeleted: false, status: { $ne: "cancelled" } },
+        {
+          select:
+            "_id bookingCode customerName mobileNumber alternateMobileNumber " +
+            "destination fromDate toDate pickupTime dropTime totalDays vehicleId " +
+            "vehicleName vehicleNumber status pickup drop payment",
+          // only these vehicle fields are read below
+          populate: { path: "vehicleId", select: "_id vehicleName vehicleNumber" },
+          sort: { fromDate: 1 },
+        },
+      ),
+      // Every booking-linked handover; narrowed to these bookings below
+      parallelFind(
+        Handover,
+        {
+          isDeleted: false,
+          handoverStatus: { $ne: "cancelled" },
+          bookingId: { $ne: null },
+        },
+        {
+          select: "_id bookingId handoverStatus returnDetails.returnedAt trip.dropDateTime createdAt",
+          sort: { createdAt: -1 }, // latest handover first
+        },
+      ),
+      parallelFind(
+        Handover,
+        { isDeleted: false, handoverStatus: { $ne: "cancelled" }, bookingId: null },
+        {
+          select: "_id bookingId customer vehicle trip payment handoverStatus returnDetails createdAt",
+          sort: { createdAt: -1 },
+        },
+      ),
+    ]);
 
-    // Handovers for these bookings + walk-in handovers (no booking)
-    const handovers = await Handover.find({
-      isDeleted: false,
-      handoverStatus: { $ne: "cancelled" },
-      $or: [
-        { bookingId: { $in: bookings.map((b) => b._id) } },
-        { bookingId: null },
-      ],
-    })
-      .select("_id bookingId customer vehicle trip payment handoverStatus returnDetails createdAt")
-      .sort({ createdAt: -1 }) // latest handover first
-      .lean();
-
-    // bookingId -> latest handover
+    // bookingId -> latest handover (bookings in the list only, as before)
+    const bookingIds = new Set(bookings.map((b) => String(b._id)));
     const handoverByBooking = new Map();
-    const walkInHandovers = [];
-    for (const h of handovers) {
-      if (!h.bookingId) {
-        walkInHandovers.push(h);
-        continue;
-      }
+    for (const h of linkedHandovers) {
       const key = String(h.bookingId);
+      if (!bookingIds.has(key)) continue;
       if (!handoverByBooking.has(key)) handoverByBooking.set(key, h);
     }
 
@@ -2583,14 +2608,53 @@ const buildBookingLedgers = async (bookingIds, companyId) => {
   // Fetch only the nested fields the ledger reads (computeBill + compose below).
   // Whole sub-documents made every request pull megabytes from the database.
 
-  // ---------- 1. Bookings ----------
-  const bookings = await Booking.find({ _id: { $in: ids } })
-    .select(
-      "bookingCode status totalDays fromDate toDate isDeleted handover mobileNumber vehicleNumber " +
-        "payment.vehicleRent payment.fastagAmount payment.pickupCharge payment.dropCharge " +
-        "payment.securityDeposit payment.discountAmount payment.totalAmount",
-    )
-    .lean();
+  // Reads are started as soon as their inputs are known and run as
+  // parallel parts (utils/parallelFind.js): the database throttles each
+  // query, not the cluster. Each OR-query below is split into disjoint
+  // pieces whose union is exactly the original result; the ledger rules
+  // that use them are unchanged.
+  const HANDOVER_FIELDS_LEDGER =
+    "_id bookingId handoverStatus createdAt customer.mobileNumber vehicle.vehicleNumber " +
+    "payment.totalFare payment.fastTagPayableAmount payment.billSummary.pickupCharge " +
+    "payment.billSummary.dropCharge payment.extraCharges payment.securityDeposit " +
+    "payment.discountAmount payment.totalAmount payment.balanceAmount " +
+    "trip.pickupDateTime trip.dropDateTime trip.numberOfDays " +
+    "extensionBills.billNumber extensionBills.extensionAmount extensionBills.totalFareAfterThisBill";
+  const PAYMENT_FIELDS =
+    "_id type amount paymentMethod paymentBreakdown bookingId handoverId customer.mobileNumber vehicle.vehicleNumber booking.fromDate booking.toDate createdAt";
+  // ID-linked payments only go through addPayment, which never reads the
+  // customer / vehicle / trip-date fields (only the rule 3 match does)
+  const ID_LINK_FIELDS =
+    "_id type amount paymentMethod paymentBreakdown bookingId handoverId createdAt";
+  const companyMatch = companyId ? { company: companyId } : {};
+  const NEWEST_FIRST = { createdAt: -1, _id: -1 };
+
+  // ---------- 1. Bookings (+ handovers and payments linked by booking id) ----------
+  const [bookings, handoversByBookingId, paymentsByBookingId] = await Promise.all([
+    parallelFindIn(
+      Booking,
+      "_id",
+      ids,
+      {},
+      {
+        select:
+          "bookingCode status totalDays fromDate toDate isDeleted handover mobileNumber vehicleNumber " +
+          "payment.vehicleRent payment.fastagAmount payment.pickupCharge payment.dropCharge " +
+          "payment.securityDeposit payment.discountAmount payment.totalAmount",
+      },
+    ),
+    parallelFindIn(
+      Handover,
+      "bookingId",
+      ids,
+      { isDeleted: { $ne: true } },
+      { select: HANDOVER_FIELDS_LEDGER },
+    ),
+    // Rule 1 part of step 4 (the handover-id part follows once handovers are known)
+    parallelFindIn(PaymentHistory, "bookingId", ids, companyMatch, {
+      select: ID_LINK_FIELDS,
+    }),
+  ]);
   const bookingMap = new Map(bookings.map((b) => [String(b._id), b]));
 
   const bookingByHandoverRef = new Map();
@@ -2599,23 +2663,22 @@ const buildBookingLedgers = async (bookingIds, companyId) => {
   }
 
   // ---------- 2. Handovers ----------
-  const handovers = await Handover.find({
-    isDeleted: { $ne: true },
-    $or: [
-      { bookingId: { $in: ids } },
-      { _id: { $in: [...bookingByHandoverRef.keys()].map(toObjId) } },
-    ],
-  })
-    .select(
-      "_id bookingId handoverStatus createdAt customer.mobileNumber vehicle.vehicleNumber " +
-        "payment.totalFare payment.fastTagPayableAmount payment.billSummary.pickupCharge " +
-        "payment.billSummary.dropCharge payment.extraCharges payment.securityDeposit " +
-        "payment.discountAmount payment.totalAmount payment.balanceAmount " +
-        "trip.pickupDateTime trip.dropDateTime trip.numberOfDays " +
-        "extensionBills.billNumber extensionBills.extensionAmount extensionBills.totalFareAfterThisBill",
-    )
-    .sort({ createdAt: -1, _id: -1 })
-    .lean();
+  // Same set as { $or: [{ bookingId: { $in: ids } }, { _id: { $in: refs } }] }:
+  // the ones referenced only from Booking.handover are read here.
+  const handoverRefs = [...bookingByHandoverRef.keys()].map(toObjId);
+  const handoversByRef = handoverRefs.length
+    ? await Handover.find({
+        isDeleted: { $ne: true },
+        _id: { $in: handoverRefs },
+        $nor: [{ bookingId: { $in: ids } }],
+      })
+        .select(HANDOVER_FIELDS_LEDGER)
+        .lean()
+    : [];
+  const handovers = sortLikeMongo(
+    [...handoversByBookingId, ...handoversByRef],
+    NEWEST_FIRST,
+  );
 
   const handoverToBooking = new Map(); // handoverId -> bookingId
   const latestHandover = new Map(); // bookingId -> newest handover
@@ -2631,19 +2694,38 @@ const buildBookingLedgers = async (bookingIds, companyId) => {
   // ---------- 3. Returns ----------
   // Look at returns of EVERY handover of the booking (not only the newest),
   // so a return saved against an earlier handover is never missed.
+  // (Read together with the handover-linked payments of step 4.)
   const bookingHandoverIds = [...handoverToBooking.keys()].map(toObjId);
-  const returns = bookingHandoverIds.length
-    ? await VehicleReturn.find({ handover: { $in: bookingHandoverIds } })
-        .select(
-          "handover createdAt receivingTime " +
-            "settlementDetails.amountCollected settlementDetails.paymentBreakdown " +
-            "settlementDetails.paymentMode settlementDetails.status settlementDetails.finalBalance " +
-            "settlementDetails.lateReturnFine settlementDetails.extraKmFine " +
-            "settlementDetails.fuelUsageAmount settlementDetails.damageAmount",
-        )
-        .sort({ createdAt: -1, _id: -1 })
-        .lean()
-    : [];
+  const [returns, paymentsByHandover] = bookingHandoverIds.length
+    ? await Promise.all([
+        parallelFindIn(
+          VehicleReturn,
+          "handover",
+          bookingHandoverIds,
+          {},
+          {
+            select:
+              "handover createdAt receivingTime " +
+              "settlementDetails.amountCollected settlementDetails.paymentBreakdown " +
+              "settlementDetails.paymentMode settlementDetails.status settlementDetails.finalBalance " +
+              "settlementDetails.lateReturnFine settlementDetails.extraKmFine " +
+              "settlementDetails.fuelUsageAmount settlementDetails.damageAmount",
+            sort: NEWEST_FIRST,
+          },
+        ),
+        // Rule 2 part of step 4, minus what rule 1 already read
+        PaymentHistory.find({
+          ...companyMatch,
+          $or: [
+            { handoverId: { $in: bookingHandoverIds } },
+            { bookingId: { $in: bookingHandoverIds } },
+          ],
+          $nor: [{ bookingId: { $in: ids } }],
+        })
+          .select(ID_LINK_FIELDS)
+          .lean(),
+      ])
+    : [[], []];
 
   const returnByBooking = new Map(); // bookingId -> newest return
   for (const r of returns) {
@@ -2706,31 +2788,12 @@ const buildBookingLedgers = async (bookingIds, companyId) => {
     accs.set(bid, acc);
   };
 
-  const PAYMENT_FIELDS =
-    "_id type amount paymentMethod paymentBreakdown bookingId handoverId customer.mobileNumber vehicle.vehicleNumber booking.fromDate booking.toDate createdAt";
-  // ID-linked payments only go through addPayment, which never reads the
-  // customer / vehicle / trip-date fields (only the rule 3 match does)
-  const ID_LINK_FIELDS =
-    "_id type amount paymentMethod paymentBreakdown bookingId handoverId createdAt";
-  const companyMatch = companyId ? { company: companyId } : {};
-
   // ---------- 4. Rules 1 + 2: linked by ID ----------
-  const allHandoverIds = [...handoverToBooking.keys()].map(toObjId);
-
-  const idLinked = await PaymentHistory.find({
-    ...companyMatch,
-    $or: [
-      { bookingId: { $in: ids } },
-      ...(allHandoverIds.length
-        ? [
-            { handoverId: { $in: allHandoverIds } },
-            { bookingId: { $in: allHandoverIds } },
-          ]
-        : []),
-    ],
-  })
-    .select(ID_LINK_FIELDS)
-    .lean();
+  // Same payments as one query with
+  //   $or: [{ bookingId: ids }, { handoverId: handovers }, { bookingId: handovers }]
+  // (read above in two disjoint parts; each payment is attributed on its
+  // own, so the order they arrive in does not matter).
+  const idLinked = [...paymentsByBookingId, ...paymentsByHandover];
 
   for (const p of idLinked) {
     const b = p.bookingId ? String(p.bookingId) : null;
@@ -2780,19 +2843,26 @@ const buildBookingLedgers = async (bookingIds, companyId) => {
     // (see `unlinked`), so leave them out in the database instead of downloading them.
     const alreadyLinked = [...usedPaymentIds].map(toObjId);
 
-    const candidates = [];
+    // Mobile-number chunks are queried at the same time (results kept in
+    // chunk order, as before).
+    const mobileChunks = [];
     for (let i = 0; i < mobiles.length; i += 300) {
-      const chunk = mobiles.slice(i, i + 300);
-      const found = await PaymentHistory.find({
-        ...companyMatch,
-        _id: { $nin: alreadyLinked },
-        createdAt: { $gte: new Date(minStart), $lte: new Date(maxEnd) },
-        "customer.mobileNumber": { $regex: `(${chunk.join("|")})$` },
-      })
-        .select(PAYMENT_FIELDS)
-        .lean();
-      candidates.push(...found);
+      mobileChunks.push(mobiles.slice(i, i + 300));
     }
+    const candidates = (
+      await Promise.all(
+        mobileChunks.map((chunk) =>
+          PaymentHistory.find({
+            ...companyMatch,
+            _id: { $nin: alreadyLinked },
+            createdAt: { $gte: new Date(minStart), $lte: new Date(maxEnd) },
+            "customer.mobileNumber": { $regex: `(${chunk.join("|")})$` },
+          })
+            .select(PAYMENT_FIELDS)
+            .lean(),
+        ),
+      )
+    ).flat();
 
     const unlinked = candidates.filter(
       (p) => !usedPaymentIds.has(String(p._id)),
@@ -3208,14 +3278,21 @@ export const getBookingPayments = async (req, res) => {
     const pageNum = Math.max(parseInt(page, 10) || 1, 1);
     const limitNum = Math.min(Math.max(parseInt(limit, 10) || 50, 1), 500);
 
-    let query = PaymentHistory.find(filter)
-      .select("-collectionHistory -__v")
-      .populate("createdBy", "name")
-      .sort(sort)
-      .lean();
-
-    if (!exportAll)
-      query = query.skip((pageNum - 1) * limitNum).limit(limitNum);
+    // Full export ("All"): every row, read as parallel parts and put back in
+    // the same order (the sort ends with _id, so the order is exact).
+    const query = exportAll
+      ? parallelFind(PaymentHistory, filter, {
+          select: "-collectionHistory -__v",
+          populate: { path: "createdBy", select: "name" },
+          sort,
+        })
+      : PaymentHistory.find(filter)
+          .select("-collectionHistory -__v")
+          .populate("createdBy", "name")
+          .sort(sort)
+          .skip((pageNum - 1) * limitNum)
+          .limit(limitNum)
+          .lean();
 
     const [payments, total, summaryAgg, filteredBookingIds] = await Promise.all(
       [
@@ -3246,7 +3323,20 @@ export const getBookingPayments = async (req, res) => {
     let ledgerError = false;
     let ledgerErrorMessage = "";
     try {
-      ledgers = await buildBookingLedgers(filteredBookingIds, filter.company);
+      // The ledger depends only on the booking set, not on page / sort /
+      // limit, so paging through the same filter reuses it until data changes.
+      const ledgerKey =
+        "ledger:" +
+        String(filter.company || "") +
+        ":" +
+        createHash("sha1")
+          .update(filteredBookingIds.filter(Boolean).map(String).sort().join(","))
+          .digest("hex");
+      ledgers = await cachedValue(
+        ledgerKey,
+        () => buildBookingLedgers(filteredBookingIds, filter.company),
+        { maxAgeMs: 5 * 60_000 },
+      );
     } catch (err) {
       // Never break the existing sheet if the ledger fails
       console.error("getBookingPayments ledger error:", err);
