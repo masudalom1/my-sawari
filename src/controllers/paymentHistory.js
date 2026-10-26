@@ -1,6 +1,10 @@
+// controllers/paymentHistoryController.js
 import mongoose from "mongoose";
-import PaymentHistory from "../models/paymentHistory.model.js"; 
+import PaymentHistory from "../models/paymentHistory.model.js";
 
+/* =========================================================
+   CONSTANTS
+========================================================= */
 const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
 
 const MODES = ["cash", "phonepe", "gpay", "razorpay", "mixed"];
@@ -21,7 +25,7 @@ const DATE_FIELDS = {
   collected: "lastCollectedAt",
 };
 
-// Allowed sort keys (whitelisted so users can't sort on arbitrary fields)
+// Allowed sort keys
 const SORT_FIELDS = {
   amount: "amount",
   created: "createdAt",
@@ -29,6 +33,14 @@ const SORT_FIELDS = {
   payment: "paymentDate",
 };
 
+// Max rows per page (raised from 100). Paging keeps the screen fast;
+// stats are always calculated over ALL matching records, not just the page.
+const MAX_LIMIT = 500;
+
+// Company scoping is OFF by default, so every record is returned.
+// Set PAYMENTS_SCOPE_BY_COMPANY=true in your env to show each user only
+// their own company's payments (only applied when the user has `company`).
+const SCOPE_BY_COMPANY = process.env.PAYMENTS_SCOPE_BY_COMPANY === "true";
 
 const ROW_PROJECTION = {
   "customer.fullName": 1,
@@ -49,6 +61,9 @@ const ROW_PROJECTION = {
   transactionId: 1,
 };
 
+/* =========================================================
+   HELPERS
+========================================================= */
 const istToday = () => {
   const d = new Date(Date.now() + IST_OFFSET_MS);
   return { y: d.getUTCFullYear(), m: d.getUTCMonth(), d: d.getUTCDate() };
@@ -82,7 +97,7 @@ export function resolveRange(preset, from, to) {
       };
     }
     default:
-      return null; // "all"
+      return null; // "all" → no date restriction
   }
 }
 
@@ -94,16 +109,34 @@ const listParam = (value, allowed) =>
 
 const escapeRegex = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
+// Only scopes when explicitly enabled AND the user actually belongs to a
+// company. No fallback to the user's own _id (that hid most records).
 function getCompanyId(req) {
-  const id = req.user?.company ?? req.user?._id;
+  if (!SCOPE_BY_COMPANY) return null;
+  const id = req.user?.company;
   if (!id || !mongoose.isValidObjectId(id)) return null;
   return new mongoose.Types.ObjectId(String(id));
 }
 
+/* =========================================================
+   GET /api/v1/dashboard/payments-history
+   ---------------------------------------------------------
+   Query params (all optional):
+     preset     all (default) | today | yesterday | this_month | last_month | custom
+     from, to   YYYY-MM-DD (when preset=custom)
+     dateField  created | payment | collected   (default: created)
+     mode       comma list: cash,phonepe,gpay,razorpay,mixed
+     type       comma list: booking,handover,rental,extension,additional_charge,receive,refund
+     status     collected | pending
+     search     customer name / mobile / vehicle number
+     sortBy     created | payment | collected | amount
+     order      asc | desc
+     page, limit (limit max 500)
+========================================================= */
 export const getPaymentsHistory = async (req, res) => {
   try {
     const {
-      preset = "today",
+      preset = "all",
       from,
       to,
       dateField = "created",
@@ -116,7 +149,7 @@ export const getPaymentsHistory = async (req, res) => {
     } = req.query;
 
     const page = Math.max(1, parseInt(req.query.page, 10) || 1);
-    const limit = Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 25));
+    const limit = Math.min(MAX_LIMIT, Math.max(1, parseInt(req.query.limit, 10) || 25));
     const field = DATE_FIELDS[dateField] || "createdAt";
 
     /* ---------- build $match ---------- */
@@ -139,7 +172,7 @@ export const getPaymentsHistory = async (req, res) => {
     if (types.length) match.type = types.length === 1 ? types[0] : { $in: types };
 
     if (status === "collected") match.isCollected = true;
-    else if (status === "pending") match.isCollected = false;
+    else if (status === "pending") match.isCollected = { $ne: true }; // includes missing field
 
     const q = String(search || "").trim().slice(0, 50);
     if (q) {
@@ -148,6 +181,7 @@ export const getPaymentsHistory = async (req, res) => {
         { "customer.fullName": rx },
         { "customer.mobileNumber": rx },
         { "vehicle.vehicleNumber": rx },
+        { "vehicle.vehicleName": rx },
       ];
     }
 
@@ -156,6 +190,7 @@ export const getPaymentsHistory = async (req, res) => {
 
     /* ---------- stats expressions ---------- */
     const isRefund = { $eq: ["$type", "refund"] };
+    const amount = { $ifNull: ["$amount", 0] };
 
     // Money received per channel. "mixed" rows are split using paymentBreakdown.
     const channelSum = (method, breakdownKey) => ({
@@ -166,7 +201,7 @@ export const getPaymentsHistory = async (req, res) => {
           {
             $cond: [
               { $eq: ["$paymentMethod", method] },
-              "$amount",
+              amount,
               {
                 $cond: [
                   { $eq: ["$paymentMethod", "mixed"] },
@@ -180,8 +215,8 @@ export const getPaymentsHistory = async (req, res) => {
       },
     });
 
-    /* ---------- run rows + stats in parallel ---------- */
-    const [rows, statsAgg] = await Promise.all([
+    /* ---------- rows + stats + total-in-db in parallel ---------- */
+    const [rows, statsAgg, totalInDb] = await Promise.all([
       PaymentHistory.find(match, ROW_PROJECTION)
         .sort({ [sortKey]: dir, _id: dir })
         .skip((page - 1) * limit)
@@ -197,11 +232,15 @@ export const getPaymentsHistory = async (req, res) => {
                 $group: {
                   _id: null,
                   count: { $sum: 1 },
-                  received: { $sum: { $cond: [isRefund, 0, "$amount"] } },
-                  refunded: { $sum: { $cond: [isRefund, "$amount", 0] } },
+                  received: { $sum: { $cond: [isRefund, 0, amount] } },
+                  refunded: { $sum: { $cond: [isRefund, amount, 0] } },
                   collected: {
                     $sum: {
-                      $cond: [{ $and: ["$isCollected", { $not: [isRefund] }] }, "$amount", 0],
+                      $cond: [
+                        { $and: [{ $eq: ["$isCollected", true] }, { $not: [isRefund] }] },
+                        amount,
+                        0,
+                      ],
                     },
                   },
                   cash: channelSum("cash", "cash"),
@@ -212,12 +251,16 @@ export const getPaymentsHistory = async (req, res) => {
               },
             ],
             byType: [
-              { $group: { _id: "$type", amount: { $sum: "$amount" }, count: { $sum: 1 } } },
+              { $group: { _id: "$type", amount: { $sum: amount }, count: { $sum: 1 } } },
               { $sort: { amount: -1 } },
             ],
           },
         },
       ]).allowDiskUse(true),
+
+      // Fast total of the whole collection (no filters) — lets you confirm
+      // nothing is being hidden: compare it with stats.count on "All time".
+      PaymentHistory.estimatedDocumentCount(),
     ]);
 
     const s = statsAgg?.[0]?.summary?.[0] || {};
@@ -253,6 +296,10 @@ export const getPaymentsHistory = async (req, res) => {
           amount: t.amount,
           count: t.count,
         })),
+      },
+      meta: {
+        totalInDb,
+        scopedByCompany: !!companyId,
       },
       range: range
         ? { start: range.start, end: range.end, field }
