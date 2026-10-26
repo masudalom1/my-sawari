@@ -18,9 +18,9 @@ import vehicleReturnRoutes from "./routes/vehicleReturn.routes.js";
 import customerRoutes from "./routes/customer.routes.js";
 import leadRoutes from "./routes/lead.routes.js";
 import bookingRoutes from "./routes/bookingRoutes.js";
-import paymentHistoryRoutes from "./routes/paymentHistory.routes.js";
 import dashboardRoutes from "./routes/dashboard.routes.js";
 import { trackWriteRequests } from "./realtime/changeFeed.js";
+import PaymentsHistory from "./routes/paymentHistory.js"
 
 dotenv.config();
 
@@ -166,9 +166,8 @@ app.use("/api/v1/vehicle-return", vehicleReturnRoutes);
 app.use("/api/v1/customers", customerRoutes);
 app.use("/api/v1/leads", leadRoutes);
 app.use("/api/v1/bookings", bookingRoutes);
-app.use("/api/v1/payments", paymentHistoryRoutes);
 app.use("/api/v1/dashboard", dashboardRoutes);
-
+app.use("/api/v1/dashboard/payments-history", PaymentsHistory);
 // 404
 app.use(notFound);
 
