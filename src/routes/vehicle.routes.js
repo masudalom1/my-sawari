@@ -12,6 +12,7 @@ import {
   createMaintenance,
   getMaintenances,
   getMaintenanceById,
+  updateMaintenance,
   updateMaintenanceStatus,
   uploadMaintenanceImage,
 } from "../controllers/vehicle.controller.js";
@@ -37,6 +38,7 @@ router.post("/create-maintenance", createMaintenance);
 router.post("/upload-maintenance-image",protect,upload.single("image"),uploadMaintenanceImage,);
 router.get("/list-maintenance", protect, getMaintenances);
 router.get("/maintenance/:id", protect, getMaintenanceById);
+router.patch("/maintenance/:id", protect, updateMaintenance);
 router.patch("/maintenance/:id/status", protect, updateMaintenanceStatus);
 
 

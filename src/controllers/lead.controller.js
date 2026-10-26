@@ -3,6 +3,7 @@ import Lead from "../models/lead.model.js";
 import LeadHistory from "../models/leadHistory.model.js";
 import Booking from "../models/booking.model.js";
 import Vehicle from "../models/vehicle.model.js";
+import Maintenance from "../models/maintenance.model.js";
 import PaymentHistory,{toBookingMonth} from "../models/paymentHistory.model.js";
 import { sendBookingCreatedMessage } from "../services/wati.service.js";
 
@@ -1773,7 +1774,8 @@ export const invalidateBookingStatsCache = () => statsCache.clear();
 
 export const createLeadBooking = async (req, res, next) => {
   try {
-    const lead = await Lead.findById(req.params.id);
+    const companyId = req.user.company || req.user.createdBy || req.user._id;
+    const lead = await Lead.findOne({ _id: req.params.id, company: companyId, isDeleted: false });
 
     if (!lead || lead.isDeleted) {
       return res.status(404).json({
@@ -1865,10 +1867,6 @@ export const createLeadBooking = async (req, res, next) => {
     if (mobileNumber?.trim()) {
       lead.mobileNumber = mobileNumber.trim();
     }
-    await lead.save();
-
-    const companyId = req.user.company || req.user._id;
-
     // Use current form inputs or fallback to historic lead record
     const finalFromDate = fromDate ? new Date(fromDate) : lead.fromDate;
     const finalToDate = toDate ? new Date(toDate) : lead.toDate;
@@ -1893,7 +1891,7 @@ export const createLeadBooking = async (req, res, next) => {
 
     // NEW: fetch the vehicle so we can compute a real vehicle-rent figure
     // for the payment subdocument (same as the fresh-booking flow).
-    const vehicle = await Vehicle.findById(vehicleId);
+    const vehicle = await Vehicle.findOne({ _id: vehicleId, company: companyId, isDeleted: false });
     if (!vehicle || vehicle.isDeleted) {
       return res.status(404).json({
         success: false,
@@ -1902,6 +1900,7 @@ export const createLeadBooking = async (req, res, next) => {
     }
 
     const finalTotalDays = Number(totalDays) || 1;
+    await lead.save();
 
     // Normalize pickup/drop service inputs — only persist the leg(s) that
     // actually apply to the chosen serviceType, so a "pickup" only booking
@@ -2308,6 +2307,7 @@ export const createBookings = async (req, res, next) => {
   const session = await mongoose.startSession();
 
   try {
+    const companyId = req.user.company || req.user.createdBy || req.user._id;
     const {
       customerName,
       mobileNumber,
@@ -2733,11 +2733,36 @@ export const createBookings = async (req, res, next) => {
       });
     }
 
+    // Same rule as booking edits: open maintenance blocks the vehicle.
+    const existingMaintenance = await Maintenance.findOne({
+      vehicle: vehicle._id,
+      isDeleted: { $ne: true },
+      status: { $nin: ["Cancelled", "Completed"] },
+      startDate: { $lt: newEnd },
+      endDate: { $gt: newStart },
+    })
+      .select("_id startDate endDate status")
+      .session(session)
+      .lean();
+
+    if (existingMaintenance) {
+      await session.abortTransaction();
+
+      return res.status(409).json({
+        success: false,
+        message: "This vehicle has maintenance during the selected dates.",
+        conflict: {
+          maintenanceId: existingMaintenance._id,
+          startDate: existingMaintenance.startDate,
+          endDate: existingMaintenance.endDate,
+          status: existingMaintenance.status,
+        },
+      });
+    }
+
     // ============================================================
     // COMPANY
     // ============================================================
-
-    const companyId = req.user.company || req.user._id;
 
     // ============================================================
     // FIND EXISTING LEAD
@@ -3163,258 +3188,177 @@ const calculateTotalDaysFromDates = (fromDate, toDate) => {
   return diffDays < 1 ? 1 : diffDays;
 };
 
+// Calendar days and wall-clock times use the same UTC day representation as
+// booking creation. Accept stored AM/PM values and the modal's 24-hour inputs.
+const bookingDay = (value) => {
+  if (value instanceof Date && !Number.isNaN(value.getTime())) return new Date(value.toISOString().slice(0, 10));
+  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return null;
+  const date = new Date(value);
+  return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === value ? date : null;
+};
+const bookingMinutes = (value) => {
+  const match = typeof value === "string" && value.trim().match(/^(\d{1,2}):(\d{2})\s*(AM|PM)?$/i);
+  if (!match) return null;
+  let hour = Number(match[1]);
+  const minute = Number(match[2]);
+  if (minute > 59 || (match[3] ? hour < 1 || hour > 12 : hour > 23)) return null;
+  if (match[3]) hour = hour % 12 + (match[3].toUpperCase() === "PM" ? 12 : 0);
+  return hour * 60 + minute;
+};
+
 export const updateBooking = async (req, res, next) => {
   try {
+    const fail = (message, status = 400) => res.status(status).json({ success: false, message });
     const { id } = req.params;
-
-    const booking = await Booking.findOne({
-      _id: id,
-      isDeleted: false,
+    if (!mongoose.isValidObjectId(id)) return fail("Invalid booking id.");
+    const company = req.user.company || req.user.createdBy || req.user._id;
+    const booking = await Booking.findOne({ _id: id, company, isDeleted: false });
+    if (!booking) return fail("Booking not found.", 404);
+    // Hydration defaults are useful for reads, but must not materialize a
+    // missing legacy payment field/split during an unrelated booking edit.
+    Booking.schema.eachPath(path => {
+      if (path.startsWith("payment.") && booking.$isDefault(path)) booking.$ignore(path);
     });
-
-    if (!booking) {
-      return res.status(404).json({
-        success: false,
-        message: "Booking not found.",
-      });
-    }
-
-    const {
-      customerName,
-      mobileNumber,
-      alternateMobileNumber,
-      occupation,
-      destination,
-      aadhaarNumber,
-      drivingLicenseNumber,
-      tripType,
-      fromDate,
-      toDate,
-      pickupTime,
-      dropTime,
-      residents,
-
-      vehicleId,
-
-      pickupDropRequired = false,
-      serviceType = "pickup_drop",
-
-      pickup = {},
-      drop = {},
-      pickupDropNotes = "",
-
-      // ── FIX: the frontend sends every pricing field nested inside
-      // `payment: {...}` (see BookingDetailsScreen's handleUpdateBooking
-      // payload). The old code destructured `bookingAmount`,
-      // `discountAmount`, `securityDeposit`, `fastagBalance` as flat
-      // top-level fields, which the client never sends at the top level —
-      // they were always undefined, so every price update silently used 0.
-      payment: paymentInput = {},
-    } = req.body;
-
-    const {
-      discountAmount: discountAmountInput,
-      securityDeposit: securityDepositInput,
-      bookingAmountPaid: bookingAmountPaidInput,
-      fastagAmount: fastagAmountInput,
-      paymentMethod: paymentMethodInput,
-    } = paymentInput;
-
-    // =========================
-    // VEHICLE
-    // =========================
-
-    const vehicle = await Vehicle.findById(vehicleId);
-
-    if (!vehicle || vehicle.isDeleted) {
-      return res.status(404).json({
-        success: false,
-        message: "Vehicle not found.",
-      });
-    }
-
-    // Snapshot the vehicle currently on the booking BEFORE we overwrite it
-    // below, so we can log a history entry if it's actually being changed.
-    const previousVehicle = {
-      vehicleId: booking.vehicleId,
-      vehicleName: booking.vehicleName,
-      vehicleNumber: booking.vehicleNumber,
+    const originalFare = Object.fromEntries(["totalAmount", "vehicleRent", "pickupCharge", "dropCharge", "fastagAmount"].map(key => [key, Number(booking.payment?.[key]) || 0]));
+    booking.$locals.bookingPaymentSnapshot = {
+      paid: Number(booking.payment?.bookingAmountPaid) || 0,
+      security: Number(booking.payment?.securityDeposit) || 0,
+      collected: Number(booking.payment?.totalCollected) || 0,
     };
-
-    const isVehicleChanged =
-      previousVehicle.vehicleId &&
-      previousVehicle.vehicleId.toString() !== vehicle._id.toString();
-
-    if (isVehicleChanged) {
-      booking.vehicleHistory = booking.vehicleHistory || [];
-      booking.vehicleHistory.push({
-        fromVehicle: {
-          vehicleId: previousVehicle.vehicleId,
-          vehicleName: previousVehicle.vehicleName,
-          vehicleNumber: previousVehicle.vehicleNumber,
-        },
-        toVehicle: {
-          vehicleId: vehicle._id,
-          vehicleName: vehicle.vehicleName,
-          vehicleNumber: vehicle.vehicleNumber,
-        },
-        changedBy: req.user?._id,
-        note: `Vehicle changed from ${previousVehicle.vehicleName || "Unknown"} (${
-          previousVehicle.vehicleNumber || "N/A"
-        }) to ${vehicle.vehicleName} (${vehicle.vehicleNumber})`,
-      });
+    if (!["confirmed", "handover_pending"].includes(booking.status) || booking.handover) {
+      return fail("Only bookings awaiting handover can be edited.", 409);
+    }
+    const body = req.body;
+    if (!body || typeof body !== "object" || Array.isArray(body)) return fail("Invalid booking update payload.");
+    const has = key => Object.hasOwn(body, key);
+    const vehicleId = has("vehicleId") ? body.vehicleId : booking.vehicleId;
+    if (!mongoose.isValidObjectId(vehicleId)) return fail("Invalid vehicle id.");
+    const vehicle = await Vehicle.findOne({ _id: vehicleId, isDeleted: false });
+    if (!vehicle) {
+      if (String(vehicleId) === String(booking.vehicleId)) {
+        return res.status(409).json({ success: false, code: "BOOKING_VEHICLE_UNAVAILABLE", message: "The saved vehicle is not available in your company. Select a vehicle from your company and save again. No changes were saved." });
+      }
+      return fail("Vehicle not found.", 404);
+    }
+    const fromDate = bookingDay(has("fromDate") ? body.fromDate : booking.fromDate);
+    const toDate = bookingDay(has("toDate") ? body.toDate : booking.toDate);
+    const pickupTime = has("pickupTime") ? body.pickupTime : booking.pickupTime;
+    const dropTime = has("dropTime") ? body.dropTime : booking.dropTime;
+    const pickupMinutes = bookingMinutes(pickupTime), dropMinutes = bookingMinutes(dropTime);
+    if (!fromDate || !toDate) return fail("Invalid pickup or drop date. Use YYYY-MM-DD.");
+    if (pickupMinutes === null || dropMinutes === null) return fail("Invalid pickup or drop time.");
+    const start = fromDate.getTime() + pickupMinutes * 60000;
+    const end = toDate.getTime() + dropMinutes * 60000;
+    if (end <= start) return fail("Drop date and time must be after pickup date and time.");
+    const changedVehicle = String(booking.vehicleId) !== String(vehicle._id);
+    const changedRange = changedVehicle || start !== bookingDay(booking.fromDate)?.getTime() + bookingMinutes(booking.pickupTime) * 60000 || end !== bookingDay(booking.toDate)?.getTime() + bookingMinutes(booking.dropTime) * 60000;
+    if (changedRange) {
+      const candidates = await Booking.find({ _id: { $ne: booking._id }, vehicleId: vehicle._id, isDeleted: false, status: { $nin: ["cancelled", "completed"] } })
+        .select("fromDate toDate pickupTime dropTime").lean();
+      if (candidates.some(item => {
+        const lo = bookingDay(item.fromDate)?.getTime() + bookingMinutes(item.pickupTime) * 60000;
+        const hi = bookingDay(item.toDate)?.getTime() + bookingMinutes(item.dropTime) * 60000;
+        return lo < end && hi > start;
+      })) return fail("This vehicle is already booked during the selected dates and times.", 409);
+      const maintenance = await Maintenance.exists({ vehicle: vehicle._id, isDeleted: false, status: { $nin: ["Cancelled", "Completed"] }, startDate: { $lt: new Date(end) }, endDate: { $gt: new Date(start) } });
+      if (maintenance) return fail("This vehicle has maintenance during the selected dates and times.", 409);
     }
 
-    // =========================
-    // DATES
-    // =========================
-
-    const finalFromDate = new Date(fromDate);
-    const finalToDate = new Date(toDate);
-
-    if (isNaN(finalFromDate.getTime()) || isNaN(finalToDate.getTime())) {
-      return res.status(400).json({
-        success: false,
-        message: "Invalid pickup or drop date.",
-      });
+    // Apply only explicitly supported fields; omission preserves saved values.
+    const textFields = ["customerName", "mobileNumber", "alternateMobileNumber", "occupation", "destination", "aadhaarNumber", "drivingLicenseNumber", "pickupDropNotes"];
+    for (const key of textFields) {
+      if (!has(key)) continue;
+      if (typeof body[key] !== "string") return fail(`Invalid ${key}.`);
+      booking.set(key, body[key].trim());
     }
-
-    // =========================
-    // TOTAL DAYS
-    // ── FIX: recompute from fromDate/toDate server-side instead of
-    // trusting req.body.totalDays. The client's totalDays is no longer
-    // read at all — this is now the single source of truth for both the
-    // frontend and backend, using the same calendar-day-difference logic,
-    // so pricing can never be manipulated or drift out of sync with the
-    // dates actually stored on the booking.
-    // =========================
-
-    const finalTotalDays = calculateTotalDaysFromDates(
-      finalFromDate,
-      finalToDate,
-    );
-
-    // =========================
-    // PRICING (recomputed server-side — never trust client totals)
-    // =========================
-
-    const vehicleRent = Number(vehicle.pricePerDay || 0) * finalTotalDays;
-
-    const pickupCharge =
-      pickupDropRequired &&
-      (serviceType === "pickup" || serviceType === "pickup_drop")
-        ? Number(pickup.charge || 0)
-        : 0;
-
-    const dropCharge =
-      pickupDropRequired &&
-      (serviceType === "drop" || serviceType === "pickup_drop")
-        ? Number(drop.charge || 0)
-        : 0;
-
-    const fastagAmount = Number(fastagAmountInput || 0);
-
-    const discountAmount = Number(discountAmountInput || 0);
-    const securityDeposit = Number(securityDepositInput || 0);
-    const bookingAmountPaid = Number(bookingAmountPaidInput || 0);
-
-    // Vehicle + Pickup + Drop + FASTag — matches the schema comment on
-    // `payment.totalAmount` and the frontend's `rentalAmount` /
-    // `finalAmount` calculation. Security deposit is tracked separately
-    // (it's refundable, not part of the payable fare).
-    const totalAmount = vehicleRent + pickupCharge + dropCharge + fastagAmount;
-
-    // =========================
-    // UPDATE — CUSTOMER / TRIP FIELDS
-    // =========================
-
-    booking.customerName = customerName?.trim() || "";
-    booking.mobileNumber = mobileNumber?.trim() || "";
-    booking.alternateMobileNumber = alternateMobileNumber?.trim() || "";
-    booking.occupation = occupation?.trim() || "";
-
-    booking.destination = destination?.trim() || "";
-
-    booking.aadhaarNumber = aadhaarNumber?.trim() || "";
-
-    booking.drivingLicenseNumber =
-      drivingLicenseNumber?.trim().toUpperCase() || "";
-
-    booking.tripType = tripType || "local";
-
-    booking.fromDate = finalFromDate;
-    booking.toDate = finalToDate;
-
-    booking.pickupTime = pickupTime || "09:00 AM";
-    booking.dropTime = dropTime || "06:00 PM";
-
-    booking.totalDays = finalTotalDays;
-    booking.residents = Number(residents) || 1;
-
-    booking.vehicleId = vehicle._id;
-    booking.vehicleName = vehicle.vehicleName;
-    booking.vehicleNumber = vehicle.vehicleNumber;
-    booking.vehicleColor = vehicle.color;
-
-    // =========================
-    // UPDATE — PAYMENT (only fields that actually exist on the schema;
-    // balanceAmount / totalCollected / paymentStatus are recomputed
-    // automatically by the pre-save hook, so we don't set them here)
-    // =========================
-
-    booking.payment = booking.payment || {};
-
-    booking.payment.vehicleRent = vehicleRent;
-    booking.payment.pickupCharge = pickupCharge;
-    booking.payment.dropCharge = dropCharge;
-    booking.payment.fastagAmount = fastagAmount;
-    booking.payment.totalAmount = totalAmount;
-    booking.payment.discountAmount = discountAmount;
-    booking.payment.securityDeposit = securityDeposit;
-    booking.payment.bookingAmountPaid = bookingAmountPaid;
-    booking.payment.paymentMethod = paymentMethodInput || "cash";
-
-    // =========================
-    // UPDATE — PICKUP / DROP SERVICE
-    // =========================
-
-    booking.pickupDropRequired = pickupDropRequired;
-    booking.serviceType = serviceType;
-
-    booking.pickup = {
-      location: pickup.location?.trim() || "",
-      landmark: pickup.landmark?.trim() || "",
-      mapLink: pickup.mapLink?.trim() || "",
-      charge: pickupCharge,
-    };
-
-    booking.drop = {
-      location: drop.location?.trim() || "",
-      landmark: drop.landmark?.trim() || "",
-      mapLink: drop.mapLink?.trim() || "",
-      charge: dropCharge,
-    };
-
-    booking.pickupDropNotes = pickupDropNotes?.trim() || "";
-
-    // booking.payment.balanceAmount, totalCollected, and paymentStatus are
-    // derived automatically in the schema's pre-save hook from
-    // totalAmount / discountAmount / bookingAmountPaid / securityDeposit —
-    // no need to compute or assign them here.
-
+    if (has("tripType")) {
+      if (!Booking.schema.path("tripType").enumValues.includes(body.tripType)) return fail("Invalid trip type.");
+      booking.tripType = body.tripType;
+    }
+    if (has("residents")) {
+      if (!Number.isInteger(body.residents) || body.residents < 1) return fail("Residents must be a positive integer.");
+      booking.residents = body.residents;
+    }
+    if (has("pickupDropRequired")) {
+      if (typeof body.pickupDropRequired !== "boolean") return fail("pickupDropRequired must be a boolean.");
+      booking.pickupDropRequired = body.pickupDropRequired;
+    }
+    if (has("serviceType")) {
+      if (!Booking.schema.path("serviceType").enumValues.includes(body.serviceType)) return fail("Invalid service type.");
+      booking.serviceType = body.serviceType;
+    }
+    const validAmount = value => ["number", "string"].includes(typeof value) && String(value).trim() !== "" && Number.isFinite(Number(value)) && Number(value) >= 0;
+    for (const leg of ["pickup", "drop"]) {
+      if (!has(leg)) continue;
+      const input = body[leg];
+      if (!input || typeof input !== "object" || Array.isArray(input)) return fail(`Invalid ${leg} details.`);
+      for (const key of ["location", "landmark", "mapLink", "charge"]) {
+        if (!Object.hasOwn(input, key)) continue;
+        if (key !== "charge" && typeof input[key] !== "string") return fail(`Invalid ${leg} ${key}.`);
+        if (key === "charge" && !validAmount(input[key])) return fail(`Invalid ${leg} charge.`);
+        booking.set(`${leg}.${key}`, key === "charge" ? input[key] : input[key].trim());
+      }
+    }
+    const serviceChanged = booking.isModified("pickupDropRequired") || booking.isModified("serviceType");
+    if (serviceChanged || has("pickup") || has("drop")) {
+      const pickupActive = booking.pickupDropRequired && ["pickup", "pickup_drop"].includes(booking.serviceType);
+      const dropActive = booking.pickupDropRequired && ["drop", "pickup_drop"].includes(booking.serviceType);
+      if (pickupActive && !booking.pickup?.location?.trim()) return fail("Pickup location is required for the selected service.");
+      if (dropActive && !booking.drop?.location?.trim()) return fail("Drop location is required for the selected service.");
+      if (!pickupActive && (serviceChanged || Object.hasOwn(body.pickup || {}, "charge"))) booking.set("pickup.charge", 0);
+      if (!dropActive && (serviceChanged || Object.hasOwn(body.drop || {}, "charge"))) booking.set("drop.charge", 0);
+    }
+    booking.fromDate = fromDate;
+    booking.toDate = toDate;
+    booking.pickupTime = pickupTime.trim();
+    booking.dropTime = dropTime.trim();
+    if (changedRange) booking.totalDays = calculateTotalDaysFromDates(fromDate, toDate);
+    if (changedVehicle) {
+      booking.vehicleHistory.push({ fromVehicle: { vehicleId: booking.vehicleId, vehicleName: booking.vehicleName, vehicleNumber: booking.vehicleNumber }, toVehicle: { vehicleId: vehicle._id, vehicleName: vehicle.vehicleName, vehicleNumber: vehicle.vehicleNumber }, changedBy: req.user._id, note: "Vehicle changed through booking editor" });
+      booking.vehicleId = vehicle._id;
+      booking.vehicleName = vehicle.vehicleName;
+      booking.vehicleNumber = vehicle.vehicleNumber;
+      booking.vehicleColor = vehicle.color;
+    }
+    const payment = has("payment") ? body.payment : {};
+    if (!payment || typeof payment !== "object" || Array.isArray(payment)) return fail("Invalid payment details.");
+    const aliases = { vehicleRent: "vehicleRent", discountAmount: "discountAmount", securityDeposit: "securityDeposit", bookingAmountPaid: "bookingAmount", fastagAmount: "fastagBalance", paymentMethod: "paymentMethod" };
+    for (const [key, alias] of Object.entries(aliases)) {
+      if (!Object.hasOwn(payment, key) && !has(alias)) continue;
+      const value = Object.hasOwn(payment, key) ? payment[key] : body[alias];
+      if (key !== "paymentMethod" && !validAmount(value)) return fail(`Invalid payment ${key}.`);
+      if (key === "paymentMethod" && !Booking.schema.path("payment.paymentMethod").enumValues.includes(value)) return fail("Invalid payment method.");
+      booking.set(`payment.${key}`, value);
+    }
+    const breakdown = Object.hasOwn(payment, "paymentBreakdown") ? payment.paymentBreakdown : body.paymentBreakdown;
+    if (breakdown !== undefined && !(breakdown === null && booking.payment.paymentMethod === "mixed")) {
+      if (!breakdown || typeof breakdown !== "object" || Array.isArray(breakdown)) return fail("Invalid payment breakdown.");
+      for (const key of ["cash", "phonePe", "razorpay"]) {
+        if (Object.hasOwn(breakdown, key)) {
+          if (!validAmount(breakdown[key])) return fail("Invalid payment breakdown amount.");
+          booking.set(`payment.paymentBreakdown.${key}`, breakdown[key]);
+        }
+      }
+    }
+    // Keep the saved rental estimate unless explicitly supplied. Updating
+    // dates, the vehicle, an advance or discount must not silently reprice it.
+    if (booking.isModified("pickup.charge")) {
+      booking.payment.pickupCharge = booking.pickupDropRequired && ["pickup", "pickup_drop"].includes(booking.serviceType) ? booking.pickup.charge : 0;
+    }
+    if (booking.isModified("drop.charge")) {
+      booking.payment.dropCharge = booking.pickupDropRequired && ["drop", "pickup_drop"].includes(booking.serviceType) ? booking.drop.charge : 0;
+    }
+    const fareChanged = ["vehicleRent", "pickupCharge", "dropCharge", "fastagAmount"].some(key => booking.isModified(`payment.${key}`));
+    if (fareChanged) {
+      // Retain any unitemized historical fare. Changing an advance, deposit,
+      // discount, method or split must never replace the saved fare total.
+      const delta = ["vehicleRent", "pickupCharge", "dropCharge", "fastagAmount"].reduce((sum, key) => sum + Number(booking.payment[key] || 0) - originalFare[key], 0);
+      booking.payment.totalAmount = Math.round((originalFare.totalAmount + delta) * 100) / 100;
+    }
+    await booking.validate();
     await booking.save();
-
-    await booking.populate({
-      path: "vehicleId",
-      select:
-        "vehicleName vehicleNumber manufacturer model color pricePerDay images",
-    });
-
-    return res.status(200).json({
-      success: true,
-      message: "Booking updated successfully.",
-      booking,
-    });
+    await booking.populate({ path: "vehicleId", select: "vehicleName vehicleNumber manufacturer model color pricePerDay images" });
+    return res.status(200).json({ success: true, message: "Booking updated successfully.", booking });
   } catch (error) {
     next(error);
   }

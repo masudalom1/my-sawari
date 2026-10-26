@@ -440,15 +440,22 @@ bookingSchema.pre("save", function () {
     const paid = Number(this.payment.bookingAmountPaid) || 0;
     const security = Number(this.payment.securityDeposit) || 0;
 
-    this.payment.balanceAmount = Math.max(0, totalAmount - discount - paid);
-    this.payment.totalCollected = paid + security;
-
-    if (this.payment.balanceAmount === 0 && paid > 0) {
-      this.payment.paymentStatus = "paid";
-    } else if (paid > 0) {
-      this.payment.paymentStatus = "partial";
-    } else {
-      this.payment.paymentStatus = "pending";
+    // Method/split metadata edits must not rewrite historical collections.
+    if (this.isNew || this.isModified("payment.bookingAmountPaid") || this.isModified("payment.securityDeposit")) {
+      const snapshot = this.$locals.bookingPaymentSnapshot;
+      this.payment.totalCollected = snapshot
+        ? Math.round((snapshot.collected + paid - snapshot.paid + security - snapshot.security) * 100) / 100
+        : paid + security;
+    }
+    if (this.isNew || ["totalAmount", "discountAmount", "bookingAmountPaid"].some(field => this.isModified(`payment.${field}`))) {
+      this.payment.balanceAmount = Math.max(0, totalAmount - discount - paid);
+      if (this.payment.balanceAmount === 0 && paid > 0) {
+        this.payment.paymentStatus = "paid";
+      } else if (paid > 0) {
+        this.payment.paymentStatus = "partial";
+      } else {
+        this.payment.paymentStatus = "pending";
+      }
     }
   }
 });

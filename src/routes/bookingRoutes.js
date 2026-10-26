@@ -3,6 +3,7 @@ import express from "express";
 import protect from "../middlewares/auth.middleware.js";
 import {
   getBookingById,
+  getBookingVehicles,
   getBookingDetails,
   getDrivers,
   assignDriver,
@@ -10,6 +11,7 @@ import {
 } from "../controllers/bookingController.js";
 
 const router = express.Router();
+router.get("/vehicles", protect, getBookingVehicles);
 
 router.get("/drivers", protect, getDrivers);
 
