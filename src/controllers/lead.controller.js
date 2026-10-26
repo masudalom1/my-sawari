@@ -3211,8 +3211,9 @@ export const updateBooking = async (req, res, next) => {
     const fail = (message, status = 400) => res.status(status).json({ success: false, message });
     const { id } = req.params;
     if (!mongoose.isValidObjectId(id)) return fail("Invalid booking id.");
-    const company = req.user.company || req.user.createdBy || req.user._id;
-    const booking = await Booking.findOne({ _id: id, company, isDeleted: false });
+    // Unified fleet: the clicked Fleet Dashboard booking, by _id, whichever
+    // company (or legacy employee id) it was stamped with.
+    const booking = await Booking.findOne({ _id: id, isDeleted: false });
     if (!booking) return fail("Booking not found.", 404);
     // Hydration defaults are useful for reads, but must not materialize a
     // missing legacy payment field/split during an unrelated booking edit.
@@ -3236,7 +3237,7 @@ export const updateBooking = async (req, res, next) => {
     const vehicle = await Vehicle.findOne({ _id: vehicleId, isDeleted: false });
     if (!vehicle) {
       if (String(vehicleId) === String(booking.vehicleId)) {
-        return res.status(409).json({ success: false, code: "BOOKING_VEHICLE_UNAVAILABLE", message: "The saved vehicle is not available in your company. Select a vehicle from your company and save again. No changes were saved." });
+        return res.status(409).json({ success: false, code: "BOOKING_VEHICLE_UNAVAILABLE", message: "The saved vehicle is no longer in the fleet. Select another vehicle and save again. No changes were saved." });
       }
       return fail("Vehicle not found.", 404);
     }

@@ -12,7 +12,7 @@ import User from "../src/models/user.model.js";
 import { generateAccessToken } from "../src/services/token.service.js";
 import { startTestApp, client, createUserAndLogin } from "./helpers/harness.mjs";
 
-test("registered maintenance editor routes enforce auth, ownership and validated in-place updates", async (t) => {
+test("registered maintenance editor routes enforce auth, vehicle availability and validated in-place updates", async (t) => {
   process.env.JWT_ACCESS_SECRET = "maintenance-edit-test-only";
   const user = { _id: new mongoose.Types.ObjectId(), company: new mongoose.Types.ObjectId(), accountStatus: "ACTIVE" };
   const vehicle = new mongoose.Types.ObjectId();
@@ -22,7 +22,8 @@ test("registered maintenance editor routes enforce auth, ownership and validated
   let found = true;
   t.mock.method(User, "findById", async () => user);
   t.mock.method(Vehicle, "exists", async (filter) => {
-    assert.equal(String(filter.company), String(user.company));
+    // Unified fleet: no company scope, only a non-deleted vehicle.
+    assert.equal(Object.hasOwn(filter, "company"), false);
     assert.equal(filter.isDeleted, false);
     return accessible && String(filter._id) === String(vehicle) ? { _id: vehicle } : null;
   });
@@ -139,16 +140,24 @@ test("maintenance edits persist to the existing record in an isolated database",
   assert.equal(staffUpdate.json.data._id, String(record._id));
   assert.equal((await Maintenance.findById(record._id)).title, "Staff edit");
   assert.equal(await Maintenance.countDocuments(), count);
-  assert.equal((await foreignStaffApi("GET", path)).status, 404);
-  assert.equal((await foreignStaffApi("PATCH", path, { title: "Foreign staff edit" })).status, 404);
-  const foreignVehicle = new mongoose.Types.ObjectId();
-  await Vehicle.collection.insertOne({ _id: foreignVehicle, company: new mongoose.Types.ObjectId(outsider.user.id), isDeleted: false });
-  assert.equal((await staffApi("PATCH", path, { vehicle: String(foreignVehicle) })).status, 404);
+  // Unified fleet: another company's staff opens and saves the same clicked record.
+  const foreignOpened = await foreignStaffApi("GET", path);
+  assert.equal(foreignOpened.status, 200);
+  assert.equal(foreignOpened.json.data._id, String(record._id));
+  assert.equal(foreignOpened.json.data.title, "Staff edit");
+  const foreignUpdate = await foreignStaffApi("PATCH", path, { title: "Foreign staff edit" });
+  assert.equal(foreignUpdate.status, 200);
+  assert.equal(foreignUpdate.json.data._id, String(record._id));
+  assert.equal(await Maintenance.countDocuments(), count);
+  // A removed vehicle is still rejected and leaves the record untouched.
+  const removedVehicle = new mongoose.Types.ObjectId();
+  await Vehicle.collection.insertOne({ _id: removedVehicle, company: new mongoose.Types.ObjectId(outsider.user.id), isDeleted: true });
+  assert.equal((await staffApi("PATCH", path, { vehicle: String(removedVehicle) })).status, 404);
   assert.equal(String((await Maintenance.findById(record._id)).vehicle), String(vehicle));
-  const denied = await client(ctx.base, outsider.token)("PATCH", path, { title: "Unauthorized" });
-  assert.equal(denied.status, 404);
-  assert.equal(denied.json.success, false);
-  assert.equal((await Maintenance.findById(record._id)).title, "Staff edit");
+  const denied = await client(ctx.base)("PATCH", path, { title: "Unauthorized" });
+  assert.equal(denied.status, 401);
+  assert.equal((await client(ctx.base)("GET", path)).status, 401);
+  assert.equal((await Maintenance.findById(record._id)).title, "Foreign staff edit");
   const missing = await api("PATCH", `/vehicles/maintenance/${new mongoose.Types.ObjectId()}`, { title: "Missing" });
   assert.equal(missing.status, 404);
   assert.equal(missing.json.message, "Maintenance record not found");
@@ -158,7 +167,7 @@ test("maintenance edits persist to the existing record in an isolated database",
   const reloaded = await staffApi("GET", path);
   assert.equal(reloaded.status, 200);
   assert.equal(reloaded.json.data._id, String(record._id));
-  assert.equal(reloaded.json.data.title, "Staff edit");
+  assert.equal(reloaded.json.data.title, "Foreign staff edit");
   assert.equal(reloaded.json.data.isDeleted, false);
   assert.equal((await staffApi("GET", `/vehicles/maintenance/${new mongoose.Types.ObjectId()}`)).status, 404);
   await verifyIntegrity();

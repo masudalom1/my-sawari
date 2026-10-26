@@ -53,8 +53,25 @@ test("booking editor fetches employee-owned records and persists flat and nested
   assert.equal(reopened.json.booking.payment.bookingAmountPaid, 700);
   assert.equal(reopened.json.booking.payment.fastagAmount, 150);
   assert.equal(await Booking.countDocuments(), bookingCount);
-  assert.equal((await foreign("GET", path)).status, 404);
-  assert.equal((await foreign("PUT", updatePath, payload)).status, 404);
+  // Unified fleet: any signed-in user opens and saves the clicked booking by its _id.
+  const foreignOpened = await foreign("GET", path);
+  assert.equal(foreignOpened.status, 200);
+  assert.equal(foreignOpened.json.booking._id, String(booking._id));
+  assert.equal(foreignOpened.json.booking.customerName, "After");
+  const foreignSaved = await foreign("PUT", updatePath, nested);
+  assert.equal(foreignSaved.status, 200, foreignSaved.json.message);
+  assert.equal(foreignSaved.json.booking._id, String(booking._id));
+  assert.equal(await Booking.countDocuments(), bookingCount);
+  // Legacy bookings stamped with the creating employee's own id (most live
+  // bookings) open and save for the rest of the fleet too.
+  const legacy = await Booking.create({ company: login.json.data.user.id, createdBy: login.json.data.user.id, customerName: "Legacy", mobileNumber: "9876500009", vehicleId: vehicle, fromDate: "2026-12-01", toDate: "2026-12-02", payment: { vehicleRent: 1000, totalAmount: 1000 } });
+  const legacyOpened = await api("GET", `/bookings/${legacy._id}`);
+  assert.equal(legacyOpened.status, 200);
+  assert.equal(legacyOpened.json.booking.customerName, "Legacy");
+  const legacySaved = await api("PUT", `/leads/booking-update/${legacy._id}`, { customerName: "Legacy edited" });
+  assert.equal(legacySaved.status, 200, legacySaved.json.message);
+  assert.equal((await Booking.findById(legacy._id).lean()).customerName, "Legacy edited");
+  await Booking.deleteOne({ _id: legacy._id });
   // Unified fleet: only a removed vehicle is outside the bookable set.
   const removedVehicle = new mongoose.Types.ObjectId();
   await Vehicle.collection.insertOne({ _id: removedVehicle, company: new mongoose.Types.ObjectId(outsider.user.id), isDeleted: true });
@@ -95,9 +112,6 @@ test("booking editor fetches employee-owned records and persists flat and nested
   assert.equal(missingPut.status, 404);
   assert.equal(missingGet.json.message, "Booking not found.");
   assert.equal(missingPut.json.message, "Booking not found.");
-  // Another company's record is indistinguishable from an absent record.
-  assert.deepEqual((await foreign("GET", path)).json, missingGet.json);
-  assert.deepEqual((await foreign("PUT", updatePath, payload)).json, missingPut.json);
   // A real Lead ID must never be used as a substitute Booking identifier.
   const { default: Lead } = await import("../src/models/lead.model.js");
   const leadId = new mongoose.Types.ObjectId();

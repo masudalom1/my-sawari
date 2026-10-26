@@ -186,7 +186,6 @@ export const getBookingDetails = async (req, res) => {
 export const getBookingById = async (req, res) => {
   try {
     const { id } = req.params;
-    const companyId = req.user.company || req.user.createdBy || req.user._id;
 
     if (!mongoose.isValidObjectId(id)) {
       return res.status(400).json({
@@ -195,9 +194,9 @@ export const getBookingById = async (req, res) => {
       });
     }
 
+    // Unified fleet: same rule as the booking update (lead.controller.js).
     const booking = await Booking.findOne({
       _id: id,
-      company: companyId,
       isDeleted: false,
     })
       .populate({ path: "vehicleId", match: { isDeleted: false } })
