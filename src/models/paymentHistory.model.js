@@ -249,5 +249,6 @@ paymentHistorySchema.methods.getBookingMonth = function () {
 };
 
 paymentHistorySchema.index({ company: 1, bookingMonth: 1 });
+paymentHistorySchema.index({ company: 1, createdAt: -1, _id: -1 });
 
 export default mongoose.model("PaymentHistory", paymentHistorySchema);

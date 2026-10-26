@@ -893,7 +893,11 @@ export const getMaintenanceById = async (req, res, next) => {
       .populate({ path: "createdBy", select: "name fullName email" })
       .lean();
 
-    if (!item) {
+    if (!item || !await Vehicle.exists({
+      _id: item.vehicle?._id || item.vehicle,
+      company: req.user.company || req.user.createdBy || req.user._id,
+      isDeleted: false,
+    })) {
       return res.status(404).json({ success: false, message: "Not found" });
     }
 
@@ -904,6 +908,58 @@ export const getMaintenanceById = async (req, res, next) => {
 };
 
 const VALID_STATUSES = ["Scheduled", "In Progress", "Completed", "Cancelled"];
+export const updateMaintenance = async (req, res, next) => {
+  try {
+    if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+      return res.status(400).json({ success: false, message: "Invalid maintenance id" });
+    }
+    const maintenance = await Maintenance.findOne({ _id: req.params.id, isDeleted: false });
+    const company = req.user.company || req.user.createdBy || req.user._id;
+    if (!maintenance || !await Vehicle.exists({
+      _id: maintenance.vehicle, company, isDeleted: false,
+    })) {
+      return res.status(404).json({ success: false, message: "Maintenance record not found" });
+    }
+    if (Object.hasOwn(req.body, "vehicle") && !await Vehicle.exists({
+      _id: req.body.vehicle, company, isDeleted: false,
+    })) {
+      return res.status(404).json({ success: false, message: "Vehicle not found" });
+    }
+    const previousStatus = maintenance.status;
+    const fields = [
+      "vehicle", "startDate", "endDate", "maintenanceType", "title", "description",
+      "garage", "costs", "odometer", "expectedCompletionDate", "images",
+      "additionalNotes", "status", "completionProof",
+    ];
+    for (const field of fields) {
+      if (Object.hasOwn(req.body, field)) {
+        maintenance.set(field, field === "maintenanceType" && req.body[field] === "" ? undefined : req.body[field]);
+      }
+    }
+    if (!maintenance.startDate || !maintenance.endDate || maintenance.endDate <= maintenance.startDate) {
+      return res.status(400).json({ success: false, message: "Maintenance end date must be after the start date" });
+    }
+    if (maintenance.status === "Completed" &&
+        (!maintenance.completionProof?.billImage || !maintenance.completionProof?.cardImage)) {
+      return res.status(400).json({ success: false, message: "Bill photo and card photo are required to mark maintenance as completed" });
+    }
+    if (maintenance.status !== previousStatus && VALID_STATUSES.includes(maintenance.status)) {
+      const changedAt = new Date();
+      maintenance.completedDate = maintenance.status === "Completed" ? changedAt : null;
+      if (maintenance.status === "Completed") maintenance.endDate = changedAt;
+      maintenance.statusHistory.push({
+        status: maintenance.status, changedBy: req.user?._id,
+        note: req.body.statusNote || "", changedAt,
+      });
+    }
+    await maintenance.save();
+    await maintenance.populate({ path: "vehicle", select: "vehicleName vehicleNumber images" });
+    return res.status(200).json({ success: true, message: "Maintenance updated successfully", data: maintenance });
+  } catch (error) {
+    next(error);
+  }
+};
+
 export const updateMaintenanceStatus = async (req, res, next) => {
   try {
     const { id } = req.params;
