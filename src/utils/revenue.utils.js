@@ -1,4 +1,5 @@
 // utils/revenue.utils.js
+import { revenuePaymentAmount as paymentAmount } from "../services/paymentAllocation.service.js";
 // Pure helpers for revenue by vehicle. No database access here.
 // Same definitions as the frontend engine.js:
 //
@@ -100,12 +101,7 @@ export function parseRevenueRange(query = {}) {
 
 // ---------------------------------------------------------------- payment / booking helpers
 /** Mixed payments sometimes store only the breakdown, so fall back to its total. */
-export function paymentAmount(p) {
-  const amount = Number(p.amount) || 0;
-  if (amount > 0) return amount;
-  const b = p.paymentBreakdown || {};
-  return (Number(b.cash) || 0) + (Number(b.phonePe) || 0) + (Number(b.razorpay) || 0);
-}
+export { paymentAmount };
 
 /** Money actually collected for one payment. */
 export function collectedOf(p, amount) {

@@ -307,6 +307,19 @@ test("revenue by vehicle includes the lead-booking advance", async () => {
   assert.equal(byId[state.vehicle1].gross, 500); // lead advance (was missing)
   assert.equal(byId[state.vehicle2].gross, 1800); // 500 advance + 1000 handover + 300 return
   assert.equal(res.json.totals.gross, 2300);
+
+  // The donut's actual API now supplies the shared service's channel split.
+  const imported = await client(ctx.base)("GET", "/dashboard/payments/import");
+  assert.equal(imported.status, 200);
+  assert.ok(imported.json.payments.length > 0);
+  const { allocateRevenuePayment } = await import("../src/services/paymentAllocation.service.js");
+  const { normalizeData } = await import("../../my-sawari-Frontend/app/features/revenue/engine.js");
+  for (const payment of imported.json.payments) {
+    assert.deepEqual(payment.channelSplit, allocateRevenuePayment(payment));
+  }
+  const current = normalizeData({ payments: imported.json.payments });
+  const legacy = normalizeData({ payments: imported.json.payments.map(({ channelSplit, ...payment }) => payment) });
+  assert.deepEqual(current.payments, legacy.payments);
 });
 
 test("cancelling: confirmed booking can be cancelled once, completed cannot", async () => {

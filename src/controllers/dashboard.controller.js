@@ -687,14 +687,9 @@ export const getPaymentsForImport = async (req, res) => {
       if (!vehicleId) continue;
       if (!linkedVehicleId) unlinkedCount++;
 
-      const breakdown = {
-        cash: Number(payment.paymentBreakdown?.cash) || 0,
-        phonePe: Number(payment.paymentBreakdown?.phonePe) || 0,
-        razorpay: Number(payment.paymentBreakdown?.razorpay) || 0,
-      };
-      const breakdownTotal =
-        breakdown.cash + breakdown.phonePe + breakdown.razorpay;
-      const amount = Number(payment.amount) || 0;
+      const breakdown = revenuePaymentBreakdown(payment);
+      const amount = revenuePaymentAmount(payment);
+      const channelSplit = allocateRevenuePayment({ ...payment, paymentMethod: payment.paymentMethod || "cash" }, amount);
 
       formattedPayments.push({
         _id: payment._id,
@@ -707,10 +702,11 @@ export const getPaymentsForImport = async (req, res) => {
         },
 
         // Mixed payments sometimes store only the breakdown; fall back to its total.
-        amount: amount > 0 ? amount : breakdownTotal,
+        amount,
         type: payment.type,
         paymentMethod: payment.paymentMethod || "cash",
         paymentBreakdown: breakdown,
+        channelSplit,
         upiLast4: payment.upiLast4 || [],
 
         isCollected: !!payment.isCollected,

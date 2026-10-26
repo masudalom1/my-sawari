@@ -12,6 +12,7 @@ const FAKE_ENV = {
   JWT_ACCESS_SECRET: "test-only-secret",
   JWT_ACCESS_EXPIRES: "1h",
   CLIENT_URL: "http://localhost:3000",
+  PAYMENTS_REPORT_COMPANY_ID: "000000000000000000000001",
   CLOUDINARY_CLOUD_NAME: "test-cloud",
   CLOUDINARY_API_KEY: "test-key",
   CLOUDINARY_API_SECRET: "test-secret",
