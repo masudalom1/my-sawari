@@ -3,7 +3,7 @@
 import dotenv from "dotenv";
 import mongoose from "mongoose";
 import assert from "node:assert/strict";
-import { paymentCreatedAtRange, paymentReportRow, summarizePayments } from "../../shared/paymentReporting.mjs";
+import { paymentCreatedAtRange, paymentReportRow, summarizePayments } from "../shared/paymentReporting.mjs";
 import { allocateRevenuePayment } from "../src/services/paymentAllocation.service.js";
 import { paymentClassificationStages, paymentSummaryStages } from "../src/services/paymentReport.pipeline.js";
 import { resolvePaymentReportScope } from "../src/services/paymentReportScope.js";

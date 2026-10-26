@@ -6,7 +6,7 @@ export {
   normalizeRevenueChannelSplit,
   revenuePaymentAmount,
   revenuePaymentBreakdown,
-} from "../../../shared/paymentAllocation.mjs";
+} from "../../shared/paymentAllocation.mjs";
 
 export const mongoAllocationMath = Object.freeze({
   sum: (values) => ({ $add: values.map((value) => ({ $ifNull: [value, 0] })) }),
