@@ -1,7 +1,6 @@
 import { createHash } from "node:crypto";
 import mongoose from "mongoose";
 import { cachedValue } from "../realtime/responseCache.js";
-import { allocateRevenuePayment, revenuePaymentAmount, revenuePaymentBreakdown } from "../services/paymentAllocation.service.js";
 import { parallelFind, parallelFindIn, sortLikeMongo } from "../utils/parallelFind.js";
 import Maintenance from "../models/maintenance.model.js";
 import Vehicle from "../models/vehicle.model.js";
