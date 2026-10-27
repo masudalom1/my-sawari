@@ -201,6 +201,17 @@ const bookingSchema = new mongoose.Schema(
         min: 0,
       },
 
+      // Optional snapshots on new Operations bookings. Leave historical
+      // documents untouched; discountAmount remains the combined discount.
+      membershipDiscount: {
+        type: Number,
+        min: 0,
+      },
+      manualDiscount: {
+        type: Number,
+        min: 0,
+      },
+
       securityDeposit: {
         type: Number,
         default: 0,
@@ -230,7 +241,7 @@ const bookingSchema = new mongoose.Schema(
 
       paymentMethod: {
         type: String,
-        enum: ["cash", "phonepe", "razorpay", "mixed"],
+        enum: ["cash", "phonepe", "gpay", "razorpay", "mixed"],
         default: "cash",
       },
 
@@ -241,6 +252,11 @@ const bookingSchema = new mongoose.Schema(
           min: 0,
         },
         phonePe: {
+          type: Number,
+          default: 0,
+          min: 0,
+        },
+        gpay: {
           type: Number,
           default: 0,
           min: 0,
@@ -441,13 +457,29 @@ bookingSchema.pre("save", function () {
     const security = Number(this.payment.securityDeposit) || 0;
 
     // Method/split metadata edits must not rewrite historical collections.
-    if (this.isNew || this.isModified("payment.bookingAmountPaid") || this.isModified("payment.securityDeposit")) {
+    if (
+      this.isNew ||
+      this.isModified("payment.bookingAmountPaid") ||
+      this.isModified("payment.securityDeposit")
+    ) {
       const snapshot = this.$locals.bookingPaymentSnapshot;
       this.payment.totalCollected = snapshot
-        ? Math.round((snapshot.collected + paid - snapshot.paid + security - snapshot.security) * 100) / 100
+        ? Math.round(
+            (snapshot.collected +
+              paid -
+              snapshot.paid +
+              security -
+              snapshot.security) *
+              100,
+          ) / 100
         : paid + security;
     }
-    if (this.isNew || ["totalAmount", "discountAmount", "bookingAmountPaid"].some(field => this.isModified(`payment.${field}`))) {
+    if (
+      this.isNew ||
+      ["totalAmount", "discountAmount", "bookingAmountPaid"].some((field) =>
+        this.isModified(`payment.${field}`),
+      )
+    ) {
       this.payment.balanceAmount = Math.max(0, totalAmount - discount - paid);
       if (this.payment.balanceAmount === 0 && paid > 0) {
         this.payment.paymentStatus = "paid";

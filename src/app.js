@@ -19,6 +19,7 @@ import customerRoutes from "./routes/customer.routes.js";
 import leadRoutes from "./routes/lead.routes.js";
 import bookingRoutes from "./routes/bookingRoutes.js";
 import dashboardRoutes from "./routes/dashboard.routes.js";
+import membershipRoutes from "./routes/membership.routes.js";
 import { trackWriteRequests } from "./realtime/changeFeed.js";
 import PaymentsHistory from "./routes/paymentHistory.js"
 
@@ -124,6 +125,8 @@ app.use((req, res, next) => {
 // Request bodies carry passwords, tokens and customer ID numbers: never log
 // them in production, and mask those fields everywhere else.
 const SENSITIVE_BODY_KEYS = new Set([
+  "mobileNumber",
+  "alternateMobileNumber",
   "password",
   "confirmPassword",
   "refreshToken",
@@ -145,12 +148,20 @@ const redactBody = (value) => {
   );
 };
 
+// Membership checks are a mobile-number lookup: the body is only the number.
+const isMembershipLookup = (req) => req.path.startsWith("/api/v1/memberships");
+
 app.use((req, res, next) => {
-  if (process.env.NODE_ENV !== "production") {
+  if (process.env.NODE_ENV !== "production" && !isMembershipLookup(req)) {
     console.log("BODY:", redactBody(req.body));
   }
   next();
 });
+
+// Read-only lookup sent as POST (keeps the mobile number out of URL logs).
+// Mounted before write tracking so a check never invalidates caches or
+// pushes dashboard refreshes.
+app.use("/api/v1/memberships", membershipRoutes);
 
 // Real-time dashboard updates + cache invalidation on writes
 app.use(trackWriteRequests);

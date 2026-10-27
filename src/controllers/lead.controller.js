@@ -1,4 +1,8 @@
 import mongoose from "mongoose";
+import { createHash } from "node:crypto";
+import ApiError from "../utils/ApiError.js";
+import Membership from "../models/membership.model.js";
+import { lookupMembershipDiscount } from "../services/membershipPricing.js";
 import Lead from "../models/lead.model.js";
 import LeadHistory from "../models/leadHistory.model.js";
 import Booking from "../models/booking.model.js";
@@ -2305,8 +2309,30 @@ const resolveBookingMonth = (fromDate, toDate) => {
 
 export const createBookings = async (req, res, next) => {
   const session = await mongoose.startSession();
+  let requestedBookingId = null;
+  let membershipSavingsAttempted = false;
+  const findReplay = () => requestedBookingId
+    ? Booking.findOne({
+        _id: requestedBookingId,
+        createdBy: req.user._id,
+        company: req.user.company || req.user.createdBy || req.user._id,
+        isDeleted: false,
+      }).populate({ path: "vehicleId", select: "vehicleName vehicleNumber color manufacturer model pricePerDay" })
+    : null;
+  const sendReplay = (booking) => res.status(200).json({
+    success: true, message: "Booking already created successfully.", booking, leadId: booking.lead,
+  });
 
   try {
+    const requestKey = req.get("Idempotency-Key");
+    if (requestKey) {
+      if (!/^[A-Za-z0-9_-]{16,128}$/.test(requestKey)) throw new ApiError(400, "Invalid booking request key.");
+      // The existing primary-key uniqueness constraint also protects concurrent
+      // retries; no migration or separate idempotency collection is required.
+      requestedBookingId = new mongoose.Types.ObjectId(createHash("sha256").update(`${req.user._id}:${requestKey}`).digest("hex").slice(0, 24));
+      const replay = await findReplay();
+      if (replay) return sendReplay(replay);
+    }
     const companyId = req.user.company || req.user.createdBy || req.user._id;
     const {
       customerName,
@@ -2533,7 +2559,9 @@ export const createBookings = async (req, res, next) => {
     // PAYMENT METHOD VALIDATION
     // ============================================================
 
-    const VALID_PAYMENT_METHODS = ["cash", "phonepe", "razorpay", "mixed"];
+    // "gpay" is the stored value for Google Pay (Booking, PaymentHistory and
+    // payment reports all use it).
+    const VALID_PAYMENT_METHODS = ["cash", "phonepe", "gpay", "razorpay", "mixed"];
 
     if (!VALID_PAYMENT_METHODS.includes(paymentMethod)) {
       return res.status(400).json({
@@ -2562,9 +2590,25 @@ export const createBookings = async (req, res, next) => {
       });
     }
 
+    // FASTag is optional: blank means 0, anything else must be a valid,
+    // non-negative amount.
+    const fastagAmount =
+      fastagBalance === undefined || fastagBalance === null || fastagBalance === ""
+        ? 0
+        : Number(fastagBalance);
+
+    if (!Number.isFinite(fastagAmount) || fastagAmount < 0) {
+      return res.status(400).json({
+        success: false,
+        message: "FASTag amount cannot be negative.",
+      });
+    }
+
+    // Mixed payments split across cash / PhonePe / Razorpay only.
     const breakdown = {
       cash: Number(paymentBreakdown.cash) || 0,
       phonePe: Number(paymentBreakdown.phonePe) || 0,
+      gpay: 0,
       razorpay: Number(paymentBreakdown.razorpay) || 0,
     };
 
@@ -2586,6 +2630,8 @@ export const createBookings = async (req, res, next) => {
       breakdown.cash = paymentMethod === "cash" ? advancePaid : 0;
 
       breakdown.phonePe = paymentMethod === "phonepe" ? advancePaid : 0;
+
+      breakdown.gpay = paymentMethod === "gpay" ? advancePaid : 0;
 
       breakdown.razorpay = paymentMethod === "razorpay" ? advancePaid : 0;
     }
@@ -2624,12 +2670,12 @@ export const createBookings = async (req, res, next) => {
         ? Number(drop.charge || 0)
         : 0;
 
-    const fastagAmount = Number(fastagBalance || 0);
-
     const quotationAmount =
       vehicleRent + pickupCharge + dropCharge + fastagAmount;
 
-    const finalDiscountAmount = Number(discountAmount) || 0;
+    const manualDiscountAmount = Number(discountAmount) || 0;
+    let membershipDiscountAmount = 0;
+    let finalDiscountAmount = manualDiscountAmount;
 
     const finalSecurityDeposit = Number(securityDeposit) || 0;
 
@@ -2760,6 +2806,38 @@ export const createBookings = async (req, res, next) => {
       });
     }
 
+    // Reprice from the actual customer membership inside the booking transaction.
+    // Customer-app rules discount rent + pickup/drop, excluding FASTag/deposit
+    // and advances. The existing manual discount is applied separately.
+    const membershipPricing = await lookupMembershipDiscount(
+      mobileNumber, vehicleRent + pickupCharge + dropCharge, { session },
+    );
+    membershipDiscountAmount = membershipPricing.discount.amount;
+    const expectedDiscount = req.body.expectedMembershipDiscount;
+    if (expectedDiscount !== undefined && (
+      typeof expectedDiscount !== "number" || !Number.isFinite(expectedDiscount) ||
+      Math.abs(expectedDiscount - membershipDiscountAmount) > 0.005
+    )) {
+      throw new ApiError(409, "Membership savings changed. Check membership and review the billing summary before saving again.");
+    }
+    finalDiscountAmount += membershipDiscountAmount;
+    if (membershipDiscountAmount > 0) {
+      membershipSavingsAttempted = true;
+      const now = new Date();
+      const credited = await Membership.updateOne({
+        _id: membershipPricing.membership._id,
+        plan: membershipPricing.membership.plan,
+        "payment.status": "completed",
+        activatedAt: { $lte: now },
+        expiresAt: { $gt: now },
+        $expr: { $lte: [
+          { $add: [{ $ifNull: ["$totalSaved", 0] }, membershipDiscountAmount] },
+          membershipPricing.discount.annualCap,
+        ] },
+      }, { $inc: { totalSaved: membershipDiscountAmount } }, { session });
+      if (credited.modifiedCount !== 1) throw new ApiError(409, "Membership savings changed. Check membership and try again.");
+    }
+
     // ============================================================
     // COMPANY
     // ============================================================
@@ -2853,6 +2931,7 @@ export const createBookings = async (req, res, next) => {
     const [booking] = await Booking.create(
       [
         {
+          ...(requestedBookingId ? { _id: requestedBookingId } : {}),
           lead: lead._id,
 
           company: companyId,
@@ -2923,6 +3002,10 @@ export const createBookings = async (req, res, next) => {
             totalAmount: quotationAmount,
 
             discountAmount: finalDiscountAmount,
+
+            membershipDiscount: membershipDiscountAmount,
+
+            manualDiscount: manualDiscountAmount,
 
             securityDeposit: finalSecurityDeposit,
 
@@ -3018,6 +3101,8 @@ export const createBookings = async (req, res, next) => {
 
               phonePe: Number(breakdown.phonePe) || 0,
 
+              gpay: Number(breakdown.gpay) || 0,
+
               razorpay: Number(breakdown.razorpay) || 0,
             },
 
@@ -3110,6 +3195,11 @@ export const createBookings = async (req, res, next) => {
       await session.abortTransaction();
     }
 
+    if (requestedBookingId && (error?.code === 11000 || error?.code === 112 || error?.errorLabels?.includes("TransientTransactionError"))) {
+      const replay = await findReplay();
+      if (replay) return sendReplay(replay);
+    }
+
     // ============================================================
     // TRANSACTION CONFLICT
     // ============================================================
@@ -3122,7 +3212,9 @@ export const createBookings = async (req, res, next) => {
         success: false,
 
         message:
-          "This vehicle was just booked by someone else for overlapping dates. Please refresh and try again.",
+          membershipSavingsAttempted
+            ? "Vehicle availability or membership savings changed. Refresh and try again."
+            : "This vehicle was just booked by someone else for overlapping dates. Please refresh and try again.",
       });
     }
 
