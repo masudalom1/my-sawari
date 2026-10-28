@@ -27,7 +27,7 @@ after(async () => {
 const book = (fromOffset, toOffset, extra = {}) =>
   api("POST", "/leads/create", {
     customerName: "Asha", mobileNumber: `98765${String(fromOffset).padStart(5, "0")}`, tripType: "local",
-    fromDate: dayFromToday(fromOffset), toDate: dayFromToday(toOffset), pickupTime: "10:00 AM", dropTime: "10:00 AM",
+    fromDate: dayFromToday(fromOffset), toDate: dayFromToday(toOffset), flexibleTime: true, pickupTime: "10:00 AM", dropTime: "10:00 AM",
     vehicleId, vehicleType: "car", paymentMethod: "cash", ...extra,
   });
 

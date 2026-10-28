@@ -15,8 +15,13 @@ export const quoteMembershipDiscount = async (req, res) => {
   try {
     const { mobileNumber, vehicleId, fromDate, toDate, pickupCharge = 0, dropCharge = 0 } = req.body || {};
     if (!normalizeMobileNumber(mobileNumber)) return res.status(400).json({ success: false, message: "Enter a valid 10-digit mobile number." });
-    const days = membershipQuoteRentalDays(fromDate, toDate);
-    if (!mongoose.isValidObjectId(vehicleId) || !days) return res.status(400).json({ success: false, message: "Select a vehicle and valid booking dates." });
+    const days = membershipQuoteRentalDays(fromDate, toDate, {
+      flexibleTime: req.body.flexibleTime,
+      pickupTime: req.body.pickupTime,
+      dropTime: req.body.dropTime,
+      originalEndDate: req.body.originalEndDate,
+    });
+    if (!mongoose.isValidObjectId(vehicleId) || !days) return res.status(400).json({ success: false, message: "Select a vehicle and valid booking dates and times." });
     if (![pickupCharge, dropCharge].every((amount) => typeof amount === "number" && Number.isFinite(amount) && amount >= 0)) {
       return res.status(400).json({ success: false, message: "Pickup and drop charges must be valid non-negative amounts." });
     }

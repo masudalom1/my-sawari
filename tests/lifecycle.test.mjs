@@ -103,6 +103,7 @@ test("fresh booking (transaction) records a PhonePe advance and links it to the 
     toDate: dayFromToday(2),
     pickupTime: "10:00 AM",
     dropTime: "10:00 AM",
+    flexibleTime: true,
     bookingAmount: 500,
     paymentMethod: "phonepe",
     upiLast4: "1234",

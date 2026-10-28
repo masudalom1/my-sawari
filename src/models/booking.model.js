@@ -111,10 +111,21 @@ const bookingSchema = new mongoose.Schema(
       required: true,
     },
 
+    // The staff-selected date; toDate stores the derived effective return date.
+    // Optional so existing bookings retain their saved interval and pricing.
+    originalEndDate: {
+      type: Date,
+    },
+
     pickupTime: {
       type: String,
       default: "09:00 AM",
       trim: true,
+    },
+
+    // No default: absence identifies historical bookings with date-only billing.
+    flexibleTime: {
+      type: Boolean,
     },
 
     dropTime: {

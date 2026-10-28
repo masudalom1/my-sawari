@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import ApiError from "../utils/ApiError.js";
 import Membership from "../models/membership.model.js";
 import { lookupMembershipDiscount } from "../services/membershipPricing.js";
+import { bookingDuration, bookingTimeMinutes } from "../../shared/bookingDuration.mjs";
 import Lead from "../models/lead.model.js";
 import LeadHistory from "../models/leadHistory.model.js";
 import Booking from "../models/booking.model.js";
@@ -2478,7 +2479,8 @@ export const createBookings = async (req, res, next) => {
     };
 
     const finalFromDate = parseBookingDate(fromDate);
-    const finalToDate = parseBookingDate(toDate);
+    let finalToDate = parseBookingDate(toDate);
+    const originalEndDate = parseBookingDate(req.body.originalEndDate === undefined ? toDate : req.body.originalEndDate);
 
     // ============================================================
     // DATE VALIDATION
@@ -2499,7 +2501,7 @@ export const createBookings = async (req, res, next) => {
     }
 
     // Start must be before end.
-    if (finalFromDate > finalToDate) {
+    if (!originalEndDate || finalFromDate > originalEndDate) {
       return res.status(400).json({
         success: false,
         message: "End date cannot be before start date.",
@@ -2536,14 +2538,13 @@ export const createBookings = async (req, res, next) => {
     // Do not trust frontend totalDays.
     // ============================================================
 
-    const MS_PER_DAY = 24 * 60 * 60 * 1000;
-
-    const calculatedTotalDays = Math.round(
-      (finalToDate.getTime() - finalFromDate.getTime()) / MS_PER_DAY,
-    );
-
-    // Same-day booking is allowed and counts as 1 rental day.
-    const finalTotalDays = Math.max(1, calculatedTotalDays);
+    const flexibleTime = req.body.flexibleTime === undefined ? false : req.body.flexibleTime;
+    const duration = bookingDuration({ fromDate: finalFromDate, toDate: finalToDate, originalEndDate, flexibleTime, pickupTime, dropTime });
+    if (!duration) return res.status(400).json({ success: false, message: "Invalid booking time mode or pickup/drop date and time." });
+    finalToDate = parseBookingDate(duration.effectiveEndDate);
+    const finalPickupTime = flexibleTime ? (pickupTime || "08:00 AM").trim() : "08:00 AM";
+    const finalDropTime = (dropTime || "08:00 AM").trim();
+    const finalTotalDays = duration.days;
 
     // ============================================================
     // BOOKING MONTH
@@ -2689,34 +2690,10 @@ export const createBookings = async (req, res, next) => {
     // CHECK BOOKING CONFLICT
     // ============================================================
 
-    const parseTimeToMinutes = (timeString) => {
-      if (!timeString || typeof timeString !== "string") {
-        return 0;
-      }
+    const parseTimeToMinutes = (timeString) => bookingTimeMinutes(timeString) ?? 0;
 
-      const match = timeString.trim().match(/^(\d{1,2}):(\d{2})\s*(AM|PM)$/i);
-
-      if (!match) {
-        return 0;
-      }
-
-      let hour = Number(match[1]);
-      const minute = Number(match[2]);
-      const period = match[3].toUpperCase();
-
-      if (period === "AM" && hour === 12) {
-        hour = 0;
-      }
-
-      if (period === "PM" && hour !== 12) {
-        hour += 12;
-      }
-
-      return hour * 60 + minute;
-    };
-
-    const newPickupMinutes = parseTimeToMinutes(pickupTime || "08:00 AM");
-    const newDropMinutes = parseTimeToMinutes(dropTime || "08:00 AM");
+    const newPickupMinutes = duration.pickupMinutes;
+    const newDropMinutes = duration.dropMinutes;
 
     const newStart = new Date(finalFromDate);
     newStart.setUTCHours(0, newPickupMinutes, 0, 0);
@@ -2961,9 +2938,13 @@ export const createBookings = async (req, res, next) => {
 
           toDate: finalToDate,
 
-          pickupTime: pickupTime || "08:00 AM",
+          pickupTime: finalPickupTime,
 
-          dropTime: dropTime || "08:00 AM",
+          dropTime: finalDropTime,
+
+          flexibleTime,
+
+          originalEndDate,
 
           // Backend calculated value.
           totalDays: finalTotalDays,
@@ -3288,15 +3269,7 @@ const bookingDay = (value) => {
   const date = new Date(value);
   return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === value ? date : null;
 };
-const bookingMinutes = (value) => {
-  const match = typeof value === "string" && value.trim().match(/^(\d{1,2}):(\d{2})\s*(AM|PM)?$/i);
-  if (!match) return null;
-  let hour = Number(match[1]);
-  const minute = Number(match[2]);
-  if (minute > 59 || (match[3] ? hour < 1 || hour > 12 : hour > 23)) return null;
-  if (match[3]) hour = hour % 12 + (match[3].toUpperCase() === "PM" ? 12 : 0);
-  return hour * 60 + minute;
-};
+const bookingMinutes = bookingTimeMinutes;
 
 export const updateBooking = async (req, res, next) => {
   try {
@@ -3324,6 +3297,7 @@ export const updateBooking = async (req, res, next) => {
     const body = req.body;
     if (!body || typeof body !== "object" || Array.isArray(body)) return fail("Invalid booking update payload.");
     const has = key => Object.hasOwn(body, key);
+    if (has("flexibleTime") && body.flexibleTime !== booking.flexibleTime) return fail("Time mode is fixed when the booking is created.");
     const vehicleId = has("vehicleId") ? body.vehicleId : booking.vehicleId;
     if (!mongoose.isValidObjectId(vehicleId)) return fail("Invalid vehicle id.");
     const vehicle = await Vehicle.findOne({ _id: vehicleId, isDeleted: false });
@@ -3334,15 +3308,22 @@ export const updateBooking = async (req, res, next) => {
       return fail("Vehicle not found.", 404);
     }
     const fromDate = bookingDay(has("fromDate") ? body.fromDate : booking.fromDate);
-    const toDate = bookingDay(has("toDate") ? body.toDate : booking.toDate);
+    let toDate = bookingDay(has("toDate") ? body.toDate : booking.toDate);
     const pickupTime = has("pickupTime") ? body.pickupTime : booking.pickupTime;
     const dropTime = has("dropTime") ? body.dropTime : booking.dropTime;
     const pickupMinutes = bookingMinutes(pickupTime), dropMinutes = bookingMinutes(dropTime);
     if (!fromDate || !toDate) return fail("Invalid pickup or drop date. Use YYYY-MM-DD.");
     if (pickupMinutes === null || dropMinutes === null) return fail("Invalid pickup or drop time.");
+    if (booking.flexibleTime === false && pickupMinutes !== 480) return fail("Pickup time must be 08:00 AM when Flexible Time is off.");
+    const hasOriginalEndDate = booking.originalEndDate instanceof Date && typeof booking.flexibleTime === "boolean";
+    const originalEndDate = hasOriginalEndDate ? bookingDay(has("originalEndDate") ? body.originalEndDate
+      : has("toDate") && Number(toDate) !== Number(bookingDay(booking.toDate)) ? body.toDate : booking.originalEndDate) : null;
+    const duration = hasOriginalEndDate ? bookingDuration({ fromDate, toDate, originalEndDate, pickupTime, dropTime, flexibleTime: booking.flexibleTime }) : null;
+    if (hasOriginalEndDate && !duration) return fail("Invalid original end date or booking time.");
+    if (duration) toDate = bookingDay(duration.effectiveEndDate);
     const start = fromDate.getTime() + pickupMinutes * 60000;
     const end = toDate.getTime() + dropMinutes * 60000;
-    if (end <= start) return fail("Drop date and time must be after pickup date and time.");
+    if (end < start || (end === start && typeof booking.flexibleTime !== "boolean")) return fail("Drop date and time must be after pickup date and time.");
     const changedVehicle = String(booking.vehicleId) !== String(vehicle._id);
     const changedRange = changedVehicle || start !== bookingDay(booking.fromDate)?.getTime() + bookingMinutes(booking.pickupTime) * 60000 || end !== bookingDay(booking.toDate)?.getTime() + bookingMinutes(booking.dropTime) * 60000;
     if (changedRange) {
@@ -3403,9 +3384,11 @@ export const updateBooking = async (req, res, next) => {
     }
     booking.fromDate = fromDate;
     booking.toDate = toDate;
+    if (hasOriginalEndDate) booking.originalEndDate = originalEndDate;
     booking.pickupTime = pickupTime.trim();
     booking.dropTime = dropTime.trim();
-    if (changedRange) booking.totalDays = calculateTotalDaysFromDates(fromDate, toDate);
+    if (changedRange) booking.totalDays = duration ? duration.days
+      : calculateTotalDaysFromDates(fromDate, toDate) + (booking.flexibleTime === false && dropMinutes > 480 ? 1 : 0);
     if (changedVehicle) {
       booking.vehicleHistory.push({ fromVehicle: { vehicleId: booking.vehicleId, vehicleName: booking.vehicleName, vehicleNumber: booking.vehicleNumber }, toVehicle: { vehicleId: vehicle._id, vehicleName: vehicle.vehicleName, vehicleNumber: vehicle.vehicleNumber }, changedBy: req.user._id, note: "Vehicle changed through booking editor" });
       booking.vehicleId = vehicle._id;

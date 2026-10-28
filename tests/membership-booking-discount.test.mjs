@@ -47,13 +47,14 @@ function bodyFor(mobileNumber, extra = {}) {
   return {
     customerName: "Isolated pricing customer", mobileNumber, vehicleId,
     fromDate: dayFromToday(dateSequence), toDate: dayFromToday(dateSequence + 2),
-    pickupTime: "10:00 AM", dropTime: "10:00 AM", paymentMethod: "cash", tripType: "local", ...extra,
+    flexibleTime: true, pickupTime: "10:00 AM", dropTime: "10:00 AM", paymentMethod: "cash", tripType: "local", ...extra,
   };
 }
 
 const quote = (body) => api("POST", "/memberships/discount", {
   mobileNumber: body.mobileNumber, vehicleId: body.vehicleId,
   fromDate: body.fromDate, toDate: body.toDate,
+  flexibleTime: body.flexibleTime, pickupTime: body.pickupTime, dropTime: body.dropTime,
   pickupCharge: body.pickupDropRequired ? Number(body.pickup?.charge || 0) : 0,
   dropCharge: body.pickupDropRequired ? Number(body.drop?.charge || 0) : 0,
 });

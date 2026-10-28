@@ -33,7 +33,7 @@ function book(extra) {
   slot += 1;
   return api("POST", "/leads/create", {
     customerName: "Asha", mobileNumber: `98765${String(slot).padStart(5, "0")}`, tripType: "local",
-    fromDate: dayFromToday(slot * 2), toDate: dayFromToday(slot * 2 + 1), pickupTime: "10:00 AM", dropTime: "10:00 AM",
+    fromDate: dayFromToday(slot * 2), toDate: dayFromToday(slot * 2 + 1), flexibleTime: true, pickupTime: "10:00 AM", dropTime: "10:00 AM",
     vehicleId, vehicleType: "car", ...extra,
   });
 }
