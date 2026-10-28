@@ -11,6 +11,11 @@ import PaymentHistory, {
 import Handover from "../models/handover.model.js";
 import VehicleReturn from "../models/vehicleReturn.model.js";
 import {
+  allocateRevenuePayment,
+  revenuePaymentAmount,
+  revenuePaymentBreakdown,
+} from "../services/paymentAllocation.service.js";
+import {
   parseRevenueRange,
   daysBetweenKeys,
   emptyRevenueTotals,
@@ -662,6 +667,7 @@ export const getPaymentsForImport = async (req, res) => {
         collectedPhonePe
         collectionHistory.amount
         collectionHistory.channel
+        collectionHistory.collectedAt
         bookingId
         booking
         customer
