@@ -58,6 +58,18 @@ export async function startTestApp(envOverrides = {}) {
 export async function mockWati() {
   const { default: axios } = await import("axios");
   const calls = [];
+  axios.get = async (url) => {
+    if (url.endsWith("/api/v2/whatsapp/phoneNumbers")) return { data: [{
+      enabled: true, phoneNumber: "919876500000", wabaContextId: "test-waba-context",
+    }] };
+    if (!url.endsWith("/api/v1/getMessageTemplates")) throw new Error("Unexpected external GET in test");
+    return { data: { result: "success", messageTemplates: [{
+      elementName: "booking_confirmation_message", status: "APPROVED", language: { value: "en" },
+      wabaContextIds: ["test-waba-context"],
+      customParams: [], body: "Approved fixture", buttons: [],
+      header: { typeString: "image", mediaHeaderId: "test-approved-media" },
+    }] } };
+  };
   axios.post = async (url, payload, config) => {
     calls.push({ url, payload, config });
     return { data: { result: true } };

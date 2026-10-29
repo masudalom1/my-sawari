@@ -2090,15 +2090,13 @@ export const createLeadBooking = async (req, res, next) => {
     ]);
 
     try {
-      await sendBookingCreatedMessage(booking.mobileNumber);
-
-      console.log("Booking WhatsApp message sent successfully");
+      const whatsappResult = await sendBookingCreatedMessage(booking.mobileNumber);
+      if (whatsappResult.success) console.log("Booking WhatsApp confirmation accepted.");
+      else console.warn("Booking WhatsApp confirmation was not accepted.");
     } catch (whatsappError) {
       console.error(
         "Booking WhatsApp Error:",
-        whatsappError?.response?.data ||
-          whatsappError?.message ||
-          whatsappError,
+        { bookingId: String(booking._id) },
       );
 
       // Do not fail booking if WhatsApp fails
@@ -3150,17 +3148,26 @@ export const createBookings = async (req, res, next) => {
     // ============================================================
 
     try {
-      const whatsappResult = await sendBookingCreatedMessage(
-        booking.mobileNumber,
-      );
+      // Read outside the committed transaction so only the saved, still
+      // confirmed booking can trigger a customer confirmation.
+      const confirmedBooking = await Booking.findOne({
+        _id: booking._id,
+        status: "confirmed",
+        isDeleted: false,
+      }).select("mobileNumber").lean();
 
-      console.log("Booking WhatsApp Result:", whatsappResult);
+      if (confirmedBooking) {
+        const whatsappResult = await sendBookingCreatedMessage(
+          confirmedBooking.mobileNumber,
+        );
+
+        if (whatsappResult.success) console.log("Booking WhatsApp confirmation accepted.");
+        else console.warn("Booking WhatsApp confirmation was not accepted.");
+      }
     } catch (whatsappError) {
       console.error(
         "Booking WhatsApp Error:",
-        whatsappError?.response?.data ||
-          whatsappError?.message ||
-          whatsappError,
+        { bookingId: String(booking._id) },
       );
     }
 
