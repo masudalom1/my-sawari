@@ -19,7 +19,6 @@ export const quoteMembershipDiscount = async (req, res) => {
       flexibleTime: req.body.flexibleTime,
       pickupTime: req.body.pickupTime,
       dropTime: req.body.dropTime,
-      originalEndDate: req.body.originalEndDate,
     });
     if (!mongoose.isValidObjectId(vehicleId) || !days) return res.status(400).json({ success: false, message: "Select a vehicle and valid booking dates and times." });
     if (![pickupCharge, dropCharge].every((amount) => typeof amount === "number" && Number.isFinite(amount) && amount >= 0)) {

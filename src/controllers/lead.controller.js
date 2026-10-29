@@ -3,7 +3,9 @@ import { createHash } from "node:crypto";
 import ApiError from "../utils/ApiError.js";
 import Membership from "../models/membership.model.js";
 import { lookupMembershipDiscount } from "../services/membershipPricing.js";
-import { bookingDuration, bookingTimeMinutes } from "../../shared/bookingDuration.mjs";
+import { bookingDuration, bookingTimeMinutes, bookingTimestamp, extraRentalDayChange } from "../../shared/bookingDuration.mjs";
+import { formatBookingPaymentTime, validateBookingPaymentTime } from "../../shared/bookingPaymentTime.mjs";
+import { validateNewBookingFields } from "../../shared/newBookingValidation.mjs";
 import Lead from "../models/lead.model.js";
 import LeadHistory from "../models/leadHistory.model.js";
 import Booking from "../models/booking.model.js";
@@ -2334,6 +2336,8 @@ export const createBookings = async (req, res, next) => {
       const replay = await findReplay();
       if (replay) return sendReplay(replay);
     }
+    const fieldError = validateNewBookingFields(req.body);
+    if (fieldError) return res.status(400).json({ success: false, message: fieldError });
     const companyId = req.user.company || req.user.createdBy || req.user._id;
     const {
       customerName,
@@ -2396,6 +2400,10 @@ export const createBookings = async (req, res, next) => {
         success: false,
         message: "Vehicle is required.",
       });
+    }
+
+    if (!mongoose.isValidObjectId(vehicleId)) {
+      return res.status(400).json({ success: false, message: "Invalid vehicle id." });
     }
 
     if (!fromDate || !toDate) {
@@ -2479,8 +2487,7 @@ export const createBookings = async (req, res, next) => {
     };
 
     const finalFromDate = parseBookingDate(fromDate);
-    let finalToDate = parseBookingDate(toDate);
-    const originalEndDate = parseBookingDate(req.body.originalEndDate === undefined ? toDate : req.body.originalEndDate);
+    const finalToDate = parseBookingDate(toDate);
 
     // ============================================================
     // DATE VALIDATION
@@ -2501,7 +2508,7 @@ export const createBookings = async (req, res, next) => {
     }
 
     // Start must be before end.
-    if (!originalEndDate || finalFromDate > originalEndDate) {
+    if (finalFromDate > finalToDate) {
       return res.status(400).json({
         success: false,
         message: "End date cannot be before start date.",
@@ -2539,10 +2546,9 @@ export const createBookings = async (req, res, next) => {
     // ============================================================
 
     const flexibleTime = req.body.flexibleTime === undefined ? false : req.body.flexibleTime;
-    const duration = bookingDuration({ fromDate: finalFromDate, toDate: finalToDate, originalEndDate, flexibleTime, pickupTime, dropTime });
+    const duration = bookingDuration({ fromDate: finalFromDate, toDate: finalToDate, flexibleTime, pickupTime, dropTime });
     if (!duration) return res.status(400).json({ success: false, message: "Invalid booking time mode or pickup/drop date and time." });
-    finalToDate = parseBookingDate(duration.effectiveEndDate);
-    const finalPickupTime = flexibleTime ? (pickupTime || "08:00 AM").trim() : "08:00 AM";
+    const finalPickupTime = (pickupTime || "08:00 AM").trim();
     const finalDropTime = (dropTime || "08:00 AM").trim();
     const finalTotalDays = duration.days;
 
@@ -2584,6 +2590,30 @@ export const createBookings = async (req, res, next) => {
       }
     }
 
+    if (paymentMethod === "gpay" && advancePaid > 0 && normalizedUpiLast4 && !/^\d{4}$/.test(normalizedUpiLast4)) {
+      return res.status(400).json({ success: false, message: "UPI transaction ID must contain exactly 4 digits." });
+    }
+
+    const paymentTransactionFields = ["phonepe", "gpay"].includes(paymentMethod) && advancePaid > 0 && normalizedUpiLast4
+      ? { transactionId: normalizedUpiLast4 }
+      : {};
+
+    const { error: paymentTimeError, collectedAt } = validateBookingPaymentTime({
+      paymentMethod,
+      bookingAmount: advancePaid,
+      paymentDate: req.body.paymentDate,
+      paymentTime: req.body.paymentTime,
+    });
+    if (paymentTimeError) return res.status(400).json({ success: false, message: paymentTimeError });
+
+    // Only new booking/advance snapshots use these values. A new paymentDate
+    // follows the existing model's fallback to its manual customPaymentDate.
+    const paymentDateFields = collectedAt ? {
+      paymentDate: collectedAt,
+      paymentTime: formatBookingPaymentTime(collectedAt),
+      customPaymentDate: collectedAt,
+    } : {};
+
     if (advancePaid < 0) {
       return res.status(400).json({
         success: false,
@@ -2605,11 +2635,11 @@ export const createBookings = async (req, res, next) => {
       });
     }
 
-    // Mixed payments split across cash / PhonePe / Razorpay only.
+    // Persist every channel exposed by the mixed-payment inputs.
     const breakdown = {
       cash: Number(paymentBreakdown.cash) || 0,
       phonePe: Number(paymentBreakdown.phonePe) || 0,
-      gpay: 0,
+      gpay: Number(paymentBreakdown.gpay) || 0,
       razorpay: Number(paymentBreakdown.razorpay) || 0,
     };
 
@@ -2619,7 +2649,7 @@ export const createBookings = async (req, res, next) => {
 
     if (paymentMethod === "mixed") {
       const breakdownSum =
-        breakdown.cash + breakdown.phonePe + breakdown.razorpay;
+        breakdown.cash + breakdown.phonePe + breakdown.gpay + breakdown.razorpay;
 
       if (Math.round(breakdownSum * 100) !== Math.round(advancePaid * 100)) {
         return res.status(400).json({
@@ -2690,16 +2720,8 @@ export const createBookings = async (req, res, next) => {
     // CHECK BOOKING CONFLICT
     // ============================================================
 
-    const parseTimeToMinutes = (timeString) => bookingTimeMinutes(timeString) ?? 0;
-
-    const newPickupMinutes = duration.pickupMinutes;
-    const newDropMinutes = duration.dropMinutes;
-
-    const newStart = new Date(finalFromDate);
-    newStart.setUTCHours(0, newPickupMinutes, 0, 0);
-
-    const newEnd = new Date(finalToDate);
-    newEnd.setUTCHours(0, newDropMinutes, 0, 0);
+    const newStart = new Date(bookingTimestamp(finalFromDate, finalPickupTime));
+    const newEnd = new Date(bookingTimestamp(finalToDate, finalDropTime));
 
     // Exact boundary is allowed:
     // Existing ends exactly when new booking starts = NO conflict.
@@ -2717,19 +2739,8 @@ export const createBookings = async (req, res, next) => {
       .lean();
 
     const existingBooking = existingBookings.find((booking) => {
-      const existingStart = new Date(booking.fromDate);
-      const existingEnd = new Date(booking.toDate);
-
-      const existingPickupMinutes = parseTimeToMinutes(
-        booking.pickupTime || "08:00 AM",
-      );
-
-      const existingDropMinutes = parseTimeToMinutes(
-        booking.dropTime || "08:00 AM",
-      );
-
-      existingStart.setUTCHours(0, existingPickupMinutes, 0, 0);
-      existingEnd.setUTCHours(0, existingDropMinutes, 0, 0);
+      const existingStart = new Date(bookingTimestamp(bookingDay(booking.fromDate), booking.pickupTime || "08:00 AM"));
+      const existingEnd = new Date(bookingTimestamp(bookingDay(booking.toDate), booking.dropTime || "08:00 AM"));
 
       // Overlap only when:
       // existingStart < newEnd
@@ -2944,7 +2955,6 @@ export const createBookings = async (req, res, next) => {
 
           flexibleTime,
 
-          originalEndDate,
 
           // Backend calculated value.
           totalDays: finalTotalDays,
@@ -2970,8 +2980,14 @@ export const createBookings = async (req, res, next) => {
 
           fastagBalance: fastagAmount,
 
+          ...paymentDateFields,
+          ...paymentTransactionFields,
+
           // Structured payment.
           payment: {
+            ...paymentDateFields,
+            ...paymentTransactionFields,
+            rentalRate: Number(vehicle.pricePerDay || 0),
             vehicleRent,
 
             pickupCharge,
@@ -3072,8 +3088,12 @@ export const createBookings = async (req, res, next) => {
 
             paymentMethod,
 
+            // Reuse the same timestamp snapshot in the existing advance record.
+            ...paymentDateFields,
+            ...paymentTransactionFields,
+
             upiLast4:
-              paymentMethod === "phonepe" && normalizedUpiLast4
+              ["phonepe", "gpay"].includes(paymentMethod) && normalizedUpiLast4
                 ? [normalizedUpiLast4]
                 : [],
 
@@ -3297,7 +3317,8 @@ export const updateBooking = async (req, res, next) => {
     const body = req.body;
     if (!body || typeof body !== "object" || Array.isArray(body)) return fail("Invalid booking update payload.");
     const has = key => Object.hasOwn(body, key);
-    if (has("flexibleTime") && body.flexibleTime !== booking.flexibleTime) return fail("Time mode is fixed when the booking is created.");
+    const flexibleTime = has("flexibleTime") ? body.flexibleTime : booking.flexibleTime ?? true;
+    if (typeof flexibleTime !== "boolean") return fail("Flexible Time must be a boolean.");
     const vehicleId = has("vehicleId") ? body.vehicleId : booking.vehicleId;
     if (!mongoose.isValidObjectId(vehicleId)) return fail("Invalid vehicle id.");
     const vehicle = await Vehicle.findOne({ _id: vehicleId, isDeleted: false });
@@ -3308,30 +3329,27 @@ export const updateBooking = async (req, res, next) => {
       return fail("Vehicle not found.", 404);
     }
     const fromDate = bookingDay(has("fromDate") ? body.fromDate : booking.fromDate);
-    let toDate = bookingDay(has("toDate") ? body.toDate : booking.toDate);
+    const toDate = bookingDay(has("toDate") ? body.toDate : booking.toDate);
     const pickupTime = has("pickupTime") ? body.pickupTime : booking.pickupTime;
     const dropTime = has("dropTime") ? body.dropTime : booking.dropTime;
     const pickupMinutes = bookingMinutes(pickupTime), dropMinutes = bookingMinutes(dropTime);
     if (!fromDate || !toDate) return fail("Invalid pickup or drop date. Use YYYY-MM-DD.");
     if (pickupMinutes === null || dropMinutes === null) return fail("Invalid pickup or drop time.");
-    if (booking.flexibleTime === false && pickupMinutes !== 480) return fail("Pickup time must be 08:00 AM when Flexible Time is off.");
-    const hasOriginalEndDate = booking.originalEndDate instanceof Date && typeof booking.flexibleTime === "boolean";
-    const originalEndDate = hasOriginalEndDate ? bookingDay(has("originalEndDate") ? body.originalEndDate
-      : has("toDate") && Number(toDate) !== Number(bookingDay(booking.toDate)) ? body.toDate : booking.originalEndDate) : null;
-    const duration = hasOriginalEndDate ? bookingDuration({ fromDate, toDate, originalEndDate, pickupTime, dropTime, flexibleTime: booking.flexibleTime }) : null;
-    if (hasOriginalEndDate && !duration) return fail("Invalid original end date or booking time.");
-    if (duration) toDate = bookingDay(duration.effectiveEndDate);
-    const start = fromDate.getTime() + pickupMinutes * 60000;
-    const end = toDate.getTime() + dropMinutes * 60000;
+    const duration = bookingDuration({ fromDate, toDate, pickupTime, dropTime, flexibleTime });
+    if (!duration) return fail("Invalid pickup/drop date and time.");
+    const extraDayChange = extraRentalDayChange(booking, { flexibleTime, dropTime });
+    if (extraDayChange.days !== 0 && extraDayChange.rate === null) return fail("The saved daily rental rate could not be determined. No changes were saved.", 409);
+    const start = bookingTimestamp(fromDate, pickupTime);
+    const end = bookingTimestamp(toDate, dropTime);
     if (end < start || (end === start && typeof booking.flexibleTime !== "boolean")) return fail("Drop date and time must be after pickup date and time.");
     const changedVehicle = String(booking.vehicleId) !== String(vehicle._id);
-    const changedRange = changedVehicle || start !== bookingDay(booking.fromDate)?.getTime() + bookingMinutes(booking.pickupTime) * 60000 || end !== bookingDay(booking.toDate)?.getTime() + bookingMinutes(booking.dropTime) * 60000;
+    const changedRange = changedVehicle || start !== bookingTimestamp(bookingDay(booking.fromDate), booking.pickupTime) || end !== bookingTimestamp(bookingDay(booking.toDate), booking.dropTime);
     if (changedRange) {
       const candidates = await Booking.find({ _id: { $ne: booking._id }, vehicleId: vehicle._id, isDeleted: false, status: { $nin: ["cancelled", "completed"] } })
         .select("fromDate toDate pickupTime dropTime").lean();
       if (candidates.some(item => {
-        const lo = bookingDay(item.fromDate)?.getTime() + bookingMinutes(item.pickupTime) * 60000;
-        const hi = bookingDay(item.toDate)?.getTime() + bookingMinutes(item.dropTime) * 60000;
+        const lo = bookingTimestamp(bookingDay(item.fromDate), item.pickupTime);
+        const hi = bookingTimestamp(bookingDay(item.toDate), item.dropTime);
         return lo < end && hi > start;
       })) return fail("This vehicle is already booked during the selected dates and times.", 409);
       const maintenance = await Maintenance.exists({ vehicle: vehicle._id, isDeleted: false, status: { $nin: ["Cancelled", "Completed"] }, startDate: { $lt: new Date(end) }, endDate: { $gt: new Date(start) } });
@@ -3384,11 +3402,12 @@ export const updateBooking = async (req, res, next) => {
     }
     booking.fromDate = fromDate;
     booking.toDate = toDate;
-    if (hasOriginalEndDate) booking.originalEndDate = originalEndDate;
+    const datesChanged = booking.isModified("fromDate") || booking.isModified("toDate");
+    if (has("flexibleTime") && (typeof booking.flexibleTime === "boolean" || flexibleTime !== true)) booking.flexibleTime = flexibleTime;
     booking.pickupTime = pickupTime.trim();
     booking.dropTime = dropTime.trim();
-    if (changedRange) booking.totalDays = duration ? duration.days
-      : calculateTotalDaysFromDates(fromDate, toDate) + (booking.flexibleTime === false && dropMinutes > 480 ? 1 : 0);
+    if (datesChanged || changedVehicle) booking.totalDays = duration.days;
+    else if (extraDayChange.days !== 0) booking.totalDays = Math.max(1, Number(booking.totalDays || 1) + extraDayChange.days);
     if (changedVehicle) {
       booking.vehicleHistory.push({ fromVehicle: { vehicleId: booking.vehicleId, vehicleName: booking.vehicleName, vehicleNumber: booking.vehicleNumber }, toVehicle: { vehicleId: vehicle._id, vehicleName: vehicle.vehicleName, vehicleNumber: vehicle.vehicleNumber }, changedBy: req.user._id, note: "Vehicle changed through booking editor" });
       booking.vehicleId = vehicle._id;
@@ -3416,8 +3435,12 @@ export const updateBooking = async (req, res, next) => {
         }
       }
     }
-    // Keep the saved rental estimate unless explicitly supplied. Updating
-    // dates, the vehicle, an advance or discount must not silently reprice it.
+    // Only the late-day transition adjusts rental fare automatically. Repeated
+    // saves and later late-drop times retain the recorded fare and collections.
+    if (extraDayChange.days !== 0) {
+      booking.payment.vehicleRent = Math.max(0, Math.round((Number(booking.payment.vehicleRent || 0) + extraDayChange.amount) * 100) / 100);
+      booking.payment.rentalRate = extraDayChange.rate;
+    }
     if (booking.isModified("pickup.charge")) {
       booking.payment.pickupCharge = booking.pickupDropRequired && ["pickup", "pickup_drop"].includes(booking.serviceType) ? booking.pickup.charge : 0;
     }

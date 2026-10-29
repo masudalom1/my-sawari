@@ -1,5 +1,5 @@
 // Keep in sync with the Operations frontend's utils/bookingDuration.mjs.
-// Derive the effective return date once from the original calendar selection.
+// Late return adds a billing day, never a day of vehicle occupancy.
 export function bookingTimeMinutes(value) {
   const match = typeof value === "string" && value.trim().match(/^(\d{1,2}):(\d{2})\s*(AM|PM)?$/i);
   if (!match) return null;
@@ -17,24 +17,36 @@ function calendarDay(value) {
   return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === value ? date.getTime() : null;
 }
 
-export function effectiveBookingEndDate(originalEndDate, flexibleTime, dropTime) {
-  const original = calendarDay(originalEndDate);
-  const drop = bookingTimeMinutes(dropTime);
-  if (original === null || drop === null || typeof flexibleTime !== "boolean") return "";
-  return new Date(original + (!flexibleTime && drop > 480 ? 86400000 : 0)).toISOString().slice(0, 10);
+// Booking dates are UTC day keys; pickup/drop wall-clock times are in India.
+export function bookingTimestamp(date, time) {
+  const day = calendarDay(date), minutes = bookingTimeMinutes(time);
+  return day === null || minutes === null ? NaN : day + (minutes - 330) * 60000;
 }
 
-export function bookingDuration({ fromDate, toDate, originalEndDate = toDate, flexibleTime = false, pickupTime = "08:00 AM", dropTime = "08:00 AM" }) {
-  const from = calendarDay(fromDate), original = calendarDay(originalEndDate);
-  const enteredPickup = bookingTimeMinutes(pickupTime), dropMinutes = bookingTimeMinutes(dropTime);
-  if (typeof flexibleTime !== "boolean" || from === null || original === null || original < from || enteredPickup === null || dropMinutes === null) return null;
-  const effectiveEndDate = effectiveBookingEndDate(originalEndDate, flexibleTime, dropTime);
-  const to = calendarDay(effectiveEndDate);
-  if (to === null) return null;
-  const pickupMinutes = flexibleTime ? enteredPickup : 8 * 60;
+export function hasExtraRentalDay({ flexibleTime, dropTime }) {
+  const drop = bookingTimeMinutes(dropTime);
+  return flexibleTime === false && drop !== null && drop > 8 * 60;
+}
+
+// Keep edit adjustments tied to the agreed rental rate, not today's fleet price.
+export function extraRentalDayChange(booking, proposed) {
+  const days = Number(hasExtraRentalDay(proposed)) - Number(hasExtraRentalDay(booking));
+  const rent = Number(booking.payment?.vehicleRent);
+  const billedDays = Number(booking.totalDays);
+  const savedRate = booking.payment?.rentalRate;
+  const rate = savedRate != null && Number.isFinite(Number(savedRate)) && Number(savedRate) >= 0
+    ? Number(savedRate)
+    : booking.payment?.vehicleRent != null && Number.isFinite(rent) && rent >= 0 &&
+      Number.isInteger(billedDays) && billedDays > 0 ? rent / billedDays : null;
+  return { days, rate, amount: rate === null ? null : Math.round(days * rate * 100) / 100 };
+}
+
+export function bookingDuration({ fromDate, toDate, flexibleTime = false, pickupTime = "08:00 AM", dropTime = "08:00 AM" }) {
+  const from = calendarDay(fromDate), to = calendarDay(toDate);
+  const pickupMinutes = bookingTimeMinutes(pickupTime), dropMinutes = bookingTimeMinutes(dropTime);
+  if (typeof flexibleTime !== "boolean" || from === null || to === null || to < from || pickupMinutes === null || dropMinutes === null) return null;
   if (to + dropMinutes * 60000 < from + pickupMinutes * 60000) return null;
-  const baseDays = Math.max(1, Math.round((original - from) / 86400000));
-  const days = Math.max(1, Math.round((to - from) / 86400000));
-  return { baseDays, extraDays: days - baseDays, extensionDays: to > original ? 1 : 0, days, pickupMinutes, dropMinutes,
-    originalEndDate: new Date(original).toISOString().slice(0, 10), effectiveEndDate };
+  const baseDays = Math.max(1, Math.round((to - from) / 86400000));
+  const extraDays = hasExtraRentalDay({ flexibleTime, dropTime }) ? 1 : 0;
+  return { baseDays, extraDays, days: baseDays + extraDays, pickupMinutes, dropMinutes };
 }

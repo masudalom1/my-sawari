@@ -101,6 +101,7 @@ test("membership, manual discount, FASTag, pickup/drop and advance persist and r
   const fixture = await member("starter", { totalSaved: 10 });
   const body = bodyFor(fixture.mobileNumber, {
     fastagBalance: 250, discountAmount: 50, bookingAmount: 500, paymentMethod: "gpay",
+    paymentDate: dayFromToday(-1), paymentTime: "14:35",
     pickupDropRequired: true, serviceType: "pickup_drop",
     pickup: { location: "Pickup fixture", charge: 150 }, drop: { location: "Drop fixture", charge: 150 },
   });

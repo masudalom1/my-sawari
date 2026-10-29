@@ -111,8 +111,8 @@ const bookingSchema = new mongoose.Schema(
       required: true,
     },
 
-    // The staff-selected date; toDate stores the derived effective return date.
-    // Optional so existing bookings retain their saved interval and pricing.
+    // Legacy automatic-extension metadata. New bookings use toDate directly;
+    // retain the optional field so historical records remain readable.
     originalEndDate: {
       type: Date,
     },
@@ -177,7 +177,51 @@ const bookingSchema = new mongoose.Schema(
     // =========================
     // PRICING
     // =========================
+    // Existing database paths: optional, with no defaults/backfill on old bookings.
+    paymentDate: {
+      type: Date,
+    },
+    paymentTime: {
+      type: String,
+      trim: true,
+    },
+    customPaymentDate: {
+      type: Date,
+    },
+    transactionId: {
+      type: String,
+      trim: true,
+    },
+    // Existing flat aliases used by booking list/card consumers.
+    quotationAmount: { type: Number, min: 0 },
+    bookingAmount: { type: Number, min: 0 },
+    discountAmount: { type: Number, min: 0 },
+    securityDeposit: { type: Number, min: 0 },
+    fastagBalance: { type: Number, min: 0 },
+    paymentMethod: {
+      type: String,
+      enum: ["cash", "phonepe", "gpay", "razorpay", "mixed"],
+    },
     payment: {
+      paymentDate: {
+        type: Date,
+      },
+      paymentTime: {
+        type: String,
+        trim: true,
+      },
+      customPaymentDate: {
+        type: Date,
+      },
+      transactionId: {
+        type: String,
+        trim: true,
+      },
+      // Optional agreed rate for extra-day edits; no defaults/backfill on old records.
+      rentalRate: {
+        type: Number,
+        min: 0,
+      },
       vehicleRent: {
         type: Number,
         default: 0,
@@ -462,6 +506,16 @@ const bookingSchema = new mongoose.Schema(
 
 bookingSchema.pre("save", function () {
   if (this.payment) {
+    // Keep supported flat aliases in sync without backfilling old documents.
+    for (const [alias, field] of [
+      ["quotationAmount", "totalAmount"], ["bookingAmount", "bookingAmountPaid"],
+      ["discountAmount", "discountAmount"], ["securityDeposit", "securityDeposit"],
+      ["fastagBalance", "fastagAmount"], ["paymentMethod", "paymentMethod"],
+    ]) {
+      if ((this.isNew || this.get(alias) !== undefined) && (this.isNew || this.isModified(`payment.${field}`))) {
+        this.set(alias, this.get(`payment.${field}`));
+      }
+    }
     const totalAmount = Number(this.payment.totalAmount) || 0;
     const discount = Number(this.payment.discountAmount) || 0;
     const paid = Number(this.payment.bookingAmountPaid) || 0;

@@ -51,6 +51,7 @@ const ROW_PROJECTION = {
   "booking.toDate": 1,
   createdAt: 1,
   paymentDate: 1,
+  paymentTime: 1,
   lastCollectedAt: 1,
   lastCollectedByName: 1,
   type: 1,
