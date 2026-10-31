@@ -1,0 +1,279 @@
+import { test, before, after } from "node:test";
+import assert from "node:assert/strict";
+import { bookingDuration, bookingTimeMinutes } from "../shared/bookingDuration.mjs";
+import { startTestApp, client, createUserAndLogin, dayFromToday } from "./helpers/harness.mjs";
+
+let ctx, api, vehicleId, Booking, Membership, Customer, Maintenance;
+let sequence = 0;
+before(async () => {
+  ctx = await startTestApp();
+  api = client(ctx.base, (await createUserAndLogin(ctx.base)).token);
+  ({ default: Booking } = await import("../src/models/booking.model.js"));
+  ({ default: Membership } = await import("../src/models/membership.model.js"));
+  ({ default: Customer } = await import("../src/models/customer.model.js"));
+  ({ default: Maintenance } = await import("../src/models/maintenance.model.js"));
+  const created = await api("POST", "/vehicles/create", { vehicleName: "Time fixture", vehicleNumber: "KA01FT0001", manufacturer: "Test", fuelType: "Petrol", transmission: "Manual", seatingCapacity: 5 });
+  assert.equal(created.status, 201);
+  vehicleId = created.json.data._id;
+  assert.equal((await api("PUT", `/vehicles/update/${vehicleId}`, { pricePerDay: 1000 })).status, 200);
+});
+after(async () => { await ctx?.stop(); });
+function body(extra = {}) {
+  sequence += 1;
+  return { customerName: "Isolated time customer", mobileNumber: `920000${String(sequence).padStart(4, "0")}`,
+    vehicleId, paymentMethod: "cash", fromDate: dayFromToday(sequence * 5), toDate: dayFromToday(sequence * 5 + 2),
+    pickupTime: "08:00 AM", dropTime: "08:00 AM", ...extra };
+}
+
+test("standard mode adds one billing day without moving the saved return date", async () => {
+  for (const [dropTime, days] of [["07:59 AM", 2], ["08:00 AM", 2], ["08:01 AM", 3], ["09:00 AM", 3], ["11:59 PM", 3], ["12:01 AM", 2], ["12:00 PM", 3]]) {
+    const input = body({ dropTime, totalDays: 999, totalAmount: 1 });
+    const result = await api("POST", "/leads/create", input);
+    assert.equal(result.status, 201, result.json.message);
+    const raw = await Booking.collection.findOne({ _id: new ctx.mongoose.Types.ObjectId(result.json.booking._id) });
+    const saved = (await api("GET", `/bookings/${raw._id}`)).json.booking;
+    assert.equal(raw.flexibleTime, false);
+    assert.equal(saved.flexibleTime, false);
+    assert.equal(saved.totalDays, days, dropTime);
+    assert.equal(saved.payment.vehicleRent, days * 1000);
+    assert.equal(saved.payment.totalAmount, days * 1000);
+    assert.equal(saved.pickupTime, "08:00 AM");
+    assert.equal(saved.originalEndDate, undefined);
+    const effectiveEndDate = input.toDate;
+    assert.equal(saved.toDate.slice(0, 10), effectiveEndDate);
+    const unchanged = await api("PUT", `/leads/booking-update/${raw._id}`, { destination: "Read-back fixture" });
+    assert.equal(unchanged.status, 200, unchanged.json.message);
+    assert.equal(unchanged.json.booking.totalDays, days);
+    assert.equal(unchanged.json.booking.toDate.slice(0, 10), effectiveEndDate);
+    assert.deepEqual(unchanged.json.booking.payment, saved.payment);
+  }
+});
+
+test("both modes preserve editable pickup times and flexible pricing remains date-only", async () => {
+  const custom = await api("POST", "/leads/create", body({ flexibleTime: true, pickupTime: "14:30", dropTime: "16:00" }));
+  assert.equal(custom.status, 201, custom.json.message);
+  assert.equal(custom.json.booking.flexibleTime, true);
+  assert.equal(custom.json.booking.pickupTime, "14:30");
+  assert.equal(custom.json.booking.totalDays, 2);
+  assert.equal(custom.json.booking.payment.vehicleRent, 2000);
+  const fixed = await api("POST", "/leads/create", body({ flexibleTime: false, pickupTime: "10:00 AM", dropTime: "09:00 AM" }));
+  assert.equal(fixed.status, 201);
+  assert.equal(fixed.json.booking.pickupTime, "10:00 AM");
+  assert.equal(fixed.json.booking.totalDays, 3);
+});
+
+test("late-drop pricing recalculates membership caps, manual discount, charges, advance and balance", async () => {
+  for (const [plan, saved, expected] of [["starter", 0, 165], ["plus", 14980, 20], ["pro", 0, 413]]) {
+    const input = body({ dropTime: "09:00 AM", fastagBalance: 250, discountAmount: 50, bookingAmount: 500,
+      pickupDropRequired: true, serviceType: "pickup_drop", pickup: { location: "Fixture", charge: 150 }, drop: { location: "Fixture", charge: 150 } });
+    const customer = await Customer.create({ customerName: input.customerName, mobileNumber: input.mobileNumber });
+    const membership = await Membership.create({ customerId: customer._id, membershipId: `MEM-TIME-${sequence}`, plan,
+      activatedAt: new Date(Date.now() - 86400000), expiresAt: new Date(Date.now() + 365 * 86400000), totalSaved: saved, payment: { status: "completed" } });
+    const quoted = await api("POST", "/memberships/discount", { ...input, pickupCharge: 150, dropCharge: 150 });
+    assert.equal(quoted.status, 200, quoted.json.message);
+    assert.equal(quoted.json.discount.eligibleBase, 3300);
+    assert.equal(quoted.json.discount.amount, expected);
+    const created = await api("POST", "/leads/create", { ...input, expectedMembershipDiscount: expected });
+    assert.equal(created.status, 201, created.json.message);
+    const payment = created.json.booking.payment;
+    assert.equal(payment.vehicleRent, 3000);
+    assert.equal(payment.totalAmount, 3550);
+    assert.equal(payment.membershipDiscount, expected);
+    assert.equal(payment.discountAmount, expected + 50);
+    assert.equal(payment.balanceAmount, 3550 - expected - 50 - 500);
+    assert.equal((await Membership.findById(membership._id)).totalSaved, saved + expected);
+    const flexible = await api("POST", "/memberships/discount", { ...input, flexibleTime: true, pickupCharge: 150, dropCharge: 150 });
+    assert.equal(flexible.json.discount.eligibleBase, 2300);
+  }
+});
+
+test("invalid times, invalid modes and reversed time ranges are rejected without writes", async () => {
+  const count = await Booking.countDocuments();
+  for (const invalid of ["25:00", "08:60", "13:00 PM", "00:00 AM", "invalid", "", null, {}]) {
+    for (const key of ["pickupTime", "dropTime"]) {
+      const input = body({ flexibleTime: true, [key]: invalid });
+      assert.equal((await api("POST", "/leads/create", input)).status, 400);
+      assert.equal((await api("POST", "/memberships/discount", input)).status, 400);
+    }
+  }
+  for (const flexibleTime of ["false", 0, null]) assert.equal((await api("POST", "/leads/create", body({ flexibleTime }))).status, 400);
+  const input = body({ pickupTime: "10:00 AM", dropTime: "09:00 AM", flexibleTime: true });
+  input.toDate = input.fromDate;
+  assert.equal((await api("POST", "/leads/create", input)).status, 400);
+  assert.equal(await Booking.countDocuments(), count);
+});
+
+test("actual intervals enforce conflicts and allow use after return despite an extra billed day", async () => {
+  const input = body({ dropTime: "09:00 AM" });
+  const result = await api("POST", "/leads/create", input);
+  assert.equal(result.status, 201);
+  const effectiveEndDate = result.json.booking.toDate.slice(0, 10);
+  const overlap = await api("POST", "/leads/create", body({ fromDate: input.toDate, toDate: dayFromToday(sequence * 5 + 3), flexibleTime: true, pickupTime: "08:30 AM" }));
+  assert.equal(overlap.status, 409);
+  const adjacent = await api("POST", "/leads/create", body({ fromDate: effectiveEndDate, toDate: effectiveEndDate, flexibleTime: true, pickupTime: "09:00 AM", dropTime: "11:00 AM" }));
+  assert.equal(adjacent.status, 201, adjacent.json.message);
+  const maintenanceInput = body({ dropTime: "09:00 AM" });
+  const maintenance = await Maintenance.create({ vehicle: vehicleId, startDate: `${maintenanceInput.toDate}T08:00:00+05:30`, endDate: `${maintenanceInput.toDate}T14:00:00+05:30`, status: "Scheduled" });
+  const extendedConflict = await api("POST", "/leads/create", maintenanceInput);
+  assert.equal(extendedConflict.status, 409);
+  assert.match(extendedConflict.json.message, /maintenance/);
+  const blocked = await api("POST", "/leads/create", body({ fromDate: maintenanceInput.toDate, toDate: maintenanceInput.toDate, flexibleTime: true, pickupTime: "11:00 AM", dropTime: "12:00 PM" }));
+  assert.equal(blocked.status, 409);
+  assert.match(blocked.json.message, /maintenance/);
+  await Maintenance.updateOne({ _id: maintenance._id }, { status: "Completed" });
+  assert.equal((await api("POST", "/leads/create", maintenanceInput)).status, 201);
+});
+
+test("historical bookings keep their absent mode, saved times and fare on reopen and edit", async () => {
+  const template = await api("POST", "/leads/create", body({ flexibleTime: true, pickupTime: "11:00 AM", dropTime: "06:00 PM" }));
+  const id = new ctx.mongoose.Types.ObjectId(template.json.booking._id);
+  await Booking.collection.updateOne({ _id: id }, { $unset: { flexibleTime: "", originalEndDate: "" }, $set: { totalDays: 7, "payment.vehicleRent": 7777, "payment.totalAmount": 7777, "payment.balanceAmount": 7777 } });
+  const before = await Booking.collection.findOne({ _id: id });
+  const opened = await api("GET", `/bookings/${id}`);
+  assert.equal(opened.json.booking.flexibleTime, undefined);
+  assert.equal(opened.json.booking.totalDays, 7);
+  const edited = await api("PUT", `/leads/booking-update/${id}`, { customerName: "Legacy still editable" });
+  assert.equal(edited.status, 200, edited.json.message);
+  const after = await Booking.collection.findOne({ _id: id });
+  assert.equal(after.flexibleTime, undefined);
+  assert.equal(after.totalDays, 7);
+  assert.equal(after.pickupTime, before.pickupTime);
+  assert.deepEqual(after.payment, before.payment);
+});
+
+test("browser and server duration rules agree at time and date boundaries", async () => {
+  const browser = await import("../../my-sawari-Frontend/utils/bookingDuration.mjs");
+  for (const flexibleTime of [false, true]) for (const dropTime of ["07:59", "08:00", "08:01", "09:00", "23:59", "12:00 AM", "12:00 PM", "bad"]) {
+    const input = { fromDate: "2026-12-31", toDate: "2027-01-02", flexibleTime, pickupTime: "08:00", dropTime };
+    assert.deepEqual(browser.bookingDuration(input), bookingDuration(input));
+  }
+  assert.equal(bookingTimeMinutes("12:00 AM"), 0);
+  assert.equal(bookingTimeMinutes("12:00 PM"), 720);
+});
+
+test("maintenance checks use the actual IST interval for custom pickup and edited drop times", async () => {
+  const input = body({ pickupTime: "07:00 AM", dropTime: "08:00 AM" });
+  const maintenance = await Maintenance.create({ vehicle: vehicleId, startDate: `${input.fromDate}T06:30:00+05:30`, endDate: `${input.fromDate}T07:30:00+05:30`, status: "Scheduled" });
+  assert.equal((await api("POST", "/leads/create", input)).status, 409, "early pickup overlaps maintenance in real IST time");
+  const valid = await api("POST", "/leads/create", { ...input, pickupTime: "07:30 AM" });
+  assert.equal(valid.status, 201, valid.json.message);
+  const blockedPickup = await api("PUT", `/leads/booking-update/${valid.json.booking._id}`, { pickupTime: "07:00 AM" });
+  assert.equal(blockedPickup.status, 409);
+  await Maintenance.create({ vehicle: vehicleId, startDate: `${input.toDate}T08:30:00+05:30`, endDate: `${input.toDate}T10:00:00+05:30`, status: "Scheduled" });
+  const before = await Booking.findById(valid.json.booking._id).lean();
+  const blockedDrop = await api("PUT", `/leads/booking-update/${valid.json.booking._id}`, { dropTime: "09:00 AM" });
+  assert.equal(blockedDrop.status, 409);
+  assert.deepEqual(await Booking.findById(valid.json.booking._id).lean(), before, "failed edit cannot save an extra charge or dates");
+  await Maintenance.updateOne({ _id: maintenance._id }, { status: "Completed" });
+});
+
+test("all dashboard calendar responses retain the saved mode, times, dates and booking id", async () => {
+  for (const [flexibleTime, dropTime, days] of [[false, "08:00 AM", 2], [false, "09:00 AM", 3], [false, "11:00 AM", 3], [true, "11:00 AM", 2]]) {
+    const input = body({ flexibleTime, dropTime });
+    const created = await api("POST", "/leads/create", input);
+    assert.equal(created.status, 201, created.json.message);
+    const id = created.json.booking._id;
+    const count = await Booking.countDocuments();
+    const before = await Booking.findById(id).lean();
+    const range = new URLSearchParams({ scope: "range", from: `${input.fromDate}T00:00:00Z`, to: `${input.toDate}T23:59:59Z` });
+    for (const path of ["/dashboard/bookings/import", "/dashboard/bookings/timeline?scope=live", `/dashboard/bookings/timeline?${range}`]) {
+      const result = await api("GET", path);
+      assert.equal(result.status, 200, result.json.message);
+      const booking = result.json.bookings.find(item => item._id === id);
+      assert.ok(booking, path);
+      assert.equal(booking.flexibleTime, flexibleTime, path);
+      assert.equal(booking.pickupTime, "08:00 AM");
+      assert.equal(booking.dropTime, dropTime);
+      assert.equal(booking.fromDate.slice(0, 10), input.fromDate);
+      assert.equal(booking.originalEndDate, undefined);
+      assert.equal(booking.toDate.slice(0, 10), input.toDate);
+      assert.equal(booking.totalDays, days);
+    }
+    assert.equal(await Booking.countDocuments(), count);
+    assert.deepEqual(await Booking.findById(id).lean(), before, "calendar reads leave pricing and records unchanged");
+  }
+});
+
+test("obsolete extension metadata and forged totals cannot change the selected return date", async () => {
+  const input = body({ dropTime: "09:00 AM", flexibleTime: false });
+  input.originalEndDate = input.fromDate;
+  const created = await api("POST", "/leads/create", { ...input, totalDays: 999, totalAmount: 1 });
+  assert.equal(created.status, 201, created.json.message);
+  const saved = created.json.booking;
+  assert.equal(saved.toDate.slice(0, 10), input.toDate);
+  assert.equal(saved.originalEndDate, undefined);
+  assert.equal(saved.totalDays, 3);
+  assert.equal(saved.payment.vehicleRent, 3000);
+  const quoted = await api("POST", "/memberships/discount", input);
+  assert.equal(quoted.status, 200);
+  assert.equal(quoted.json.discount.eligibleBase, 3000);
+  const count = await Booking.countDocuments();
+  for (let retry = 0; retry < 2; retry++) {
+    const edited = await api("PUT", `/leads/booking-update/${saved._id}`, { originalEndDate: input.originalEndDate, toDate: input.toDate, dropTime: input.dropTime });
+    assert.equal(edited.status, 200, edited.json.message);
+    assert.equal(edited.json.booking.toDate.slice(0, 10), input.toDate);
+    assert.equal(edited.json.booking.totalDays, 3);
+    assert.deepEqual(edited.json.booking.payment, saved.payment);
+  }
+  assert.equal(await Booking.countDocuments(), count);
+});
+
+test("editing adds/removes only the extra day at the agreed rate without duplicate charges or collection changes", async () => {
+  const { default: PaymentHistory } = await import("../src/models/paymentHistory.model.js");
+  const input = body({ pickupTime: "07:30 AM", fastagBalance: 250, discountAmount: 75, bookingAmount: 500 });
+  const created = await api("POST", "/leads/create", input);
+  assert.equal(created.status, 201, created.json.message);
+  const saved = created.json.booking;
+  const id = saved._id;
+  const historyBefore = await PaymentHistory.find({ bookingId: id }).lean();
+  const count = await Booking.countDocuments();
+  assert.equal(saved.payment.rentalRate, 1000);
+  await api("PUT", `/vehicles/update/${vehicleId}`, { pricePerDay: 6000 });
+  try {
+    for (const [dropTime, days, rent] of [["08:01 AM", 3, 3000], ["09:00 AM", 3, 3000], ["11:00 AM", 3, 3000], ["08:00 AM", 2, 2000], ["09:00 AM", 3, 3000]]) {
+      const edited = await api("PUT", `/leads/booking-update/${id}`, { dropTime });
+      assert.equal(edited.status, 200, edited.json.message);
+      const current = (await api("GET", `/bookings/${id}`)).json.booking;
+      assert.equal(current.totalDays, days);
+      assert.equal(current.toDate.slice(0, 10), input.toDate);
+      assert.equal(current.pickupTime, input.pickupTime);
+      assert.equal(current.payment.vehicleRent, rent);
+      assert.equal(current.payment.totalAmount, rent + 250);
+      assert.equal(current.payment.balanceAmount, rent + 250 - 75 - 500);
+      for (const field of ["rentalRate", "bookingAmountPaid", "securityDeposit", "fastagAmount", "discountAmount", "membershipDiscount", "paymentMethod", "paymentBreakdown", "totalCollected"]) {
+        assert.deepEqual(current.payment[field], saved.payment[field], field);
+      }
+    }
+    const flexible = await api("PUT", `/leads/booking-update/${id}`, { flexibleTime: true, pickupTime: "10:30 AM", dropTime: "10:30 AM" });
+    assert.equal(flexible.status, 200, flexible.json.message);
+    assert.equal(flexible.json.booking.payment.vehicleRent, 2000);
+    assert.equal(flexible.json.booking.totalDays, 2);
+    assert.equal(flexible.json.booking.pickupTime, "10:30 AM");
+    const off = await api("PUT", `/leads/booking-update/${id}`, { flexibleTime: false });
+    assert.equal(off.status, 200, off.json.message);
+    assert.equal(off.json.booking.payment.vehicleRent, 3000);
+    assert.equal(off.json.booking.pickupTime, "10:30 AM");
+    assert.equal((await api("PUT", `/leads/booking-update/${id}`, { flexibleTime: "false" })).status, 400);
+    assert.deepEqual(await PaymentHistory.find({ bookingId: id }).lean(), historyBefore);
+    assert.equal(await Booking.countDocuments(), count);
+  } finally {
+    await api("PUT", `/vehicles/update/${vehicleId}`, { pricePerDay: 1000 });
+  }
+});
+
+test("previously extended bookings keep their actual saved end date and fare on reopening and later late times", async () => {
+  const input = body({ dropTime: "09:00 AM" });
+  const created = await api("POST", "/leads/create", input);
+  const id = new ctx.mongoose.Types.ObjectId(created.json.booking._id);
+  const original = new Date(`${input.toDate}T00:00:00Z`);
+  const extended = new Date(Number(original) + 86400000);
+  await Booking.collection.updateOne({ _id: id }, { $set: { originalEndDate: original, toDate: extended } });
+  const before = (await api("GET", `/bookings/${id}`)).json.booking;
+  for (const payload of [{ destination: "Legacy interval preserved" }, { dropTime: "10:00 AM", toDate: extended.toISOString().slice(0, 10) }]) {
+    const edited = await api("PUT", `/leads/booking-update/${id}`, payload);
+    assert.equal(edited.status, 200, edited.json.message);
+    assert.equal(edited.json.booking.toDate, extended.toISOString());
+    assert.equal(edited.json.booking.totalDays, before.totalDays);
+    assert.deepEqual(edited.json.booking.payment, before.payment);
+  }
+});

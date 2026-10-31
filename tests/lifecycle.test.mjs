@@ -103,9 +103,12 @@ test("fresh booking (transaction) records a PhonePe advance and links it to the 
     toDate: dayFromToday(2),
     pickupTime: "10:00 AM",
     dropTime: "10:00 AM",
+    flexibleTime: true,
     bookingAmount: 500,
     paymentMethod: "phonepe",
     upiLast4: "1234",
+    paymentDate: dayFromToday(-1),
+    paymentTime: "14:35",
   });
   assert.equal(res.status, 201, res.json.message);
   state.bookingId = res.json.booking._id;

@@ -1,0 +1,143 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import mongoose from "mongoose";
+import { editIntegrityGuard } from "./helpers/edit-integrity.mjs";
+import { startTestApp, client, createUserAndLogin } from "./helpers/harness.mjs";
+
+test("booking editor fetches employee-owned records and persists flat and nested pricing", async (t) => {
+  const ctx = await startTestApp();
+  t.after(() => ctx.stop());
+  const { default: Booking } = await import("../src/models/booking.model.js");
+  const { default: Vehicle } = await import("../src/models/vehicle.model.js");
+  const owner = await createUserAndLogin(ctx.base);
+  const outsider = await createUserAndLogin(ctx.base);
+  const api = client(ctx.base, owner.token);
+  const credentials = { fullName: "Booking Staff", mobileNumber: "9876543211", email: "booking-staff@test.dev", password: "Passw0rd!", role: "FLEET_MANAGER" };
+  assert.equal((await api("POST", "/auth/employees", credentials)).status, 201);
+  const login = await client(ctx.base)("POST", "/auth/login", { emailOrMobile: credentials.email, password: credentials.password });
+  assert.equal(login.status, 200);
+  const staff = client(ctx.base, login.json.data.accessToken);
+  const foreign = client(ctx.base, outsider.token);
+  const vehicle = new mongoose.Types.ObjectId();
+  await Vehicle.collection.insertOne({ _id: vehicle, company: new mongoose.Types.ObjectId(owner.user.id), isDeleted: false, vehicleName: "Swift", vehicleNumber: "KA01AB1234", pricePerDay: 1000 });
+  const booking = await Booking.create({ company: owner.user.id, createdBy: owner.user.id, customerName: "Before", mobileNumber: "9876500001", vehicleId: vehicle, fromDate: "2026-11-01", toDate: "2026-11-03", payment: { vehicleRent: 2000, totalAmount: 2050, bookingAmountPaid: 500, discountAmount: 100, securityDeposit: 300, fastagAmount: 50 } });
+  const path = `/bookings/${booking._id}`;
+  const verifyIntegrity = await editIntegrityGuard();
+  const bookingCount = await Booking.countDocuments();
+  const updatePath = `/leads/booking-update/${booking._id}`;
+  assert.equal((await client(ctx.base)("GET", path)).status, 401);
+  assert.equal((await client(ctx.base)("PUT", updatePath, {})).status, 401);
+  const opened = await staff("GET", path);
+  assert.equal(opened.status, 200);
+  assert.equal(opened.json.booking._id, String(booking._id));
+  assert.equal(opened.json.booking.vehicleId._id, String(vehicle));
+  assert.equal(opened.json.booking.customerName, "Before");
+  assert.equal(opened.json.booking.payment.bookingAmountPaid, 500);
+  const payload = { customerName: "After", mobileNumber: "9876500002", vehicleId: String(vehicle), fromDate: "2026-11-01", toDate: "2026-11-04", pickupTime: "10:30 AM", dropTime: "06:00 PM", bookingAmount: 600, discountAmount: 150, securityDeposit: 400, fastagBalance: 100, paymentMethod: "mixed", paymentBreakdown: { cash: 200, phonePe: 400, razorpay: 0 } };
+  const saved = await staff("PUT", updatePath, payload);
+  assert.equal(saved.status, 200, saved.json.message);
+  const persisted = await Booking.findById(booking._id).lean();
+  assert.equal(persisted.customerName, "After");
+  assert.equal(persisted.toDate.toISOString().slice(0, 10), "2026-11-04");
+  assert.equal(persisted.payment.bookingAmountPaid, 600);
+  assert.equal(persisted.payment.discountAmount, 150);
+  assert.equal(persisted.payment.securityDeposit, 400);
+  assert.equal(persisted.payment.fastagAmount, 100);
+  assert.equal(persisted.payment.vehicleRent, 2000);
+  assert.equal(persisted.payment.totalAmount, 2100);
+  assert.equal(persisted.payment.balanceAmount, 1350);
+  assert.equal(persisted.payment.paymentBreakdown.phonePe, 400);
+  const nested = { ...payload, payment: { bookingAmountPaid: 700, discountAmount: 200, securityDeposit: 500, fastagAmount: 150, paymentMethod: "cash" } };
+  assert.equal((await api("PUT", updatePath, nested)).status, 200);
+  const reopened = await staff("GET", path);
+  assert.equal(reopened.json.booking.payment.bookingAmountPaid, 700);
+  assert.equal(reopened.json.booking.payment.fastagAmount, 150);
+  assert.equal(await Booking.countDocuments(), bookingCount);
+  // Unified fleet: any signed-in user opens and saves the clicked booking by its _id.
+  const foreignOpened = await foreign("GET", path);
+  assert.equal(foreignOpened.status, 200);
+  assert.equal(foreignOpened.json.booking._id, String(booking._id));
+  assert.equal(foreignOpened.json.booking.customerName, "After");
+  const foreignSaved = await foreign("PUT", updatePath, nested);
+  assert.equal(foreignSaved.status, 200, foreignSaved.json.message);
+  assert.equal(foreignSaved.json.booking._id, String(booking._id));
+  assert.equal(await Booking.countDocuments(), bookingCount);
+  // Legacy bookings stamped with the creating employee's own id (most live
+  // bookings) open and save for the rest of the fleet too.
+  const legacy = await Booking.create({ company: login.json.data.user.id, createdBy: login.json.data.user.id, customerName: "Legacy", mobileNumber: "9876500009", vehicleId: vehicle, fromDate: "2026-12-01", toDate: "2026-12-02", payment: { vehicleRent: 1000, totalAmount: 1000 } });
+  const legacyOpened = await api("GET", `/bookings/${legacy._id}`);
+  assert.equal(legacyOpened.status, 200);
+  assert.equal(legacyOpened.json.booking.customerName, "Legacy");
+  const legacySaved = await api("PUT", `/leads/booking-update/${legacy._id}`, { customerName: "Legacy edited" });
+  assert.equal(legacySaved.status, 200, legacySaved.json.message);
+  assert.equal((await Booking.findById(legacy._id).lean()).customerName, "Legacy edited");
+  await Booking.deleteOne({ _id: legacy._id });
+  // Unified fleet: only a removed vehicle is outside the bookable set.
+  const removedVehicle = new mongoose.Types.ObjectId();
+  await Vehicle.collection.insertOne({ _id: removedVehicle, company: new mongoose.Types.ObjectId(outsider.user.id), isDeleted: true });
+  const choices = await staff("GET", "/bookings/vehicles");
+  assert.equal(choices.status, 200);
+  assert.deepEqual(choices.json.vehicles.map(item => item._id), [String(vehicle)]);
+  assert.equal((await client(ctx.base)("GET", "/bookings/vehicles")).status, 401);
+  // Reproduce the reported historical data: owned booking, unavailable vehicle.
+  await Booking.updateOne({ _id: booking._id }, { vehicleId: removedVehicle });
+  const inconsistentBefore = await Booking.findById(booking._id).lean();
+  const inconsistent = await staff("GET", path);
+  assert.equal(inconsistent.status, 200);
+  assert.equal(inconsistent.json.booking.vehicleId, null);
+  assert.equal(inconsistent.json.vehicleSelectionRequired, true);
+  const blocked = await staff("PUT", updatePath, { ...payload, vehicleId: String(removedVehicle) });
+  assert.equal(blocked.status, 409);
+  assert.equal(blocked.json.code, "BOOKING_VEHICLE_UNAVAILABLE");
+  assert.deepEqual(await Booking.findById(booking._id).lean(), inconsistentBefore);
+  // Selecting an owned vehicle repairs the relationship through a real save.
+  const repaired = await staff("PUT", updatePath, nested);
+  assert.equal(repaired.status, 200);
+  const reloadedRepair = await staff("GET", path);
+  assert.equal(reloadedRepair.json.booking.vehicleId._id, String(vehicle));
+  assert.equal(reloadedRepair.json.vehicleSelectionRequired, false);
+  const rejectedCreate = await staff("POST", "/leads/create", { ...payload, vehicleId: String(removedVehicle), vehicleType: "car" });
+  assert.equal(rejectedCreate.status, 404);
+  assert.equal((await staff("PUT", updatePath, { ...payload, vehicleId: String(removedVehicle) })).status, 404);
+  assert.equal((await staff("GET", `/bookings/${vehicle}`)).status, 404);
+  assert.equal((await staff("GET", "/bookings/invalid")).status, 400);
+  assert.equal((await staff("PUT", "/leads/booking-update/invalid", payload)).status, 400);
+  assert.equal((await staff("PUT", updatePath, { ...payload, toDate: "2026-10-01" })).status, 400);
+  assert.equal((await Booking.findById(booking._id)).payment.bookingAmountPaid, 700);
+  assert.equal((await Booking.findById(booking._id)).isDeleted, false);
+  const missingId = new mongoose.Types.ObjectId();
+  const missingGet = await staff("GET", `/bookings/${missingId}`);
+  const missingPut = await staff("PUT", `/leads/booking-update/${missingId}`, payload);
+  assert.equal(missingGet.status, 404);
+  assert.equal(missingPut.status, 404);
+  assert.equal(missingGet.json.message, "Booking not found.");
+  assert.equal(missingPut.json.message, "Booking not found.");
+  // A real Lead ID must never be used as a substitute Booking identifier.
+  const { default: Lead } = await import("../src/models/lead.model.js");
+  const leadId = new mongoose.Types.ObjectId();
+  await Lead.collection.insertOne({ _id: leadId, company: new mongoose.Types.ObjectId(owner.user.id), isDeleted: false });
+  assert.equal((await staff("GET", `/bookings/${leadId}`)).status, 404);
+  assert.equal((await staff("PUT", `/leads/booking-update/${leadId}`, payload)).status, 404);
+  await Booking.updateOne({ _id: booking._id }, { isDeleted: true });
+  assert.equal((await staff("GET", path)).status, 404);
+  assert.equal((await staff("PUT", updatePath, payload)).status, 404);
+  await Booking.updateOne({ _id: booking._id }, { isDeleted: false });
+  assert.equal(reopened.json.booking.customerName, "After");
+  assert.equal(reopened.json.booking.toDate.slice(0, 10), "2026-11-04");
+  await Booking.updateOne({ _id: booking._id }, {
+    aadhaarNumber: "test-identity", drivingLicenseNumber: "TEST-LICENSE",
+    pickupDropRequired: true, serviceType: "pickup_drop",
+    pickup: { location: "Pickup", charge: 120 }, drop: { location: "Drop", charge: 80 },
+  });
+  const detailsOnly = { ...payload, pickupDropRequired: true, pickup: { location: "Pickup updated" }, drop: { location: "Drop updated" } };
+  for (const field of ["bookingAmount", "discountAmount", "securityDeposit", "fastagBalance", "paymentMethod", "paymentBreakdown"]) delete detailsOnly[field];
+  assert.equal((await staff("PUT", updatePath, detailsOnly)).status, 200);
+  const detailsReloaded = (await staff("GET", path)).json.booking;
+  assert.equal(detailsReloaded.aadhaarNumber, "test-identity");
+  assert.equal(detailsReloaded.drivingLicenseNumber, "TEST-LICENSE");
+  assert.equal(detailsReloaded.pickup.charge, 120);
+  assert.equal(detailsReloaded.drop.charge, 80);
+  assert.equal(detailsReloaded.payment.bookingAmountPaid, 700);
+  assert.equal(detailsReloaded.payment.fastagAmount, 150);
+  await verifyIntegrity();
+});

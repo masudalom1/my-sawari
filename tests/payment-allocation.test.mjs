@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { normalizeData, buildReport } from "../../my-sawari-Frontend/app/features/revenue/engine.js";
 import { allocateRevenuePayment, normalizeRevenueChannelSplit } from "../src/services/paymentAllocation.service.js";
-import { classifyPayment } from "../../shared/paymentReporting.mjs";
+import { classifyPayment } from "../shared/paymentReporting.mjs";
 import { paymentAmount } from "../src/utils/revenue.utils.js";
 
 test("Revenue figures match the 289-case baseline captured before extraction", () => {
@@ -83,7 +83,7 @@ test("legacy split normalization preserves PhonePe and refuses nonfinite or unkn
 });
 
 test("equivalent vehicle/date/refund scopes reconcile with Revenue's explicit GPay compatibility mapping", async () => {
-  const { summarizePayments, paymentReportRow } = await import("../../shared/paymentReporting.mjs");
+  const { summarizePayments, paymentReportRow } = await import("../shared/paymentReporting.mjs");
   const payments = [
     { amount: 100, paymentMethod: "cash", type: "booking" },
     { amount: 200, paymentMethod: "gpay", type: "handover", paymentBreakdown: { gpay: 200 } },

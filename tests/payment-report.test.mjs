@@ -1,7 +1,7 @@
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { startTestApp, client, createUserAndLogin } from "./helpers/harness.mjs";
-import { paymentReportRow, summarizePayments } from "../../shared/paymentReporting.mjs";
+import { paymentReportRow, summarizePayments } from "../shared/paymentReporting.mjs";
 
 let ctx, api, token, owner, otherApi, otherToken, fixtures, PaymentHistory;
 before(async () => {

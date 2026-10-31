@@ -7,7 +7,9 @@ import Maintenance from "../models/maintenance.model.js";
 // add vehicle screen
 export const createVehicle = async (req, res, next) => {
   try {
-    const companyId = req.user.company || req.user._id;
+    // Same scope booking reads use: an employee's vehicles belong to the
+    // owner who created them, otherwise New Booking can never select them.
+    const companyId = req.user.company || req.user.createdBy || req.user._id;
 
     const {
       vehicleName,
@@ -885,6 +887,9 @@ export const getMaintenances = async (req, res, next) => {
 
 export const getMaintenanceById = async (req, res, next) => {
   try {
+    if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+      return res.status(400).json({ success: false, message: "Invalid maintenance id" });
+    }
     const item = await Maintenance.findOne({
       _id: req.params.id,
       isDeleted: false,
@@ -893,12 +898,13 @@ export const getMaintenanceById = async (req, res, next) => {
       .populate({ path: "createdBy", select: "name fullName email" })
       .lean();
 
+    // Unified fleet: any maintenance on a Fleet Dashboard (non-deleted)
+    // vehicle, whichever company registered it, like New Booking.
     if (!item || !await Vehicle.exists({
       _id: item.vehicle?._id || item.vehicle,
-      company: req.user.company || req.user.createdBy || req.user._id,
       isDeleted: false,
     })) {
-      return res.status(404).json({ success: false, message: "Not found" });
+      return res.status(404).json({ success: false, message: "Maintenance record not found" });
     }
 
     return res.status(200).json({ success: true, data: item });
@@ -914,14 +920,13 @@ export const updateMaintenance = async (req, res, next) => {
       return res.status(400).json({ success: false, message: "Invalid maintenance id" });
     }
     const maintenance = await Maintenance.findOne({ _id: req.params.id, isDeleted: false });
-    const company = req.user.company || req.user.createdBy || req.user._id;
     if (!maintenance || !await Vehicle.exists({
-      _id: maintenance.vehicle, company, isDeleted: false,
+      _id: maintenance.vehicle, isDeleted: false,
     })) {
       return res.status(404).json({ success: false, message: "Maintenance record not found" });
     }
     if (Object.hasOwn(req.body, "vehicle") && !await Vehicle.exists({
-      _id: req.body.vehicle, company, isDeleted: false,
+      _id: req.body.vehicle, isDeleted: false,
     })) {
       return res.status(404).json({ success: false, message: "Vehicle not found" });
     }

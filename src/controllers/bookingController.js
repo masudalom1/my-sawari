@@ -2,6 +2,17 @@ import mongoose from "mongoose";
 import Booking from "../models/booking.model.js";
 import Handover from "../models/handover.model.js";
 import User from "../models/user.model.js";
+import Vehicle from "../models/vehicle.model.js";
+
+export const getBookingVehicles = async (req, res, next) => {
+  try {
+    // Unified fleet: the same vehicles the Fleet Dashboard shows
+    // (/dashboard/import), whichever company registered them.
+    const vehicles = await Vehicle.find({ isDeleted: false })
+      .select("vehicleName vehicleNumber category status pricePerDay images").lean();
+    return res.json({ success: true, vehicles });
+  } catch (error) { next(error); }
+};
 
 export const getBookingDetails = async (req, res) => {
   try {
@@ -175,7 +186,6 @@ export const getBookingDetails = async (req, res) => {
 export const getBookingById = async (req, res) => {
   try {
     const { id } = req.params;
-    const companyId = req.user?.company || req.user?._id;
 
     if (!mongoose.isValidObjectId(id)) {
       return res.status(400).json({
@@ -184,12 +194,12 @@ export const getBookingById = async (req, res) => {
       });
     }
 
+    // Unified fleet: same rule as the booking update (lead.controller.js).
     const booking = await Booking.findOne({
       _id: id,
-      ...(companyId ? { company: companyId } : {}),
       isDeleted: false,
     })
-      .populate("vehicleId")
+      .populate({ path: "vehicleId", match: { isDeleted: false } })
       .lean();
 
     if (!booking) {
@@ -199,7 +209,7 @@ export const getBookingById = async (req, res) => {
       });
     }
 
-    return res.json({ success: true, booking });
+    return res.json({ success: true, booking, vehicleSelectionRequired: !booking.vehicleId });
   } catch (error) {
     console.error("getBookingById error:", error);
     return res.status(500).json({

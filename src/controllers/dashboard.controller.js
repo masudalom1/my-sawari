@@ -11,6 +11,11 @@ import PaymentHistory, {
 import Handover from "../models/handover.model.js";
 import VehicleReturn from "../models/vehicleReturn.model.js";
 import {
+  allocateRevenuePayment,
+  revenuePaymentAmount,
+  revenuePaymentBreakdown,
+} from "../services/paymentAllocation.service.js";
+import {
   parseRevenueRange,
   daysBetweenKeys,
   emptyRevenueTotals,
@@ -111,7 +116,7 @@ const MAX_RANGE_MS = 400 * TIMELINE_DAY_MS;
  
 const BOOKING_FIELDS =
   "_id bookingCode customerName mobileNumber destination fromDate toDate " +
-  "pickupTime dropTime totalDays vehicleId vehicleName vehicleNumber status " +
+  "pickupTime dropTime flexibleTime originalEndDate totalDays vehicleId vehicleName vehicleNumber status " +
   "pickup.location pickup.landmark";
  
 const HANDOVER_FIELDS =
@@ -138,6 +143,8 @@ function formatBooking(booking, handover) {
     toDate: booking.toDate,
     pickupTime: booking.pickupTime,
     dropTime: booking.dropTime,
+    flexibleTime: booking.flexibleTime,
+    originalEndDate: booking.originalEndDate,
     totalDays: booking.totalDays,
     vehicleId: booking.vehicleId?._id || booking.vehicleId,
     vehicleName: booking.vehicleName || "",
@@ -425,7 +432,7 @@ export const getBookingsForImport = async (req, res) => {
         {
           select:
             "_id bookingCode customerName mobileNumber alternateMobileNumber " +
-            "destination fromDate toDate pickupTime dropTime totalDays vehicleId " +
+            "destination fromDate toDate pickupTime dropTime flexibleTime originalEndDate totalDays vehicleId " +
             "vehicleName vehicleNumber status pickup drop payment",
           // only these vehicle fields are read below
           populate: { path: "vehicleId", select: "_id vehicleName vehicleNumber" },
@@ -481,6 +488,8 @@ export const getBookingsForImport = async (req, res) => {
 
         pickupTime: booking.pickupTime,
         dropTime: booking.dropTime,
+        flexibleTime: booking.flexibleTime,
+        originalEndDate: booking.originalEndDate,
 
         totalDays: booking.totalDays,
 
@@ -658,6 +667,7 @@ export const getPaymentsForImport = async (req, res) => {
         collectedPhonePe
         collectionHistory.amount
         collectionHistory.channel
+        collectionHistory.collectedAt
         bookingId
         booking
         customer

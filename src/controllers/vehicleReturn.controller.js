@@ -804,7 +804,7 @@ export const receiveVehicle = async (req, res) => {
 
 export const getServiceVehicles = async (req, res) => {
   try {
-    const companyId = req.user.company || req.user._id;
+    const companyId = req.user.company || req.user.createdBy || req.user._id;
 
     const vehicles = await Vehicle.find({
       company: companyId,
@@ -890,7 +890,7 @@ export const markVehicleAvailable = async (req, res) => {
   try {
     const { id } = req.params;
 
-    const companyId = req.user.company || req.user._id;
+    const companyId = req.user.company || req.user.createdBy || req.user._id;
 
     const vehicle = await Vehicle.findOne({
       _id: id,

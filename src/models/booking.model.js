@@ -111,10 +111,21 @@ const bookingSchema = new mongoose.Schema(
       required: true,
     },
 
+    // Legacy automatic-extension metadata. New bookings use toDate directly;
+    // retain the optional field so historical records remain readable.
+    originalEndDate: {
+      type: Date,
+    },
+
     pickupTime: {
       type: String,
       default: "09:00 AM",
       trim: true,
+    },
+
+    // No default: absence identifies historical bookings with date-only billing.
+    flexibleTime: {
+      type: Boolean,
     },
 
     dropTime: {
@@ -166,7 +177,51 @@ const bookingSchema = new mongoose.Schema(
     // =========================
     // PRICING
     // =========================
+    // Existing database paths: optional, with no defaults/backfill on old bookings.
+    paymentDate: {
+      type: Date,
+    },
+    paymentTime: {
+      type: String,
+      trim: true,
+    },
+    customPaymentDate: {
+      type: Date,
+    },
+    transactionId: {
+      type: String,
+      trim: true,
+    },
+    // Existing flat aliases used by booking list/card consumers.
+    quotationAmount: { type: Number, min: 0 },
+    bookingAmount: { type: Number, min: 0 },
+    discountAmount: { type: Number, min: 0 },
+    securityDeposit: { type: Number, min: 0 },
+    fastagBalance: { type: Number, min: 0 },
+    paymentMethod: {
+      type: String,
+      enum: ["cash", "phonepe", "gpay", "razorpay", "mixed"],
+    },
     payment: {
+      paymentDate: {
+        type: Date,
+      },
+      paymentTime: {
+        type: String,
+        trim: true,
+      },
+      customPaymentDate: {
+        type: Date,
+      },
+      transactionId: {
+        type: String,
+        trim: true,
+      },
+      // Optional agreed rate for extra-day edits; no defaults/backfill on old records.
+      rentalRate: {
+        type: Number,
+        min: 0,
+      },
       vehicleRent: {
         type: Number,
         default: 0,
@@ -201,6 +256,17 @@ const bookingSchema = new mongoose.Schema(
         min: 0,
       },
 
+      // Optional snapshots on new Operations bookings. Leave historical
+      // documents untouched; discountAmount remains the combined discount.
+      membershipDiscount: {
+        type: Number,
+        min: 0,
+      },
+      manualDiscount: {
+        type: Number,
+        min: 0,
+      },
+
       securityDeposit: {
         type: Number,
         default: 0,
@@ -230,7 +296,7 @@ const bookingSchema = new mongoose.Schema(
 
       paymentMethod: {
         type: String,
-        enum: ["cash", "phonepe", "razorpay", "mixed"],
+        enum: ["cash", "phonepe", "gpay", "razorpay", "mixed"],
         default: "cash",
       },
 
@@ -241,6 +307,11 @@ const bookingSchema = new mongoose.Schema(
           min: 0,
         },
         phonePe: {
+          type: Number,
+          default: 0,
+          min: 0,
+        },
+        gpay: {
           type: Number,
           default: 0,
           min: 0,
@@ -435,20 +506,53 @@ const bookingSchema = new mongoose.Schema(
 
 bookingSchema.pre("save", function () {
   if (this.payment) {
+    // Keep supported flat aliases in sync without backfilling old documents.
+    for (const [alias, field] of [
+      ["quotationAmount", "totalAmount"], ["bookingAmount", "bookingAmountPaid"],
+      ["discountAmount", "discountAmount"], ["securityDeposit", "securityDeposit"],
+      ["fastagBalance", "fastagAmount"], ["paymentMethod", "paymentMethod"],
+    ]) {
+      if ((this.isNew || this.get(alias) !== undefined) && (this.isNew || this.isModified(`payment.${field}`))) {
+        this.set(alias, this.get(`payment.${field}`));
+      }
+    }
     const totalAmount = Number(this.payment.totalAmount) || 0;
     const discount = Number(this.payment.discountAmount) || 0;
     const paid = Number(this.payment.bookingAmountPaid) || 0;
     const security = Number(this.payment.securityDeposit) || 0;
 
-    this.payment.balanceAmount = Math.max(0, totalAmount - discount - paid);
-    this.payment.totalCollected = paid + security;
-
-    if (this.payment.balanceAmount === 0 && paid > 0) {
-      this.payment.paymentStatus = "paid";
-    } else if (paid > 0) {
-      this.payment.paymentStatus = "partial";
-    } else {
-      this.payment.paymentStatus = "pending";
+    // Method/split metadata edits must not rewrite historical collections.
+    if (
+      this.isNew ||
+      this.isModified("payment.bookingAmountPaid") ||
+      this.isModified("payment.securityDeposit")
+    ) {
+      const snapshot = this.$locals.bookingPaymentSnapshot;
+      this.payment.totalCollected = snapshot
+        ? Math.round(
+            (snapshot.collected +
+              paid -
+              snapshot.paid +
+              security -
+              snapshot.security) *
+              100,
+          ) / 100
+        : paid + security;
+    }
+    if (
+      this.isNew ||
+      ["totalAmount", "discountAmount", "bookingAmountPaid"].some((field) =>
+        this.isModified(`payment.${field}`),
+      )
+    ) {
+      this.payment.balanceAmount = Math.max(0, totalAmount - discount - paid);
+      if (this.payment.balanceAmount === 0 && paid > 0) {
+        this.payment.paymentStatus = "paid";
+      } else if (paid > 0) {
+        this.payment.paymentStatus = "partial";
+      } else {
+        this.payment.paymentStatus = "pending";
+      }
     }
   }
 });
