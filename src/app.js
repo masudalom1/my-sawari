@@ -21,6 +21,7 @@ import bookingRoutes from "./routes/bookingRoutes.js";
 import dashboardRoutes from "./routes/dashboard.routes.js";
 import { trackWriteRequests } from "./realtime/changeFeed.js";
 import PaymentsHistory from "./routes/paymentHistory.js"
+import qrRoutes from "../src/routes/qrRoutes.js"
 
 dotenv.config();
 
@@ -168,6 +169,7 @@ app.use("/api/v1/leads", leadRoutes);
 app.use("/api/v1/bookings", bookingRoutes);
 app.use("/api/v1/dashboard", dashboardRoutes);
 app.use("/api/v1/dashboard/payments-history", PaymentsHistory);
+app.use("/api/v1/qr", qrRoutes);
 // 404
 app.use(notFound);
 
