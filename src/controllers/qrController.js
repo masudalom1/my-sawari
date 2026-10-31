@@ -79,3 +79,69 @@ export const getByCode = async (req, res, next) => {
     next(err);
   }
 };
+
+export const claimCode = async (req, res, next) => {
+  try {
+    const code = normalizeCode(req.params.code);
+
+    if (!CODE_REGEX.test(code)) {
+      return res.status(404).json({ success: false, message: "QR code not found" });
+    }
+
+    const { businessName, ownerName, mobile, category, location } = req.body || {};
+    const phone = clean(mobile).replace(/[\s-]/g, "").replace(/^\+?91/, "");
+
+    if (clean(businessName).length < 2) {
+      return res.status(400).json({ success: false, message: "Enter the business name" });
+    }
+    if (clean(ownerName).length < 2) {
+      return res.status(400).json({ success: false, message: "Enter the owner's name" });
+    }
+    if (!/^[6-9]\d{9}$/.test(phone)) {
+      return res.status(400).json({ success: false, message: "Enter a valid 10-digit mobile number" });
+    }
+    if (!clean(category)) {
+      return res.status(400).json({ success: false, message: "Choose a business type" });
+    }
+    if (clean(location).length < 2) {
+      return res.status(400).json({ success: false, message: "Enter the location" });
+    }
+
+    // Atomic: only an "available" code can be claimed, so two people can't claim the same one
+    const qr = await ReferralQR.findOneAndUpdate(
+      { token: code, status: "available" },
+      {
+        $set: {
+          status: "pending",
+          claimedAt: new Date(),
+          claimDetails: {
+            businessName: clean(businessName).slice(0, 120),
+            ownerName: clean(ownerName).slice(0, 80),
+            mobile: phone,
+            category: clean(category).slice(0, 60),
+            location: clean(location).slice(0, 200),
+          },
+        },
+      },
+      { new: true }
+    )
+      .select("token status claimedAt")
+      .lean();
+
+    if (!qr) {
+      const existing = await ReferralQR.findOne({ token: code }).select("status").lean();
+
+      if (!existing) {
+        return res.status(404).json({ success: false, message: "QR code not found" });
+      }
+      if (existing.status === "revoked") {
+        return res.status(409).json({ success: false, message: "This QR code has been disabled." });
+      }
+      return res.status(409).json({ success: false, message: "This QR code has already been registered." });
+    }
+
+    return res.status(201).json({ success: true, qr });
+  } catch (err) {
+    next(err);
+  }
+};

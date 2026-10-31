@@ -1,5 +1,16 @@
 import mongoose from "mongoose";
 
+const claimDetailsSchema = new mongoose.Schema(
+  {
+    businessName: { type: String, trim: true, maxlength: 120 },
+    ownerName: { type: String, trim: true, maxlength: 80 },
+    mobile: { type: String, trim: true, maxlength: 15 },
+    category: { type: String, trim: true, maxlength: 60 },
+    location: { type: String, trim: true, maxlength: 200 },
+  },
+  { _id: false }
+);
+
 const referralQRSchema = new mongoose.Schema(
   {
     token: {
@@ -27,6 +38,18 @@ const referralQRSchema = new mongoose.Schema(
       ref: "Partner",
       default: null,
     },
+
+    // Filled when someone registers the QR from the pop-up form
+    claimDetails: {
+      type: claimDetailsSchema,
+      default: null,
+    },
+    claimedAt: {
+      type: Date,
+      default: null,
+    },
+
+    // Filled when an admin approves it
     assignedAt: {
       type: Date,
       default: null,
