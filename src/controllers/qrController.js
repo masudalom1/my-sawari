@@ -2,33 +2,34 @@ import ReferralQR from "../models/ReferralQR.js";
 
 const CODE_REGEX = /^[A-HJKMNP-Z2-9]{6}$/;
 const MAX_BULK = Number(process.env.QR_MAX_BULK || 1000);
+
 const normalizeCode = (v) => String(v || "").trim().toUpperCase();
 const clean = (v) => String(v ?? "").trim();
-// POST /api/admin/qr-codes/bulk
+
+// ============================================================
+// POST /api/v1/qr/qr-codes/bulk
 // body:     { batchName, codes: string[] }
-// response: { inserted: string[], duplicates: string[] }
+// response: { success, inserted: string[], duplicates: string[] }
+// ============================================================
 export const bulkCreate = async (req, res, next) => {
   try {
     const { batchName, codes } = req.body || {};
 
     if (!batchName || typeof batchName !== "string" || !batchName.trim()) {
-      return res.status(400).json({ message: "Batch name is required" });
+      return res.status(400).json({ success: false, message: "Batch name is required" });
     }
 
     if (!Array.isArray(codes) || codes.length === 0 || codes.length > MAX_BULK) {
-      return res.status(400).json({ message: `Send 1–${MAX_BULK} codes` });
+      return res.status(400).json({ success: false, message: `Send 1–${MAX_BULK} codes` });
     }
 
-    const unique = [...new Set(codes.map((c) => String(c).trim().toUpperCase()))];
+    const unique = [...new Set(codes.map(normalizeCode))];
 
     if (!unique.every((c) => CODE_REGEX.test(c))) {
-      return res.status(400).json({ message: "Invalid code format" });
+      return res.status(400).json({ success: false, message: "Invalid code format" });
     }
 
-    const docs = unique.map((token) => ({
-      token,
-      batchName: batchName.trim(),
-    }));
+    const docs = unique.map((token) => ({ token, batchName: batchName.trim() }));
 
     let duplicates = [];
 
@@ -39,36 +40,36 @@ export const bulkCreate = async (req, res, next) => {
       if (!writeErrors.length) throw err;
 
       // 11000 = duplicate key. Anything else is a real error.
-      const onlyDuplicates = writeErrors.every(
-        (e) => (e.code ?? e.err?.code) === 11000
-      );
+      const onlyDuplicates = writeErrors.every((e) => (e.code ?? e.err?.code) === 11000);
       if (!onlyDuplicates) throw err;
 
-      duplicates = writeErrors
-        .map((e) => unique[e.index ?? e.err?.index])
-        .filter(Boolean);
+      duplicates = writeErrors.map((e) => unique[e.index ?? e.err?.index]).filter(Boolean);
     }
 
     const dupSet = new Set(duplicates);
     const inserted = unique.filter((c) => !dupSet.has(c));
 
-    return res.status(201).json({ inserted, duplicates });
+    return res.status(201).json({ success: true, inserted, duplicates });
   } catch (err) {
     next(err);
   }
 };
 
+// ============================================================
 // GET /api/v1/qr/qr-codes/:code
+// response: { success, qr }
+// ============================================================
 export const getByCode = async (req, res, next) => {
   try {
-    const code = String(req.params.code || "").trim().toUpperCase();
+    const code = normalizeCode(req.params.code);
 
     if (!CODE_REGEX.test(code)) {
       return res.status(404).json({ success: false, message: "QR code not found" });
     }
 
+    // claimDetails (owner's mobile etc.) is not sent: this link is printed and public
     const qr = await ReferralQR.findOne({ token: code })
-      .select("token batchName status partnerId assignedAt createdAt updatedAt")
+      .select("token batchName status partnerId claimedAt assignedAt createdAt updatedAt")
       .lean();
 
     if (!qr) {
@@ -81,6 +82,11 @@ export const getByCode = async (req, res, next) => {
   }
 };
 
+// ============================================================
+// POST /api/v1/qr/qr-codes/:code/claim
+// body:     { businessName, ownerName, mobile, category, location }
+// response: { success, qr }      available -> assigned (no approval)
+// ============================================================
 export const claimCode = async (req, res, next) => {
   try {
     const code = normalizeCode(req.params.code);
@@ -108,13 +114,16 @@ export const claimCode = async (req, res, next) => {
       return res.status(400).json({ success: false, message: "Enter the location" });
     }
 
+    const now = new Date();
+
     // Atomic: only an "available" code can be claimed, so two people can't claim the same one
     const qr = await ReferralQR.findOneAndUpdate(
       { token: code, status: "available" },
       {
         $set: {
-          status: "pending",
-          claimedAt: new Date(),
+          status: "assigned",
+          claimedAt: now,
+          assignedAt: now,
           claimDetails: {
             businessName: clean(businessName).slice(0, 120),
             ownerName: clean(ownerName).slice(0, 80),
@@ -126,7 +135,7 @@ export const claimCode = async (req, res, next) => {
       },
       { new: true }
     )
-      .select("token status claimedAt")
+      .select("token batchName status partnerId claimedAt assignedAt createdAt updatedAt")
       .lean();
 
     if (!qr) {
