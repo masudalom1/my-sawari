@@ -2,6 +2,14 @@ import ReferralQR from "../models/ReferralQR.js";
 
 const CODE_REGEX = /^[A-HJKMNP-Z2-9]{6}$/;
 const MAX_BULK = Number(process.env.QR_MAX_BULK || 1000);
+const escapeRegex = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+const STATUS_FILTER = {
+  assigned: "assigned",
+  unassigned: "available",
+  pending: "pending",
+  revoked: "revoked",
+};
 
 // Fields that are safe to send publicly (anyone who scans a sticker can see them).
 // Owner name and mobile are never sent.
@@ -154,6 +162,69 @@ export const claimCode = async (req, res, next) => {
     }
 
     return res.status(201).json({ success: true, qr });
+  } catch (err) {
+    next(err);
+  }
+};
+
+export const listCodes = async (req, res, next) => {
+  try {
+    const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+    const limit = Math.min(200, Math.max(1, parseInt(req.query.limit, 10) || 48));
+    const status = clean(req.query.status).toLowerCase();
+    const batch = clean(req.query.batch);
+    const search = clean(req.query.search).slice(0, 100);
+
+    if (status && !STATUS_FILTER[status]) {
+      return res.status(400).json({ success: false, message: "Invalid status" });
+    }
+
+    // Batch + search apply to the counts too; status only to the list
+    const base = {};
+    if (batch) base.batchName = batch;
+    if (search) {
+      const rx = new RegExp(escapeRegex(search), "i");
+      base.$or = [
+        { token: rx },
+        { "claimDetails.businessName": rx },
+        { "claimDetails.location": rx },
+      ];
+    }
+    const filter = status ? { ...base, status: STATUS_FILTER[status] } : base;
+
+    const [items, total, statusRows, batches] = await Promise.all([
+      ReferralQR.find(filter)
+        .sort({ createdAt: -1, _id: -1 })
+        .skip((page - 1) * limit)
+        .limit(limit)
+        .select(PUBLIC_FIELDS)
+        .lean(),
+      ReferralQR.countDocuments(filter),
+      ReferralQR.aggregate([{ $match: base }, { $group: { _id: "$status", n: { $sum: 1 } } }]),
+      ReferralQR.aggregate([
+        { $group: { _id: "$batchName", total: { $sum: 1 }, createdAt: { $max: "$createdAt" } } },
+        { $sort: { createdAt: -1 } },
+        { $limit: 200 },
+        { $project: { _id: 0, batchName: "$_id", total: 1, createdAt: 1 } },
+      ]),
+    ]);
+
+    const by = Object.fromEntries(statusRows.map((r) => [r._id, r.n]));
+    const counts = {
+      total: statusRows.reduce((sum, r) => sum + r.n, 0),
+      assigned: by.assigned || 0,
+      unassigned: by.available || 0,
+      pending: by.pending || 0,
+      revoked: by.revoked || 0,
+    };
+
+    return res.json({
+      success: true,
+      items,
+      counts,
+      batches,
+      pagination: { page, limit, total, totalPages: Math.ceil(total / limit) },
+    });
   } catch (err) {
     next(err);
   }
