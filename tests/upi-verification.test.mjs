@@ -20,6 +20,10 @@ before(async () => {
   today = toDayKey(new Date());
   phone = await make(); gpay = await make({ paymentMethod: "gpay", amount: 200 });
   razorpay = await make({ paymentMethod: "razorpay", amount: 300, customPaymentDate: `${addDayKeys(today, -1)}T12:00:00+05:30` });
+  await PaymentHistory.collection.updateOne(
+    { _id: razorpay._id },
+    { $set: { createdAt: new Date(`${addDayKeys(today, -1)}T12:00:00+05:30`) } },
+  );
   mixed = await make({ paymentMethod: "mixed", amount: 1000, paymentBreakdown: { cash: 100, phonePe: 200, gpay: 300, razorpay: 400 } });
   await make({ paymentMethod: "cash", amount: 999 });
   await make({ type: "refund", amount: 999 });
@@ -53,7 +57,51 @@ test("GET returns the three digital methods and only explicit UPI portions of mi
   assert.deepEqual(await PaymentHistory.find().sort({ _id: 1 }).lean(), before);
 });
 
-test("relative tabs use IST payment date; channel, month, date and transaction search compose", async () => {
+test("UPI read includes legacy payment-method spellings supported by the shared normalizer", async () => {
+  const marker = "Legacy method alias fixture";
+  const now = new Date();
+  const rows = [
+    { paymentMethod: "Google Pay", amount: 125 },
+    { paymentMethod: "GPay", amount: 50 },
+    { paymentMethod: "Phone Pe", amount: 100 },
+    { paymentMethod: "razor-pay", amount: 75 },
+    { paymentMethod: "MIX", amount: 300, paymentBreakdown: { cash: 100, phonePe: 100, gpay: 100 } },
+  ].map(({ paymentMethod, amount, paymentBreakdown = {} }) => ({
+    company: owner,
+    bookingId: oid(),
+    createdBy: owner,
+    amount,
+    paymentMethod,
+    paymentBreakdown,
+    type: "booking",
+    customer: { fullName: marker, mobileNumber: "9400100011" },
+    vehicle: { vehicleName: "UPI test car", vehicleNumber: "KA01UP0001" },
+    paymentDate: now,
+    customPaymentDate: now,
+    createdAt: now,
+    updatedAt: now,
+  }));
+  const inserted = await PaymentHistory.collection.insertMany(rows);
+  try {
+    const result = await get(`tab=all&search=${encodeURIComponent(marker)}`);
+    assert.equal(result.status, 200);
+    assert.equal(result.json.total, 5);
+    assert.equal(result.json.summary.amount, 550);
+    assert.deepEqual(result.json.methodTotals, {
+      all: { amount: 550, count: 5 },
+      phonepe: { amount: 200, count: 2 },
+      gpay: { amount: 275, count: 3 },
+      razorpay: { amount: 75, count: 1 },
+    });
+    const mixed = await get(`tab=all&method=mixed&search=${encodeURIComponent(marker)}`);
+    assert.equal(mixed.json.total, 1);
+    assert.equal(mixed.json.summary.amount, 200);
+  } finally {
+    await PaymentHistory.deleteMany({ _id: { $in: Object.values(inserted.insertedIds) } });
+  }
+});
+
+test("relative tabs use IST createdAt; channel, month, date and transaction search compose", async () => {
   assert.equal((await get("tab=today")).json.total, 3);
   assert.equal((await get("tab=yesterday")).json.data[0]._id, String(razorpay._id));
   assert.equal((await get("tab=all&method=gpay")).json.total, 2);
@@ -77,6 +125,11 @@ test("all page sizes include the full filtered totals and deterministic pages wi
         const result = await get(`tab=all&search=Pagination%20UPI&limit=${limit}&page=${page}`);
         assert.deepEqual(result.json.summary, all.json.summary);
         assert.deepEqual(result.json.methodTotals, all.json.methodTotals);
+        assert.deepEqual(result.json.groups.flatMap((group) => group.payments.map((row) => row._id)), result.json.data.map((row) => row._id));
+        for (const group of result.json.groups) {
+          assert.equal(group.count, group.payments.length);
+          assert.equal(group.amount, group.payments.length);
+        }
         ids.push(...result.json.data.map((row) => row._id));
       }
       assert.deepEqual(ids, all.json.data.map((row) => row._id));
@@ -193,6 +246,17 @@ test("invalid split, refund, overpayment, missing confirmation and tampered acto
   assert.equal((await PaymentHistory.findById(fresh._id)).collectionHistory.length, 0);
 });
 
+test("UPI reconciliation warnings report an over-recorded channel amount without hiding it", async () => {
+  const row = await make({ paymentMethod: "gpay", amount: 500, collectedAmount: 600 });
+  const result = await get(`tab=all&search=${row.transactionId}`);
+  const payment = result.json.data.find((item) => item._id === String(row._id));
+  assert.equal(payment.upiAmount, 500);
+  assert.equal(payment.canVerify, false);
+  assert.ok(payment.reviewReasons.some((reason) =>
+    reason.includes("Recorded gpay amount (600.00) exceeds its allocated channel portion (500.00)."),
+  ));
+});
+
 test("concurrent partial verifications and replayed submissions append exactly one event", async () => {
   const row = await make({ paymentMethod: "gpay", amount: 10 });
   const results = await Promise.all([1, 2].map(() => verify(row, "gpay", 9.99)));
@@ -275,29 +339,94 @@ test("Completed requires a digital staff audit, not payment success, collection 
   assert.deepEqual(await PaymentHistory.find().sort({ _id: 1 }).lean(), before);
 });
 
-test("Today and Yesterday use IST payment boundaries and include pending and completed components", async () => {
+test("Today and Yesterday use Payment Report recorded-date boundaries; cards retain the original payment date", async () => {
   const base = { customer: { fullName: "IST filter fixture" }, paymentMethod: "gpay" };
   const start = dayStartIST(today), end = dayEndIST(today);
   const atStart = await make({ ...base, paymentDate: start });
   const atEnd = await make({ ...base, paymentDate: end });
   const beforeStart = await make({ ...base, paymentDate: new Date(start.getTime() - 1) });
-  await make({ ...base, paymentDate: new Date(end.getTime() + 1) });
+  const afterEnd = await make({ ...base, paymentDate: new Date(end.getTime() + 1) });
   const overridden = await make({ ...base, paymentDate: start, customPaymentDate: new Date(start.getTime() - 1) });
   const missingDate = await make({ ...base, paymentDate: null, customPaymentDate: null });
+  await PaymentHistory.collection.updateOne({ _id: atStart._id }, { $set: { createdAt: start } });
+  await PaymentHistory.collection.updateOne({ _id: atEnd._id }, { $set: { createdAt: end } });
+  await PaymentHistory.collection.updateOne({ _id: beforeStart._id }, { $set: { createdAt: new Date(start.getTime() - 1) } });
+  await PaymentHistory.collection.updateOne({ _id: afterEnd._id }, { $set: { createdAt: new Date(end.getTime() + 1) } });
+  await PaymentHistory.collection.updateOne({ _id: overridden._id }, { $set: { createdAt: start } });
+  await PaymentHistory.collection.updateOne({ _id: missingDate._id }, { $set: { createdAt: start } });
   assert.equal((await verify(atEnd, "gpay", 100)).status, 200);
   assert.equal((await verify(beforeStart, "gpay", 100)).status, 200);
   const before = await PaymentHistory.find().sort({ _id: 1 }).lean();
   const current = (await get("tab=today&search=IST%20filter%20fixture")).json;
   const previous = (await get("tab=yesterday&search=IST%20filter%20fixture")).json;
-  assert.deepEqual(new Set(current.data.map((row) => row._id)), new Set([atStart, atEnd].map((row) => String(row._id))));
-  assert.deepEqual(new Set(previous.data.map((row) => row._id)), new Set([beforeStart, overridden].map((row) => String(row._id))));
+  assert.deepEqual(new Set(current.data.map((row) => row._id)), new Set([atStart, atEnd, overridden, missingDate].map((row) => String(row._id))));
+  assert.deepEqual(new Set(previous.data.map((row) => row._id)), new Set([beforeStart].map((row) => String(row._id))));
+  assert.ok(!current.data.some((row) => row._id === String(afterEnd._id)));
+  assert.equal(current.data.find((row) => row._id === String(overridden._id)).paymentDay, addDayKeys(today, -1));
+  assert.equal(current.data.find((row) => row._id === String(overridden._id)).recordedDay, today);
   for (const result of [current, previous]) {
-    assert.equal(result.summary.amount, 200); assert.equal(result.summary.verified.count, 1); assert.equal(result.summary.pending.count, 1);
+    assert.equal(result.summary.amount, result === current ? 400 : 100);
+    assert.equal(result.dateBasis, "createdAt");
+    assert.equal(result.groups.length, 1);
+    assert.equal(result.groups[0].date, result === current ? today : addDayKeys(today, -1));
+    assert.equal(result.groups[0].count, result.total);
+    assert.equal(result.groups[0].amount, result.summary.amount);
   }
+  assert.equal(current.summary.verified.count, 1); assert.equal(current.summary.pending.count, 3);
+  assert.equal(previous.summary.verified.count, 1); assert.equal(previous.summary.pending.count, 0);
   const all = (await get("tab=all&search=IST%20filter%20fixture")).json;
   assert.equal(all.total, 6);
   assert.equal(all.data.find((row) => row._id === String(missingDate._id)).paymentDay, null);
+  assert.equal(all.data.find((row) => row._id === String(missingDate._id)).recordedDay, today);
   assert.deepEqual(await PaymentHistory.find().sort({ _id: 1 }).lean(), before);
+});
+
+test("createdAt groups retain missing optional fields, sort deterministically and total only matching UPI portions", async () => {
+  const marker = "Recorded grouping fixture", nextDay = "2027-01-01", previousDay = "2026-12-31";
+  const base = { company: new ctx.mongoose.Types.ObjectId(owner), createdBy: new ctx.mongoose.Types.ObjectId(owner),
+    bookingId: oid(), type: "booking", customer: { fullName: marker } };
+  const audit = (channel, amount) => [{ channel, amount, collectedBy: base.createdBy, collectedAt: new Date() }];
+  const fixtures = [
+    { ...base, _id: oid(), paymentMethod: "mixed", amount: 1000, createdAt: dayStartIST(nextDay),
+      paymentBreakdown: { cash: 100, phonePe: 200, gpay: 300, razorpay: 400 },
+      collectedPhonePe: 200, collectionHistory: audit("phonepe", 200) },
+    { ...base, _id: oid(), paymentMethod: "phonepe", amount: 0.2, createdAt: dayStartIST(nextDay), paymentDate: "", paymentTime: "", upiLast4: "1234" },
+    { ...base, _id: oid(), paymentMethod: "gpay", amount: 0.1, createdAt: dayEndIST(previousDay),
+      paymentDate: dayStartIST("2031-06-01"), customPaymentDate: dayStartIST("2031-05-01"), paymentTime: "7:34 pm",
+      collectedAmount: 0.1, collectionHistory: audit("gpay", 0.1) },
+    { ...base, _id: oid(), paymentMethod: "razorpay", amount: 50, paymentDate: new Date() },
+    { ...base, _id: oid(), paymentMethod: "phonepe", amount: 25, createdAt: "invalid", paymentDate: new Date() },
+    { ...base, _id: oid(), paymentMethod: "gpay", amount: 1, createdAt: "", paymentDate: "", paymentTime: "" },
+  ];
+  await PaymentHistory.collection.insertMany(fixtures);
+  try {
+    const before = await PaymentHistory.collection.find({ "customer.fullName": marker }).sort({ _id: 1 }).toArray();
+    const scope = `search=${encodeURIComponent(marker)}&limit=all`;
+    const all = (await get(`tab=all&${scope}`)).json;
+    assert.equal(all.total, 6); assert.equal(all.summary.amount, 976.3);
+    assert.deepEqual(all.groups.map((group) => group.date), [nextDay, previousDay, null]);
+    assert.deepEqual(all.groups.map((group) => [group.count, group.amount]), [[2, 900.2], [1, 0.1], [3, 76]]);
+    assert.deepEqual(all.data.slice(0, 2).map((row) => row._id), fixtures.slice(0, 2).map((row) => String(row._id)).sort().reverse());
+    assert.equal(new Set(all.groups.flatMap((group) => group.payments.map((row) => row._id))).size, 6);
+    const missing = all.data.find((row) => row._id === String(fixtures[0]._id));
+    assert.equal(missing.paymentDate, null); assert.equal(missing.effectivePaymentDate, null); assert.equal(missing.paymentTime, "");
+    assert.equal(missing.recordedDay, nextDay);
+    assert.deepEqual(all.data.find((row) => row._id === String(fixtures[1]._id)).upiLast4, ["1234"]);
+    const pending = (await get(`tab=pending&${scope}`)).json;
+    assert.deepEqual(pending.groups.map((group) => [group.date, group.count, group.amount]), [[nextDay, 2, 700.2], [null, 3, 76]]);
+    const completed = (await get(`tab=completed&${scope}`)).json;
+    assert.deepEqual(completed.groups.map((group) => [group.date, group.count, group.amount]), [[nextDay, 1, 200], [previousDay, 1, 0.1]]);
+    const byDate = (await get(`tab=all&date=${nextDay}&${scope}`)).json;
+    assert.equal(byDate.total, 2); assert.equal(byDate.summary.amount, 900.2);
+    const byMonth = (await get(`tab=all&month=2026-12&${scope}`)).json;
+    assert.equal(byMonth.total, 1); assert.equal(byMonth.data[0].paymentTime, "7:34 pm");
+    assert.equal((await get(`tab=all&month=2031-06&${scope}`)).json.total, 0);
+    const channel = (await get(`tab=all&method=gpay&date=${nextDay}&${scope}`)).json;
+    assert.equal(channel.groups[0].amount, 300);
+    assert.deepEqual(await PaymentHistory.collection.find({ "customer.fullName": marker }).sort({ _id: 1 }).toArray(), before);
+  } finally {
+    await PaymentHistory.deleteMany({ _id: { $in: fixtures.map((row) => row._id) } });
+  }
 });
 
 test("configured company scoping applies to both reads and verification", async () => {
