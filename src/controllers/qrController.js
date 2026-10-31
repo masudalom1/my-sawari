@@ -56,3 +56,26 @@ export const bulkCreate = async (req, res, next) => {
     next(err);
   }
 };
+
+// GET /api/v1/qr/qr-codes/:code
+export const getByCode = async (req, res, next) => {
+  try {
+    const code = String(req.params.code || "").trim().toUpperCase();
+
+    if (!CODE_REGEX.test(code)) {
+      return res.status(404).json({ success: false, message: "QR code not found" });
+    }
+
+    const qr = await ReferralQR.findOne({ token: code })
+      .select("token batchName status partnerId assignedAt createdAt updatedAt")
+      .lean();
+
+    if (!qr) {
+      return res.status(404).json({ success: false, message: "QR code not found" });
+    }
+
+    return res.json({ success: true, qr });
+  } catch (err) {
+    next(err);
+  }
+};
