@@ -3,6 +3,12 @@ import ReferralQR from "../models/ReferralQR.js";
 const CODE_REGEX = /^[A-HJKMNP-Z2-9]{6}$/;
 const MAX_BULK = Number(process.env.QR_MAX_BULK || 1000);
 
+// Fields that are safe to send publicly (anyone who scans a sticker can see them).
+// Owner name and mobile are never sent.
+const PUBLIC_FIELDS =
+  "token batchName status partnerId claimedAt assignedAt createdAt updatedAt " +
+  "claimDetails.businessName claimDetails.category claimDetails.location";
+
 const normalizeCode = (v) => String(v || "").trim().toUpperCase();
 const clean = (v) => String(v ?? "").trim();
 
@@ -67,10 +73,7 @@ export const getByCode = async (req, res, next) => {
       return res.status(404).json({ success: false, message: "QR code not found" });
     }
 
-    // claimDetails (owner's mobile etc.) is not sent: this link is printed and public
-    const qr = await ReferralQR.findOne({ token: code })
-      .select("token batchName status partnerId claimedAt assignedAt createdAt updatedAt")
-      .lean();
+    const qr = await ReferralQR.findOne({ token: code }).select(PUBLIC_FIELDS).lean();
 
     if (!qr) {
       return res.status(404).json({ success: false, message: "QR code not found" });
@@ -135,7 +138,7 @@ export const claimCode = async (req, res, next) => {
       },
       { new: true }
     )
-      .select("token batchName status partnerId claimedAt assignedAt createdAt updatedAt")
+      .select(PUBLIC_FIELDS)
       .lean();
 
     if (!qr) {
