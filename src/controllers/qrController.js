@@ -2,7 +2,8 @@ import ReferralQR from "../models/ReferralQR.js";
 
 const CODE_REGEX = /^[A-HJKMNP-Z2-9]{6}$/;
 const MAX_BULK = Number(process.env.QR_MAX_BULK || 1000);
-
+const normalizeCode = (v) => String(v || "").trim().toUpperCase();
+const clean = (v) => String(v ?? "").trim();
 // POST /api/admin/qr-codes/bulk
 // body:     { batchName, codes: string[] }
 // response: { inserted: string[], duplicates: string[] }
