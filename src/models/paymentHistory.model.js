@@ -1,7 +1,34 @@
 import mongoose from "mongoose";
 
+// What staff corrected on the receipt while verifying it (method / payment
+// date & time). Kept on the audit entry so the original values are never lost.
+const collectionAdjustmentSchema = new mongoose.Schema(
+  {
+    methodFrom: {
+      type: String,
+      enum: ["", "phonepe", "gpay", "razorpay"],
+      default: "",
+    },
+    methodTo: {
+      type: String,
+      enum: ["", "phonepe", "gpay", "razorpay"],
+      default: "",
+    },
+    paymentDateFrom: { type: Date, default: null },
+    paymentDateTo: { type: Date, default: null },
+    paymentTimeFrom: { type: String, default: "" },
+    paymentTimeTo: { type: String, default: "" },
+  },
+  { _id: false },
+);
+
 const collectionEntrySchema = new mongoose.Schema(
   {
+    adjustment: {
+      type: collectionAdjustmentSchema,
+      default: undefined,
+    },
+
     channel: {
       type: String,
       enum: ["cash", "phonepe", "gpay", "razorpay"],

@@ -169,6 +169,7 @@ export function upiPaymentRow(payment) {
         note: entry.note,
         collectedByName: entry.collectedByName,
         collectedAt: entry.collectedAt,
+        adjustment: entry.adjustment || null,
       })),
     };
   }
@@ -412,6 +413,44 @@ export async function readUpiView(user, query) {
   };
 }
 
+// Same format the PaymentHistory pre-save hook writes ("02:30 pm"). Newer ICU
+// builds put a narrow no-break space before am/pm; store a plain space.
+const IST_TIME = new Intl.DateTimeFormat("en-IN", {
+  hour: "2-digit",
+  minute: "2-digit",
+  hour12: true,
+  timeZone: "Asia/Kolkata",
+});
+const formatIstTime = (date) =>
+  IST_TIME.format(date).replace(/[  ]/g, " ");
+const normalizeTime = (value) =>
+  String(value || "")
+    .replace(/[\s  ]+/g, " ")
+    .trim()
+    .toLowerCase()
+    .replace(/^0(\d)/, "$1");
+// paymentBreakdown uses camel-cased "phonePe".
+const BREAKDOWN_KEY = { phonepe: "phonePe", gpay: "gpay", razorpay: "razorpay" };
+
+// Accepts the date ("YYYY-MM-DD") and 24h time ("HH:mm") the staff member
+// entered, interpreted in IST. Both are required together; neither = no edit.
+function parsePaymentDateTime(paymentDate, paymentTime) {
+  if (paymentDate === undefined && paymentTime === undefined) return null;
+  if (
+    typeof paymentDate !== "string" ||
+    !isValidDayKey(paymentDate) ||
+    typeof paymentTime !== "string" ||
+    !/^([01]\d|2[0-3]):[0-5]\d$/.test(paymentTime)
+  )
+    throw new ApiError(400, "Enter a valid payment date and time");
+  const at = new Date(`${paymentDate}T${paymentTime}:00+05:30`);
+  if (!Number.isFinite(at.getTime()))
+    throw new ApiError(400, "Enter a valid payment date and time");
+  if (at.getTime() > Date.now() + 5 * 60 * 1000)
+    throw new ApiError(400, "Payment date and time cannot be in the future");
+  return { at, time: formatIstTime(at) };
+}
+
 export async function verifyUpi(user, id, body = {}) {
   if (!mongoose.isObjectIdOrHexString(id))
     throw new ApiError(400, "Invalid payment ID");
@@ -421,8 +460,11 @@ export async function verifyUpi(user, id, body = {}) {
     channel,
     amount,
     expectedVerifiedAmount,
+    expectedMethod,
     confirmed,
     note = "",
+    paymentDate,
+    paymentTime,
     view,
   } = body;
   if (view !== undefined) parseUpiQuery(view);
@@ -433,12 +475,17 @@ export async function verifyUpi(user, id, body = {}) {
           "channel",
           "amount",
           "expectedVerifiedAmount",
+          "expectedMethod",
           "confirmed",
           "note",
+          "paymentDate",
+          "paymentTime",
           "view",
         ].includes(key),
     ) ||
     !UPI_CHANNELS.includes(channel) ||
+    (expectedMethod !== undefined &&
+      ![...UPI_CHANNELS, "mixed"].includes(expectedMethod)) ||
     confirmed !== true ||
     typeof amount !== "number" ||
     paise(amount) === null ||
@@ -453,6 +500,7 @@ export async function verifyUpi(user, id, body = {}) {
       "Confirm a valid UPI channel and amount with the current verified balance",
     );
   }
+  const when = parsePaymentDateTime(paymentDate, paymentTime);
   const payment = await PaymentHistory.findOne({
     _id: id,
     ...upiScope(user),
@@ -461,7 +509,87 @@ export async function verifyUpi(user, id, body = {}) {
     .select(fields)
     .lean();
   if (!payment) throw new ApiError(404, "Payment not found");
-  const row = upiPaymentRow(payment),
+  const current = upiPaymentRow(payment);
+  if (expectedMethod !== undefined && current.paymentMethod !== expectedMethod)
+    throw new ApiError(
+      409,
+      "Payment method changed. Refresh before verifying again.",
+    );
+
+  // ---- Corrections staff make while verifying -----------------------------
+  const changes = {};
+  const adjustment = {};
+
+  // Method: a single-method UPI receipt can be moved to another UPI channel
+  // (e.g. recorded as PhonePe but actually paid by GPay) as long as nothing
+  // has been verified or collected on it yet. Mixed receipts keep their split.
+  if (
+    UPI_CHANNELS.includes(current.paymentMethod) &&
+    channel !== current.paymentMethod
+  ) {
+    const untouched =
+      (payment.collectionHistory || []).length === 0 &&
+      paise(payment.collectedAmount ?? 0) === 0 &&
+      paise(payment.collectedPhonePe ?? 0) === 0 &&
+      !payment.isCollected &&
+      !payment.isPhonePeCollected;
+    if (!untouched)
+      throw new ApiError(
+        409,
+        "The payment method can only be changed before any amount is verified",
+      );
+    const from = current.paymentMethod;
+    changes.paymentMethod = channel;
+    if (payment.paymentBreakdown) {
+      const fromKey = BREAKDOWN_KEY[from],
+        toKey = BREAKDOWN_KEY[channel];
+      const fromAmount = paise(payment.paymentBreakdown[fromKey] ?? 0),
+        toAmount = paise(payment.paymentBreakdown[toKey] ?? 0);
+      if (fromAmount === null || toAmount === null)
+        throw new ApiError(
+          409,
+          "This payment needs reconciliation before its method can change",
+        );
+      changes.paymentBreakdown = {
+        ...payment.paymentBreakdown,
+        [fromKey]: 0,
+        [toKey]: (fromAmount + toAmount) / 100,
+      };
+    }
+    adjustment.methodFrom = from;
+    adjustment.methodTo = channel;
+  }
+
+  // Payment date & time: only written when it actually differs.
+  if (when) {
+    const prevAt = current.effectivePaymentDate
+      ? new Date(current.effectivePaymentDate)
+      : null;
+    const prevTime =
+      current.paymentTime || (prevAt ? formatIstTime(prevAt) : "");
+    const unchanged =
+      prevAt &&
+      toDayKey(prevAt) === toDayKey(when.at) &&
+      normalizeTime(prevTime) === normalizeTime(when.time);
+    if (!unchanged) {
+      Object.assign(changes, {
+        customPaymentDate: when.at,
+        paymentDate: when.at,
+        paymentTime: when.time,
+      });
+      Object.assign(adjustment, {
+        paymentDateFrom: prevAt,
+        paymentDateTo: when.at,
+        paymentTimeFrom: current.paymentTime || "",
+        paymentTimeTo: when.time,
+      });
+    }
+  }
+
+  // Re-evaluate eligibility against the receipt as it will be saved.
+  const row = Object.keys(changes).length
+      ? upiPaymentRow({ ...payment, ...changes })
+      : current,
     portion = row.verification[channel];
   if (!portion.amount)
     throw new ApiError(400, "This payment has no amount for that UPI channel");
@@ -506,8 +634,13 @@ export async function verifyUpi(user, id, body = {}) {
       "amount",
       "paymentMethod",
       "paymentBreakdown",
+      "customPaymentDate",
+      "paymentDate",
+      "paymentTime",
     ].map((key) => [key, stored(payment[key])]),
   );
+  const update = { ...changes, ...set };
+  const hasAdjustment = Object.keys(adjustment).length > 0;
   const saved = await PaymentHistory.findOneAndUpdate(
     {
       _id: id,
@@ -521,7 +654,7 @@ export async function verifyUpi(user, id, body = {}) {
       },
     },
     {
-      ...(Object.keys(set).length ? { $set: set } : {}),
+      ...(Object.keys(update).length ? { $set: update } : {}),
       $inc: { __v: 1 },
       $push: {
         collectionHistory: {
@@ -531,6 +664,7 @@ export async function verifyUpi(user, id, body = {}) {
           collectedByName: name,
           collectedAt: now,
           note: note.trim(),
+          ...(hasAdjustment ? { adjustment } : {}),
         },
       },
     },
@@ -563,6 +697,10 @@ export async function verifyUpi(user, id, body = {}) {
       remainingAmount: (paise(portion.amount) - paise(total)) / 100,
       verifiedBy: name,
       verifiedAt: now,
+      paymentMethod: saved.paymentMethod,
+      paymentDate: saved.customPaymentDate || saved.paymentDate || null,
+      paymentTime: saved.paymentTime || "",
+      adjustment: hasAdjustment ? adjustment : null,
     },
     view: updatedView,
   };
