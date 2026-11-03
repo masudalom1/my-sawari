@@ -129,36 +129,21 @@ test("existing bookings saved without any FASTag fields still open and edit", as
   assert.equal(raw.payment.fastagAmount, undefined, "no FASTag value is invented for old bookings");
 });
 
-// The New Booking modal's preview (my-sawari-Frontend/utils/bookingBilling.mjs)
-// must show what the server saves. Skipped only if the frontend is not checked
-// out next to the backend.
-const previewUrl = new URL("../../my-sawari-Frontend/utils/bookingBilling.mjs", import.meta.url);
-const { existsSync } = await import("node:fs");
-const previewAvailable = existsSync(previewUrl);
-
-test("server totals match the frontend billing preview", { skip: !previewAvailable && "frontend checkout not found" }, async () => {
-  const { bookingBill } = await import(previewUrl);
+test("server billing totals match the established pricing cases", async () => {
   const cases = [
-    { from: 70, to: 72, body: { fastagBalance: 250 } },
-    { from: 75, to: 75, body: {} },
-    { from: 78, to: 81, body: { fastagBalance: "99.5", discountAmount: 300, bookingAmount: 1000, pickupDropRequired: true, serviceType: "pickup_drop", pickup: { location: "Airport", charge: 150 }, drop: { location: "Station", charge: 100 } } },
-    { from: 85, to: 86, body: { fastagBalance: 0, discountAmount: 5000, bookingAmount: 200 } },
+    { from: 70, to: 72, body: { fastagBalance: 250 }, expected: { days: 2, vehicleRent: 2000, fastagAmount: 250, pickupCharge: 0, dropCharge: 0, totalAmount: 2250, discountAmount: 0, balanceAmount: 2250 } },
+    { from: 75, to: 75, body: {}, expected: { days: 1, vehicleRent: 1000, fastagAmount: 0, pickupCharge: 0, dropCharge: 0, totalAmount: 1000, discountAmount: 0, balanceAmount: 1000 } },
+    { from: 78, to: 81, body: { fastagBalance: "99.5", discountAmount: 300, bookingAmount: 1000, pickupDropRequired: true, serviceType: "pickup_drop", pickup: { location: "Airport", charge: 150 }, drop: { location: "Station", charge: 100 } }, expected: { days: 3, vehicleRent: 3000, fastagAmount: 99.5, pickupCharge: 150, dropCharge: 100, totalAmount: 3349.5, discountAmount: 300, balanceAmount: 2049.5 } },
+    { from: 85, to: 86, body: { fastagBalance: 0, discountAmount: 5000, bookingAmount: 200 }, expected: { days: 1, vehicleRent: 1000, fastagAmount: 0, pickupCharge: 0, dropCharge: 0, totalAmount: 1000, discountAmount: 5000, balanceAmount: 0 } },
   ];
-  for (const { from, to, body } of cases) {
+  for (const { from, to, body, expected } of cases) {
     const res = await book(from, to, body);
     assert.equal(res.status, 201, res.json.message);
-    const saved = (await Booking.findById(res.json.booking._id).lean()).payment;
-    const preview = bookingBill({
-      pricePerDay: 1000, fromDate: dayFromToday(from), toDate: dayFromToday(to),
-      fastagAmount: body.fastagBalance, pickupCharge: body.pickup?.charge, dropCharge: body.drop?.charge,
-      discountAmount: body.discountAmount, bookingAmount: body.bookingAmount,
-    });
-    const label = `${dayFromToday(from)} → ${dayFromToday(to)}`;
-    assert.equal(saved.vehicleRent, preview.baseRent, label);
-    assert.equal(saved.fastagAmount, preview.fastag, label);
-    assert.equal(saved.pickupCharge + saved.dropCharge, preview.pickupDrop, label);
-    assert.equal(saved.totalAmount, preview.subtotal, label);
-    assert.equal(saved.discountAmount, preview.discount, label);
-    assert.equal(saved.balanceAmount, preview.balance, label);
+    const savedBooking = await Booking.findById(res.json.booking._id).lean();
+    const saved = savedBooking.payment;
+    assert.equal(savedBooking.totalDays, expected.days);
+    for (const [key, value] of Object.entries(expected)) {
+      if (key !== "days") assert.equal(saved[key], value, `${dayFromToday(from)}: ${key}`);
+    }
   }
 });

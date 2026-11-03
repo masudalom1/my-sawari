@@ -1,7 +1,7 @@
 // Native MongoDB execution of the shared reporting contract. Policy values are
 // shared; parity tests compare expressions against the existing JS classifier.
 // No server-side JavaScript ($function/$where) or transaction/event unwinding.
-import { PAYMENT_CHANNELS as CHANNELS, PAYMENT_METHOD_ALIASES as ALIASES, PAYMENT_RECEIPT_TYPES, PAYMENT_MAX_PAISE as MAX, PAYMENT_PAISE_EPSILON as EPSILON } from "../../../shared/paymentReporting.mjs";
+import { PAYMENT_CHANNELS as CHANNELS, PAYMENT_METHOD_ALIASES as ALIASES, PAYMENT_RECEIPT_TYPES, PAYMENT_MAX_PAISE as MAX, PAYMENT_PAISE_EPSILON as EPSILON } from "../../shared/paymentReporting.mjs";
 import { allocateRevenuePayment, revenuePaymentAmount as paymentAmount, mongoAllocationMath } from "./paymentAllocation.service.js";
 
 const WHITESPACE = " \t\n\r\v\f\u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000\ufeff";

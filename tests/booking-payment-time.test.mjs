@@ -226,13 +226,35 @@ test("legacy records stay readable and booking edits do not rewrite payment time
   assert.deepEqual(await PaymentHistory.collection.findOne({ _id: payment._id }), legacy);
 });
 
-test("frontend and backend timestamp validation agree independently of local timezone", async () => {
-  const browser = await import("../../my-sawari-Frontend/utils/bookingPaymentTime.mjs");
+test("backend timestamp validation follows the IST wall-clock contract independently of local timezone", () => {
   const now = new Date("2026-10-28T10:00:00Z");
-  for (const paymentMethod of ["phonepe", "gpay", "cash", "mixed", "razorpay"]) {
-    for (const [paymentDate, paymentTime] of [["2026-10-28", "14:35"], ["2026-10-28", "00:30"], ["2024-02-29", "23:59"], ["2026-10-28", "15:31"], ["2026-02-30", "10:00"], ["", ""], ["2026-10-28", "24:00"]]) {
-      const input = { paymentMethod, bookingAmount: 500, paymentDate, paymentTime };
-      assert.deepEqual(validateBookingPaymentTime(input, now), browser.validateBookingPaymentTime(input, now));
+  const validCases = [
+    ["2026-10-28", "14:35", "2026-10-28T09:05:00.000Z"],
+    ["2026-10-28", "00:30", "2026-10-27T19:00:00.000Z"],
+    ["2024-02-29", "23:59", "2024-02-29T18:29:00.000Z"],
+  ];
+  for (const paymentMethod of ["phonepe", "gpay"]) {
+    for (const [paymentDate, paymentTime, expected] of validCases) {
+      const result = validateBookingPaymentTime({ paymentMethod, bookingAmount: 500, paymentDate, paymentTime }, now);
+      assert.equal(result.error, "");
+      assert.equal(result.collectedAt.toISOString(), expected);
     }
+    for (const [paymentDate, paymentTime, message] of [
+      ["2026-10-28", "15:31", /future/],
+      ["2026-02-30", "10:00", /valid Payment Date/],
+      ["", "", /Payment Date is required/],
+      ["2026-10-28", "", /Payment Time is required/],
+      ["2026-10-28", "24:00", /valid Payment Time/],
+    ]) {
+      const result = validateBookingPaymentTime({ paymentMethod, bookingAmount: 500, paymentDate, paymentTime }, now);
+      assert.match(result.error, message);
+      assert.equal(result.collectedAt, null);
+    }
+  }
+  for (const paymentMethod of ["cash", "mixed", "razorpay"]) {
+    assert.deepEqual(
+      validateBookingPaymentTime({ paymentMethod, bookingAmount: 500, paymentDate: "invalid", paymentTime: "invalid" }, now),
+      { error: "", collectedAt: null },
+    );
   }
 });

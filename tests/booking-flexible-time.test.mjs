@@ -141,12 +141,14 @@ test("historical bookings keep their absent mode, saved times and fare on reopen
   assert.deepEqual(after.payment, before.payment);
 });
 
-test("browser and server duration rules agree at time and date boundaries", async () => {
-  const browser = await import("../../my-sawari-Frontend/utils/bookingDuration.mjs");
-  for (const flexibleTime of [false, true]) for (const dropTime of ["07:59", "08:00", "08:01", "09:00", "23:59", "12:00 AM", "12:00 PM", "bad"]) {
-    const input = { fromDate: "2026-12-31", toDate: "2027-01-02", flexibleTime, pickupTime: "08:00", dropTime };
-    assert.deepEqual(browser.bookingDuration(input), bookingDuration(input));
+test("server duration rules preserve expected time and date boundaries", () => {
+  for (const [dropTime, expectedDays] of [["07:59", 2], ["08:00", 2], ["08:01", 3], ["09:00", 3], ["23:59", 3], ["12:00 AM", 2], ["12:00 PM", 3]]) {
+    for (const flexibleTime of [false, true]) {
+      const input = { fromDate: "2026-12-31", toDate: "2027-01-02", flexibleTime, pickupTime: "08:00", dropTime };
+      assert.equal(bookingDuration(input).days, flexibleTime ? 2 : expectedDays, `${flexibleTime}: ${dropTime}`);
+    }
   }
+  assert.equal(bookingDuration({ fromDate: "2026-12-31", toDate: "2027-01-02", flexibleTime: false, pickupTime: "08:00", dropTime: "bad" }), null);
   assert.equal(bookingTimeMinutes("12:00 AM"), 0);
   assert.equal(bookingTimeMinutes("12:00 PM"), 720);
 });

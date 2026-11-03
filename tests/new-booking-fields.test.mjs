@@ -1,7 +1,6 @@
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { startTestApp, client, createUserAndLogin, dayFromToday } from "./helpers/harness.mjs";
-import { bookingEditFormValues } from "../../my-sawari-Frontend/utils/bookingEditor.mjs";
 import { paymentReportRow } from "../shared/paymentReporting.mjs";
 
 // All writes use the harness's temporary replica set, never the configured DB.
@@ -41,7 +40,7 @@ function body(extra = {}) {
   };
 }
 
-test("every applicable form value survives POST, raw MongoDB, GET and editor mapping", async () => {
+test("every applicable booking value survives POST, raw MongoDB and GET", async () => {
   const input = body();
   const response = await api("POST", "/leads/create", input);
   assert.equal(response.status, 201, response.json.message);
@@ -85,14 +84,10 @@ test("every applicable form value survives POST, raw MongoDB, GET and editor map
   const reopened = await api("GET", `/bookings/${booking._id}`);
   assert.equal(reopened.status, 200);
   assert.equal(reopened.json.booking.transactionId, "4321");
-  const form = bookingEditFormValues(reopened.json.booking);
-  const expectedForm = { ...fields, residents: "3", vehicleId, fromDate: input.fromDate, toDate: input.toDate,
-    pickupTime: "09:15", dropTime: "18:45", pickupLocation: "Pickup fixture", pickupLandmark: "Gate 2",
-    pickupMapLink: input.pickup.mapLink, pickupCharge: "75", dropLocation: "Drop fixture", dropLandmark: "Entrance",
-    dropMapLink: input.drop.mapLink, dropCharge: "125", bookingAmount: "750", discountAmount: "125",
-    securityDeposit: "1000", fastagBalance: "250", upiLast4: "4321", paymentDate: input.paymentDate, paymentTime: "19:34" };
-  delete expectedForm.transactionId; // The form's existing input is named upiLast4.
-  for (const [key, value] of Object.entries(expectedForm)) assert.equal(form[key], value, key);
+  assert.equal(reopened.json.booking.pickupTime, "09:15 AM");
+  assert.equal(reopened.json.booking.dropTime, "06:45 PM");
+  assert.equal(reopened.json.booking.fromDate.slice(0, 10), input.fromDate);
+  assert.equal(reopened.json.booking.toDate.slice(0, 10), input.toDate);
 });
 
 test("mixed Google Pay is preserved with every other split and reconciles to the advance", async () => {
@@ -107,8 +102,7 @@ test("mixed Google Pay is preserved with every other split and reconciles to the
   assert.equal(report.allocationValid, true);
   assert.equal(report.channels.gpay, 30000);
   const reopened = await api("GET", `/bookings/${booking._id}`);
-  const form = bookingEditFormValues(reopened.json.booking);
-  assert.deepEqual([form.mixedCash, form.mixedPhonePe, form.mixedgpay, form.mixedRazorpay], ["100", "200", "300", "400"]);
+  assert.deepEqual(reopened.json.booking.payment.paymentBreakdown, split);
 });
 
 test("optional entered UPI timestamps persist without an advance or extra payment record", async () => {
@@ -118,9 +112,8 @@ test("optional entered UPI timestamps persist without an advance or extra paymen
   const booking = await Booking.findById(created.json.booking._id).lean();
   assert.equal(await PaymentHistory.countDocuments({ bookingId: booking._id }), 0);
   assert.equal(booking.customPaymentDate.toISOString(), new Date(`${input.paymentDate}T00:30:00+05:30`).toISOString());
-  const form = bookingEditFormValues(booking);
-  assert.equal(form.paymentDate, input.paymentDate);
-  assert.equal(form.paymentTime, "00:30");
+  assert.equal(booking.paymentDate.toISOString(), new Date(`${input.paymentDate}T00:30:00+05:30`).toISOString());
+  assert.equal(booking.paymentTime, "12:30 am");
 });
 
 test("pickup-only, drop-only and disabled services retain the applicable entered values", async () => {

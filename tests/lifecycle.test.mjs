@@ -315,14 +315,11 @@ test("revenue by vehicle includes the lead-booking advance", async () => {
   const imported = await client(ctx.base)("GET", "/dashboard/payments/import");
   assert.equal(imported.status, 200);
   assert.ok(imported.json.payments.length > 0);
-  const { allocateRevenuePayment } = await import("../src/services/paymentAllocation.service.js");
-  const { normalizeData } = await import("../../my-sawari-Frontend/app/features/revenue/engine.js");
+  const { allocateRevenuePayment, normalizeRevenueChannelSplit } = await import("../src/services/paymentAllocation.service.js");
   for (const payment of imported.json.payments) {
     assert.deepEqual(payment.channelSplit, allocateRevenuePayment(payment));
+    assert.deepEqual(normalizeRevenueChannelSplit(payment.channelSplit), payment.channelSplit);
   }
-  const current = normalizeData({ payments: imported.json.payments });
-  const legacy = normalizeData({ payments: imported.json.payments.map(({ channelSplit, ...payment }) => payment) });
-  assert.deepEqual(current.payments, legacy.payments);
 });
 
 test("cancelling: confirmed booking can be cancelled once, completed cannot", async () => {

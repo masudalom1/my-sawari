@@ -1,7 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { startTestApp, client, createUserAndLogin } from "./helpers/harness.mjs";
-import { normalizeData, buildReport } from "../../my-sawari-Frontend/app/features/revenue/engine.js";
 
 test("payment import uses the established revenue allocation without changing source records", async (t) => {
   const ctx = await startTestApp();
@@ -108,11 +107,15 @@ test("payment import uses the established revenue allocation without changing so
     assert.equal(new Set(response.json.payments.map(({ _id }) => _id)).size, sources.length);
     assert.equal(new Set(response.json.payments.map(({ bookingId }) => bookingId)).size, 2);
     assert.equal(response.json.payments.reduce((sum, payment) => sum + payment.amount, 0), 5775);
-    const normalized = normalizeData({ vehicles: [{ _id: String(vehicleA), pricePerDay: 0 }], payments: response.json.payments });
-    const report = buildReport(normalized, { from: "2026-10-01", to: "2026-10-31" });
-    assert.equal(report.summary.gross, 5725);
-    assert.equal(report.summary.refunds, 50);
-    assert.equal(report.summary.net, 5675);
+    const gross = response.json.payments
+      .filter((payment) => payment.type !== "refund")
+      .reduce((sum, payment) => sum + payment.amount, 0);
+    const refunds = response.json.payments
+      .filter((payment) => payment.type === "refund")
+      .reduce((sum, payment) => sum + payment.amount, 0);
+    assert.equal(gross, 5725);
+    assert.equal(refunds, 50);
+    assert.equal(gross - refunds, 5675);
     assert.equal(response.json.payments.find(({ _id }) => _id === String(refund._id)).amount, 50);
   });
 

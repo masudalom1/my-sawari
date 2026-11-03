@@ -2,7 +2,7 @@ import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { startTestApp } from "./helpers/harness.mjs";
 import { parsePaymentReport, buildPaymentReportPipeline, loadPaymentReport, exportPaymentReport } from "../src/services/paymentReport.service.js";
-import { paymentReportRow, summarizePayments } from "../../shared/paymentReporting.mjs";
+import { paymentReportRow, summarizePayments } from "../shared/paymentReporting.mjs";
 
 let ctx, PaymentHistory, owner, source, baseline;
 const query = { period: "custom", startDate: "2026-09-01", endDate: "2026-09-30", limit: "25" };
