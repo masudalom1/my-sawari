@@ -282,8 +282,10 @@ paymentHistorySchema.index({ paymentMethod: 1, isPhonePeCollected: 1, createdAt:
 paymentHistorySchema.index({ paymentMethod: 1, isPhonePeCollected: 1, lastCollectedAt: -1 });
 paymentHistorySchema.index({ paymentMethod: 1, createdAt: -1 });
 paymentHistorySchema.index({ paymentMethod: 1, lastCollectedAt: -1 });
+paymentHistorySchema.index({ type: 1, createdAt: -1 });
 paymentHistorySchema.index({ createdAt: -1 });
 paymentHistorySchema.index({ paymentDate: -1 });
+paymentHistorySchema.index({ customPaymentDate: -1 });
 
 paymentHistorySchema.pre("save", function () {
   if (!this.paymentDate && this.customPaymentDate) {

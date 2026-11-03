@@ -196,6 +196,29 @@ test("25, 50, 100 and All return complete stable pages with the same filtered to
   } finally { await PaymentHistory.deleteMany({ _id: { $in: inserted.map((row) => row._id) } }); }
 });
 
+test("page and summary sections return first-page rows independently from totals", async () => {
+  const inserted = await PaymentHistory.insertMany(Array.from({ length: 60 }, (_, index) => ({
+    company: owner, bookingId: oid(), createdBy: owner, type: "booking", paymentMethod: "cash", amount: 10,
+    paymentDate: new Date(Date.now() - index * 1000), customer: { fullName: "Independent cash sections" },
+  })));
+  try {
+    const url = `${ENDPOINT}?tab=all&search=Independent%20cash%20sections`;
+    const page = await api("GET", `${url}&limit=25&page=1&section=page`);
+    assert.equal(page.status, 200);
+    assert.equal(page.json.data.length, 25);
+    assert.equal(page.json.total, null);
+    assert.equal(page.json.summary, undefined);
+    assert.equal(page.json.hasMore, true);
+
+    const summary = await api("GET", `${url}&section=summary`);
+    assert.equal(summary.status, 200);
+    assert.equal(summary.json.total, 60);
+    assert.equal(summary.json.summary.amount, 600);
+    assert.equal(summary.json.data, undefined);
+    assert.ok(summary.json.groups.every((group) => group.payments === undefined));
+  } finally { await PaymentHistory.deleteMany({ _id: { $in: inserted.map((row) => row._id) } }); }
+});
+
 test("collection POST supplies the updated filtered view without needing a refresh request", async () => {
   const payment = await PaymentHistory.create({ company: owner, bookingId: oid(), createdBy: owner, type: "booking", paymentMethod: "cash", amount: 100,
     customer: { fullName: "Action view fixture" } });

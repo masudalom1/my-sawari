@@ -1,9 +1,9 @@
 import User, { USER_ROLES } from "../models/user.model.js";
+import validator from "validator";
 import asyncHandler from "../utils/asyncHandler.js";
 import ApiError from "../utils/ApiError.js";
 import {
   validateLoginInput,
-  validateRegisterInput,
 } from "../utils/validators.js";
 import {
   generateAccessToken,
@@ -11,6 +11,8 @@ import {
   hashRefreshToken,
   cookieOptions,
 } from "../services/token.service.js";
+import { normalizeUserPermissionOverrideMap } from "../config/rbacPermissions.js";
+import { recordRbacAudit } from "../services/rbacAudit.service.js";
 
 const sendAuthResponse = async (user, res, statusCode = 200) => {
   const accessToken = generateAccessToken(user);
@@ -53,47 +55,6 @@ const sendAuthResponse = async (user, res, statusCode = 200) => {
     });
 };
 
-export const registerUser = asyncHandler(async (req, res) => {
-  validateRegisterInput(req.body);
-
-  const {
-    fullName,
-    mobileNumber,
-    email,
-    businessName,
-    password,
-    role,
-  } = req.body;
-
-  const existingUser = await User.findOne({
-    $or: [
-      { email: email.toLowerCase() },
-      { mobileNumber },
-    ],
-  });
-
-  if (existingUser) {
-    if (existingUser.email === email.toLowerCase()) {
-      throw new ApiError(409, "Email already registered");
-    }
-
-    if (existingUser.mobileNumber === mobileNumber) {
-      throw new ApiError(409, "Mobile number already registered");
-    }
-  }
-
-  const user = await User.create({
-    fullName,
-    mobileNumber,
-    email: email.toLowerCase(),
-    businessName,
-    password,
-    role,
-  });
-
-  await sendAuthResponse(user, res, 201);
-});
-
 export const createEmployee = asyncHandler(async (req, res) => {
   const superAdmin = req.user;
 
@@ -103,37 +64,83 @@ export const createEmployee = asyncHandler(async (req, res) => {
       "Only Super Admin can create employees"
     );
   }
+  if (!superAdmin.businessName) {
+    throw new ApiError(403, "A business scope is required to create employees");
+  }
 
-  const {
-    fullName,
-    mobileNumber,
-    email,
-    password,
-    role,
-  } = req.body;
-
+  const body = req.body || {};
+  const { fullName, mobileNumber, email, password, role } = body;
   if (
-    !fullName ||
-    !mobileNumber ||
-    !email ||
-    !password ||
-    !role
+    typeof fullName !== "string" ||
+    typeof mobileNumber !== "string" ||
+    typeof email !== "string" ||
+    typeof password !== "string" ||
+    typeof role !== "string"
+  ) {
+    throw new ApiError(400, "Full name, email, mobile number, password, and role are required");
+  }
+  const normalizedName = fullName.trim();
+  const normalizedEmail = email.trim().toLowerCase();
+  const normalizedMobile = mobileNumber.trim();
+  if (normalizedName.length < 2 || normalizedName.length > 100) {
+    throw new ApiError(400, "Full name must be between 2 and 100 characters");
+  }
+  if (!validator.isEmail(normalizedEmail)) {
+    throw new ApiError(400, "A valid email address is required");
+  }
+  if (!/^[6-9]\d{9}$/.test(normalizedMobile)) {
+    throw new ApiError(400, "A valid 10-digit Indian mobile number is required");
+  }
+  if (
+    password.length < 8 ||
+    !/[A-Z]/.test(password) ||
+    !/[0-9]/.test(password) ||
+    !/[^A-Za-z0-9]/.test(password)
   ) {
     throw new ApiError(
       400,
-      "All fields are required"
+      "Password must be at least 8 characters and contain an uppercase letter, a number, and a special character",
+    );
+  }
+  if (body.confirmPassword !== undefined && body.confirmPassword !== password) {
+    throw new ApiError(400, "Passwords do not match");
+  }
+  if (!USER_ROLES.includes(role) || role === "SUPER_ADMIN") {
+    throw new ApiError(400, "A valid non-Super Admin role is required");
+  }
+  if (
+    body.businessName !== undefined &&
+    body.businessName !== superAdmin.businessName
+  ) {
+    throw new ApiError(403, "Employee business scope is derived from the authenticated administrator");
+  }
+  if (body.branchId !== undefined && body.branchId !== null && body.branchId !== "") {
+    throw new ApiError(400, "Branch assignment is unavailable because this application has no branch directory");
+  }
+
+  let permissionOverrides = {};
+  if (body.overrides !== undefined) {
+    const normalizedOverrides = normalizeUserPermissionOverrideMap(body.overrides);
+    if (!normalizedOverrides) {
+      throw new ApiError(
+        400,
+        "Overrides must contain registered, non-protected permission keys with allow or deny values",
+      );
+    }
+    permissionOverrides = Object.fromEntries(
+      Object.entries(normalizedOverrides).filter(([, value]) => value !== "inherit"),
     );
   }
 
   const existingUser = await User.findOne({
     $or: [
-      { email: email.toLowerCase() },
-      { mobileNumber },
+      { email: normalizedEmail },
+      { mobileNumber: normalizedMobile },
     ],
   });
 
   if (existingUser) {
-    if (existingUser.email === email.toLowerCase()) {
+    if (existingUser.email === normalizedEmail) {
       throw new ApiError(
         409,
         "Email already registered"
@@ -141,7 +148,7 @@ export const createEmployee = asyncHandler(async (req, res) => {
     }
 
     if (
-      existingUser.mobileNumber === mobileNumber
+      existingUser.mobileNumber === normalizedMobile
     ) {
       throw new ApiError(
         409,
@@ -150,15 +157,49 @@ export const createEmployee = asyncHandler(async (req, res) => {
     }
   }
 
-  const employee = await User.create({
-    fullName,
-    mobileNumber,
-    email: email.toLowerCase(),
-    businessName:
-      superAdmin.businessName,
-    password,
-    role,
-    createdBy: superAdmin._id,
+  let employee;
+  try {
+    employee = await User.create({
+      fullName: normalizedName,
+      mobileNumber: normalizedMobile,
+      email: normalizedEmail,
+      businessName: superAdmin.businessName,
+      password,
+      role,
+      permissionOverrides,
+      permissionOverridesUpdatedBy:
+        body.overrides !== undefined ? superAdmin._id : null,
+      permissionOverridesUpdatedAt:
+        body.overrides !== undefined ? new Date() : null,
+      createdBy: superAdmin._id,
+    });
+  } catch (error) {
+    if (error?.code !== 11000) throw error;
+    const duplicateField = error.keyPattern?.email
+      ? "Email"
+      : error.keyPattern?.mobileNumber
+        ? "Mobile number"
+        : "Email or mobile number";
+    throw new ApiError(409, `${duplicateField} already registered`);
+  }
+
+  await recordRbacAudit({
+    actor: superAdmin,
+    action: "user.created",
+    targetType: "user",
+    targetUser: employee._id,
+    changes: {
+      identity: {
+        fullName: employee.fullName,
+        email: employee.email,
+        mobileNumber: employee.mobileNumber,
+      },
+      role: { from: null, to: employee.role },
+      accountStatus: { from: null, to: employee.accountStatus },
+      ...(body.overrides !== undefined
+        ? { permissionOverrides: { from: null, to: permissionOverrides } }
+        : {}),
+    },
   });
 
   res.status(201).json({
@@ -313,30 +354,46 @@ export const getCurrentUser = asyncHandler(async (req, res) => {
 
 export const resetPassword = asyncHandler(
   async (req, res) => {
-    const { email, password } = req.body;
-
-    if (!email || !password) {
+    const { currentPassword, newPassword } = req.body || {};
+    if (typeof currentPassword !== "string" || typeof newPassword !== "string") {
+      throw new ApiError(400, "Current and new passwords are required");
+    }
+    if (
+      newPassword.length < 8 ||
+      !/[A-Z]/.test(newPassword) ||
+      !/[0-9]/.test(newPassword) ||
+      !/[^A-Za-z0-9]/.test(newPassword)
+    ) {
       throw new ApiError(
         400,
-        "Email and password are required"
+        "New password must be at least 8 characters and contain an uppercase letter, a number, and a special character",
       );
     }
-
-    const user = await User.findOne({
-      email: email.toLowerCase(),
-    }).select("+password");
-
-    if (!user) {
-      throw new ApiError(404, "User not found");
+    if (!req.user?._id) {
+      throw new ApiError(401, "Authentication required");
     }
 
-    user.password = password;
+    const user = await User.findById(req.user._id).select("+password +refreshToken");
+    if (!user) {
+      throw new ApiError(404, "Account not found");
+    }
+    if (!(await user.comparePassword(currentPassword))) {
+      throw new ApiError(401, "Current password is incorrect");
+    }
 
-    // Optional
+    user.password = newPassword;
     user.failedLoginAttempts = 0;
     user.lockUntil = null;
+    user.refreshToken = null;
 
     await user.save();
+    await recordRbacAudit({
+      actor: user,
+      action: "user.password.changed",
+      targetType: "user",
+      targetUser: user._id,
+      changes: { password: { changed: true } },
+    });
 
     res.status(200).json({
       success: true,
@@ -365,37 +422,68 @@ export const updateEmployeeRole = async (req, res) => {
         message: "Only Super Admin can change roles",
       });
     }
+    if (!req.user.businessName) {
+      throw new ApiError(403, "A business scope is required to manage employees");
+    }
 
-    const targetUser = await User.findById(id);
+    const targetUser = await User.findOne({
+      _id: id,
+      businessName: req.user.businessName,
+      deletedAt: null,
+    });
     if (!targetUser) {
-      return res.status(404).json({
-        success: false,
-        message: "Employee not found",
-      });
+      throw new ApiError(404, "Employee not found");
     }
 
-    // Prevent demoting/changing another SUPER_ADMIN by accident (optional safety rule)
-    if (targetUser.role === "SUPER_ADMIN" && targetUser._id.toString() !== req.user._id.toString()) {
-      return res.status(403).json({
-        success: false,
-        message: "Cannot change another Super Admin's role",
-      });
+    if (targetUser._id.equals(req.user._id) && role !== "SUPER_ADMIN") {
+      throw new ApiError(403, "You cannot change your own Super Admin role");
     }
 
+    if (targetUser.role === "SUPER_ADMIN" && !targetUser._id.equals(req.user._id)) {
+      throw new ApiError(403, "Cannot change another Super Admin's role");
+    }
+
+    if (role === "SUPER_ADMIN" && targetUser.role !== "SUPER_ADMIN") {
+      throw new ApiError(403, "Super Admin role assignment is protected");
+    }
+
+    const previousRole = targetUser.role;
     targetUser.role = role;
     await targetUser.save();
+    const persistedUser = await User.findOne({
+      _id: targetUser._id,
+      businessName: req.user.businessName,
+      deletedAt: null,
+    }).select("_id fullName email role").lean();
+    if (!persistedUser || persistedUser.role !== role) {
+      throw new ApiError(500, "The employee role update could not be verified");
+    }
+
+    await recordRbacAudit({
+      actor: req.user,
+      action: "user.role.updated",
+      targetType: "user",
+      targetUser: persistedUser._id,
+      changes: { role: { from: previousRole, to: role } },
+    });
 
     return res.status(200).json({
       success: true,
       message: "Role updated successfully",
       data: {
-        _id: targetUser._id,
-        fullName: targetUser.fullName,
-        email: targetUser.email,
-        role: targetUser.role,
+        _id: persistedUser._id,
+        fullName: persistedUser.fullName,
+        email: persistedUser.email,
+        role: persistedUser.role,
       },
     });
   } catch (error) {
+    if (error instanceof ApiError) {
+      return res.status(error.statusCode).json({
+        success: false,
+        message: error.message,
+      });
+    }
     return res.status(500).json({
       success: false,
       message: "Failed to update role",
@@ -406,6 +494,13 @@ export const updateEmployeeRole = async (req, res) => {
 
 export const getAllEmployees = asyncHandler(async (req, res) => {
   const requester = req.user;
+
+  if (requester.role !== "SUPER_ADMIN") {
+    throw new ApiError(403, "Only Super Admin can view employees");
+  }
+  if (!requester.businessName) {
+    throw new ApiError(403, "A business scope is required to view employees");
+  }
 
   // Scope to the same business, exclude the requester themself and soft-deleted users
   const employees = await User.find({

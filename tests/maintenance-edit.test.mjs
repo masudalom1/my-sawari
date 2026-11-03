@@ -14,7 +14,7 @@ import { startTestApp, client, createUserAndLogin } from "./helpers/harness.mjs"
 
 test("registered maintenance editor routes enforce auth, vehicle availability and validated in-place updates", async (t) => {
   process.env.JWT_ACCESS_SECRET = "maintenance-edit-test-only";
-  const user = { _id: new mongoose.Types.ObjectId(), company: new mongoose.Types.ObjectId(), accountStatus: "ACTIVE" };
+  const user = { _id: new mongoose.Types.ObjectId(), company: new mongoose.Types.ObjectId(), accountStatus: "ACTIVE", role: "SUPER_ADMIN" };
   const vehicle = new mongoose.Types.ObjectId();
   const record = new Maintenance({ vehicle, startDate: "2026-01-01", endDate: "2026-01-02" });
   let saves = 0;
@@ -99,6 +99,7 @@ test("maintenance edits persist to the existing record in an isolated database",
   t.after(() => ctx.stop());
   const owner = await createUserAndLogin(ctx.base);
   const outsider = await createUserAndLogin(ctx.base);
+  const { default: RolePermission } = await import("../src/models/rolePermission.model.js");
   const api = client(ctx.base, owner.token);
   async function employeeApi(companyOwner, suffix) {
     const credentials = {
@@ -113,6 +114,17 @@ test("maintenance edits persist to the existing record in an isolated database",
   }
   const staffApi = await employeeApi(owner, 1);
   const foreignStaffApi = await employeeApi(outsider, 2);
+  for (const companyOwner of [owner, outsider]) {
+    await RolePermission.create({
+      businessName: companyOwner.user.businessName,
+      role: "FLEET_MANAGER",
+      permissions: {
+        "page.dashboard.view": true,
+        "page.dashboard.edit": true,
+      },
+      updatedBy: companyOwner.user.id,
+    });
+  }
   const vehicle = new mongoose.Types.ObjectId();
   await Vehicle.collection.insertOne({ _id: vehicle, company: new mongoose.Types.ObjectId(owner.user.id), isDeleted: false });
   const record = await Maintenance.create({ vehicle, startDate: "2026-01-01", endDate: "2026-01-02", title: "Before" });

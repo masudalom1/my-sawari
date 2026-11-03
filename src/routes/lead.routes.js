@@ -1,5 +1,7 @@
 import express from "express";
 import protect from "../middlewares/auth.middleware.js";
+import requirePermission from "../middlewares/requirePermission.middleware.js";
+import { PERMISSIONS } from "../config/rbacPermissions.js";
 
 import {
   cancelBooking,
@@ -22,26 +24,26 @@ import { createLeadActivity, getLeadActivities } from "../controllers/leadActivi
 
 const router = express.Router();
 
-router.get("/dashboard", protect, getLeadDashboardStats);
-router.get("/booking", protect, getBookingsDashboard);
-router.get("/", protect, getLeads);
-router.post("/", protect, createLead);
-router.get("/:id", protect, getLeadById);
-router.put("/:id", protect, updateLead);
+router.get("/dashboard", protect, requirePermission(PERMISSIONS.bookings.view), getLeadDashboardStats);
+router.get("/booking", protect, requirePermission(PERMISSIONS.bookings.view), getBookingsDashboard);
+router.get("/", protect, requirePermission(PERMISSIONS.bookings.view), getLeads);
+router.post("/", protect, requirePermission(PERMISSIONS.bookings.create), createLead);
+router.get("/:id", protect, requirePermission(PERMISSIONS.bookings.view), getLeadById);
+router.put("/:id", protect, requirePermission(PERMISSIONS.bookings.edit), updateLead);
 
-router.get("/:id/history", protect, getLeadHistory);
+router.get("/:id/history", protect, requirePermission(PERMISSIONS.bookings.view), getLeadHistory);
 
-router.post("/:id/activity", protect, createLeadActivity);
-router.get("/:id/activity", protect, getLeadActivities);
+router.post("/:id/activity", protect, requirePermission(PERMISSIONS.bookings.edit), createLeadActivity);
+router.get("/:id/activity", protect, requirePermission(PERMISSIONS.bookings.view), getLeadActivities);
 
-router.get("/check/:mobile",protect,checkLeadByMobile);
+router.get("/check/:mobile",protect,requirePermission(PERMISSIONS.bookings.create),checkLeadByMobile);
 
-router.put("/:id/create-booking",protect,createLeadBooking);
-router.get("/:id/create-booking",protect,getLeadBookingDetails);
-router.get("/:id/bookings",protect,getLeadBookings);
-router.post("/create",protect,createBookings);
-router.get("/booking-details/:id", protect, getBookingDetails);
-router.put("/booking-update/:id", protect, updateBooking);
-router.put("/:id/cancel", protect, cancelBooking);
+router.put("/:id/create-booking",protect,requirePermission(PERMISSIONS.bookings.create),createLeadBooking);
+router.get("/:id/create-booking",protect,requirePermission(PERMISSIONS.bookings.view),getLeadBookingDetails);
+router.get("/:id/bookings",protect,requirePermission(PERMISSIONS.bookings.view),getLeadBookings);
+router.post("/create",protect,requirePermission(PERMISSIONS.bookings.create),createBookings);
+router.get("/booking-details/:id", protect, requirePermission(PERMISSIONS.bookings.view), getBookingDetails);
+router.put("/booking-update/:id", protect, requirePermission(PERMISSIONS.bookings.edit), updateBooking);
+router.put("/:id/cancel", protect, requirePermission(PERMISSIONS.bookings.edit), cancelBooking);
 
 export default router;

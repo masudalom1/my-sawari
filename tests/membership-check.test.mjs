@@ -8,8 +8,7 @@ import { startTestApp, client, createUserAndLogin } from "./helpers/harness.mjs"
 let ctx;
 let anon;
 let api;
-let Customer;
-let Membership;
+let Customer, Membership, RolePermission, User;
 
 const DAY = 24 * 60 * 60 * 1000;
 const PAID = { status: "completed", amount: 499, paymentMethod: "razorpay", paymentId: "pay_secret", transactionId: "txn_secret", upiLastFour: "4321" };
@@ -26,9 +25,19 @@ async function customerWith(mobileNumber, membership) {
 before(async () => {
   ctx = await startTestApp();
   anon = client(ctx.base);
-  api = client(ctx.base, (await createUserAndLogin(ctx.base, { role: "BOOKING_EXECUTIVE" })).token);
+  const staff = await createUserAndLogin(ctx.base, { role: "BOOKING_EXECUTIVE" });
+  api = client(ctx.base, staff.token);
   ({ default: Customer } = await import("../src/models/customer.model.js"));
   ({ default: Membership } = await import("../src/models/membership.model.js"));
+  ({ default: RolePermission } = await import("../src/models/rolePermission.model.js"));
+  ({ default: User } = await import("../src/models/user.model.js"));
+  const staffUser = await User.findOne({ email: staff.email });
+  await RolePermission.create({
+    businessName: staffUser.businessName,
+    role: staffUser.role,
+    permissions: { "page.bookings.create": true },
+    updatedBy: staffUser._id,
+  });
 
   const now = Date.now();
   await customerWith("9000000001", { membershipId: "MEM-ACTIVE", plan: "plus", activatedAt: new Date(now - 10 * DAY), expiresAt: new Date(now + 30 * DAY), totalSaved: 73.25, payment: PAID });
@@ -54,8 +63,18 @@ test("membership check requires authentication", async () => {
   assert.equal(res.status, 401);
 });
 
+test("membership check requires the booking-create permission", async () => {
+  const staff = await createUserAndLogin(ctx.base, { role: "FINANCE_EXECUTIVE" });
+  const res = await client(ctx.base, staff.token)(
+    "POST",
+    "/memberships/check",
+    { mobileNumber: "9000000001" },
+  );
+  assert.equal(res.status, 403);
+  assert.equal(res.json.membership, undefined);
+});
+
 test("blocked, suspended and deleted accounts cannot check memberships", async () => {
-  const { default: User } = await import("../src/models/user.model.js");
   const account = await createUserAndLogin(ctx.base, { role: "BOOKING_EXECUTIVE" });
   const restricted = client(ctx.base, account.token);
   for (const update of [

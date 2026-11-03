@@ -45,9 +45,23 @@ const TOPIC_BY_COLLECTION = {
   // Server-side only (never sent to browsers): names in cached lists
   // ("created by") and re-checking connected accounts.
   users: "users",
+  rolepermissions: "permissions",
 };
-const ALL_TOPICS = [...new Set(Object.values(TOPIC_BY_COLLECTION))];
+const ALL_TOPICS = [
+  ...new Set(
+    Object.entries(TOPIC_BY_COLLECTION)
+      .filter(([collection]) => collection !== "rolepermissions")
+      .map(([, topic]) => topic),
+  ),
+];
 const SERVER_ONLY_TOPICS = new Set(["users"]);
+const PERMISSION_USER_FIELDS = new Set([
+  "accountStatus",
+  "businessName",
+  "deletedAt",
+  "permissionOverrides",
+  "role",
+]);
 
 // Write requests that only touch accounts (login, roles, ...)
 const ACCOUNT_WRITE_PREFIXES = ["/api/v1/auth"];
@@ -145,14 +159,25 @@ export function markChanged(topics = ALL_TOPICS) {
 // made the change reads its own write immediately, without waiting for the
 // change stream). Only emits browser events when no change stream is running.
 // Failed requests (4xx/5xx) never produce an event.
+export function topicsForWriteRequest(originalUrl) {
+  const isAccountWrite = ACCOUNT_WRITE_PREFIXES.some((p) =>
+    originalUrl.startsWith(p),
+  );
+  const isPermissionWrite =
+    /^\/api\/v1\/auth\/roles\/[^/?]+\/permissions(?:[/?]|$)/.test(
+      originalUrl,
+    ) ||
+    /^\/api\/v1\/auth\/employees\/[^/?]+(?:\/(?:role|permissions|status))?(?:[/?]|$)/.test(
+      originalUrl,
+    );
+  return isAccountWrite
+    ? ["users", ...(isPermissionWrite ? ["permissions"] : [])]
+    : ALL_TOPICS;
+}
+
 export function trackWriteRequests(req, res, next) {
   if (["GET", "HEAD", "OPTIONS"].includes(req.method)) return next();
-  const topics = ACCOUNT_WRITE_PREFIXES.some((p) =>
-    req.originalUrl.startsWith(p),
-  )
-    ? ["users"]
-    : ALL_TOPICS;
-
+  const topics = topicsForWriteRequest(req.originalUrl);
   invalidate();
   res.on("finish", () => {
     if (res.statusCode >= 400) return;
@@ -166,8 +191,22 @@ export function trackWriteRequests(req, res, next) {
 
 const STRUCTURAL_EVENTS = ["drop", "rename", "dropDatabase", "invalidate"];
 
-function topicsFor(change) {
+export function topicsFor(change) {
   const topic = TOPIC_BY_COLLECTION[change?.ns?.coll];
+  if (topic === "users") {
+    if (change.operationType !== "update") return ["users", "permissions"];
+    const updatedFields = change.updateDescription?.updatedFields || {};
+    const changedFields = [
+      ...(Array.isArray(updatedFields)
+        ? updatedFields
+        : Object.keys(updatedFields)),
+      ...(change.updateDescription?.removedFields || []),
+    ];
+    const changesAccess = changedFields.some((field) =>
+      PERMISSION_USER_FIELDS.has(field.split(".")[0]),
+    );
+    return changesAccess ? ["users", "permissions"] : ["users"];
+  }
   if (topic) return [topic];
   return STRUCTURAL_EVENTS.includes(change?.operationType) ? ALL_TOPICS : [];
 }
@@ -177,8 +216,25 @@ async function runChangeStream() {
   const pipeline = [
     { $match: { "ns.coll": { $in: Object.keys(TOPIC_BY_COLLECTION) } } },
     // Only what is needed to know WHAT changed: keeps traffic from a
-    // bandwidth-limited cluster tiny (no document bodies, no update diffs).
-    { $project: { ns: 1, operationType: 1 } },
+    // bandwidth-limited cluster tiny (no document bodies or updated values).
+    {
+      $project: {
+        ns: 1,
+        operationType: 1,
+        "updateDescription.updatedFields": {
+          $map: {
+            input: {
+              $objectToArray: {
+                $ifNull: ["$updateDescription.updatedFields", {}],
+              },
+            },
+            as: "field",
+            in: "$$field.k",
+          },
+        },
+        "updateDescription.removedFields": 1,
+      },
+    },
   ];
 
   stream = db.watch(pipeline);

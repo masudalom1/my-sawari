@@ -1,6 +1,8 @@
 import express from "express";
 import rateLimit, { ipKeyGenerator } from "express-rate-limit";
 import protect from "../middlewares/auth.middleware.js";
+import requirePermission from "../middlewares/requirePermission.middleware.js";
+import { PERMISSIONS } from "../config/rbacPermissions.js";
 import { checkMembership, quoteMembershipDiscount } from "../controllers/membership.controller.js";
 
 const router = express.Router();
@@ -25,7 +27,19 @@ const membershipCheckLimiter = rateLimit({
   },
 });
 
-router.post("/check", protect, membershipCheckLimiter, checkMembership);
-router.post("/discount", protect, membershipCheckLimiter, quoteMembershipDiscount);
+router.post(
+  "/check",
+  protect,
+  requirePermission(PERMISSIONS.bookings.create),
+  membershipCheckLimiter,
+  checkMembership,
+);
+router.post(
+  "/discount",
+  protect,
+  requirePermission(PERMISSIONS.bookings.create),
+  membershipCheckLimiter,
+  quoteMembershipDiscount,
+);
 
 export default router;

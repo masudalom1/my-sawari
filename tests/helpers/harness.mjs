@@ -9,6 +9,7 @@ import { MongoMemoryReplSet } from "mongodb-memory-server";
 // imported, so dotenv (which never overrides) cannot pull real ones in.
 const FAKE_ENV = {
   NODE_ENV: "test",
+  RBAC_ENFORCEMENT_MODE: "enforce",
   JWT_ACCESS_SECRET: "test-only-secret",
   JWT_ACCESS_EXPIRES: "1h",
   CLIENT_URL: "http://localhost:3000",
@@ -115,13 +116,16 @@ export function client(base, token) {
       body: body === undefined ? undefined : isForm ? body : JSON.stringify(body),
     });
     const json = await res.json().catch(() => ({}));
-    return { status: res.status, json };
+    return { status: res.status, json, headers: res.headers };
   };
 }
 
 let userSeq = 0;
 
-export async function createUserAndLogin(base, { role = "SUPER_ADMIN" } = {}) {
+export async function createUserAndLogin(
+  base,
+  { role = "SUPER_ADMIN", businessName = "Test Rentals" } = {},
+) {
   const { default: User } = await import("../../src/models/user.model.js");
   userSeq += 1;
   const email = `user${userSeq}.${Date.now()}@test.dev`;
@@ -130,7 +134,7 @@ export async function createUserAndLogin(base, { role = "SUPER_ADMIN" } = {}) {
     fullName: `Test User ${userSeq}`,
     mobileNumber: `98${String(10000000 + userSeq * 7919 + (Date.now() % 1000)).slice(-8)}`,
     email,
-    businessName: "Test Rentals",
+    businessName,
     password,
     role,
   });

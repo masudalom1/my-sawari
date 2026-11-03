@@ -10,10 +10,23 @@ test("employee-registered vehicles are selectable in New Booking across the unif
   t.after(() => ctx.stop());
   const owner = await createUserAndLogin(ctx.base);
   const outsider = await createUserAndLogin(ctx.base);
+  const { default: RolePermission } = await import("../src/models/rolePermission.model.js");
   const ownerApi = client(ctx.base, owner.token);
   const foreign = client(ctx.base, outsider.token);
   const credentials = { fullName: "Fleet Staff", mobileNumber: "9876543212", email: "fleet-staff@test.dev", password: "Passw0rd!", role: "FLEET_MANAGER" };
   assert.equal((await ownerApi("POST", "/auth/employees", credentials)).status, 201);
+  await RolePermission.create({
+    businessName: owner.user.businessName,
+    role: "FLEET_MANAGER",
+    permissions: {
+      "page.dashboard.view": true,
+      "page.dashboard.create": true,
+      "page.dashboard.edit": true,
+      "page.bookings.view": true,
+      "page.bookings.create": true,
+    },
+    updatedBy: owner.user.id,
+  });
   const login = await client(ctx.base)("POST", "/auth/login", { emailOrMobile: credentials.email, password: credentials.password });
   assert.equal(login.status, 200);
   const staff = client(ctx.base, login.json.data.accessToken);

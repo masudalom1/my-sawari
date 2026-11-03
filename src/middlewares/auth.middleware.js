@@ -1,4 +1,4 @@
-import User from "../models/user.model.js";
+import User, { USER_ROLES } from "../models/user.model.js";
 import asyncHandler from "../utils/asyncHandler.js";
 import ApiError from "../utils/ApiError.js";
 import { verifyAccessToken } from "../services/token.service.js";
@@ -22,6 +22,10 @@ export const resolveActiveUser = async (token) => {
 
   if (!user) {
     throw new ApiError(401, "User not found");
+  }
+
+  if (!USER_ROLES.includes(user.role)) {
+    throw new ApiError(403, "Account role is invalid");
   }
 
   if (user.accountStatus !== "ACTIVE") {

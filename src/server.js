@@ -3,11 +3,13 @@
 import "dotenv/config";
 import mongoose from "mongoose";
 import { validateEnv } from "./config/env.js";
+import { getRbacEnforcementMode } from "./config/rbacEnforcement.js";
 import app from "./app.js";
 import connectDB from "./config/db.js";
 import { startRealtime, stopRealtime } from "./realtime/changeFeed.js";
 
 validateEnv();
+const rbacEnforcementMode = getRbacEnforcementMode();
 
 const PORT = process.env.PORT || 5000;
 
@@ -15,6 +17,7 @@ connectDB();
 
 const server = app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
+  console.log(`RBAC permission enforcement mode: ${rbacEnforcementMode}`);
 });
 
 // Socket.IO on the same port: pushes "data changed" events to the dashboards

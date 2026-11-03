@@ -88,12 +88,12 @@ function sendEntry(res, entry) {
 // Express middleware for GET routes. Only successful JSON responses
 // (HTTP 200 and success !== false) are stored, as the exact bytes sent.
 // `maxAgeMs` may be a number or (req) => number.
-export function cacheResponse({ maxAgeMs: maxAge }) {
+export function cacheResponse({ maxAgeMs: maxAge, cacheKey = (req) => req.originalUrl }) {
   return (req, res, next) => {
     if (req.method !== "GET" || !enabled()) return next();
 
     const maxAgeMs = typeof maxAge === "function" ? maxAge(req) : maxAge;
-    const key = req.originalUrl;
+    const key = cacheKey(req);
     const hit = getFresh(key, maxAgeMs);
     if (hit) return sendEntry(res, hit);
 

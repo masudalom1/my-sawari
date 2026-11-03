@@ -139,6 +139,28 @@ test("all page sizes include the full filtered totals and deterministic pages wi
   } finally { await PaymentHistory.deleteMany({ _id: { $in: rows.map((row) => row._id) } }); }
 });
 
+test("page and summary sections return first-page rows independently from totals", async () => {
+  const rows = await PaymentHistory.insertMany(Array.from({ length: 60 }, (_, index) => ({
+    company: owner, bookingId: oid(), createdBy: owner, type: "booking", paymentMethod: "gpay",
+    amount: 10, customer: { fullName: "Independent UPI sections" }, createdAt: new Date(Date.now() - index * 1000),
+  })));
+  try {
+    const page = await get("tab=all&search=Independent%20UPI%20sections&limit=25&page=1&section=page");
+    assert.equal(page.status, 200);
+    assert.equal(page.json.data.length, 25);
+    assert.equal(page.json.total, null);
+    assert.equal(page.json.summary, undefined);
+    assert.equal(page.json.hasMore, true);
+
+    const summary = await get("tab=all&search=Independent%20UPI%20sections&section=summary");
+    assert.equal(summary.status, 200);
+    assert.equal(summary.json.total, 60);
+    assert.equal(summary.json.summary.amount, 600);
+    assert.equal(summary.json.data, undefined);
+    assert.equal(summary.json.groups, undefined);
+  } finally { await PaymentHistory.deleteMany({ _id: { $in: rows.map((row) => row._id) } }); }
+});
+
 test("malformed filters and client-selected scope are rejected", async () => {
   for (const query of ["tab=bad", "method=cash", "limit=0", "limit=500", "page=0", "page=1x", "month=2026-13", "date=2026-02-30", "company=anything", "month=2026-10&date=2026-11-01"]) {
     assert.equal((await get(query)).status, 400, query);

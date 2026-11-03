@@ -1,16 +1,23 @@
 import mongoose from "mongoose";
 import PaymentHistory from "../models/paymentHistory.model.js";
+import User from "../models/user.model.js";
 import ApiError from "../utils/ApiError.js";
 import { toDayKey, addDayKeys, isValidDayKey, dayStartIST, dayEndIST } from "../utils/revenue.utils.js";
 
 const AMOUNT_EPSILON = 0.01;
 const MAX_PAGE_LIMIT = 500;
 const DEFAULT_PAGE_LIMIT = 100;
+const monthStart = (month) => {
+  const [year, monthNumber] = month.split("-").map(Number);
+  const next = new Date(Date.UTC(year, monthNumber, 1));
+  return next.toISOString().slice(0, 10);
+};
 
 const parseCashQuery = (query = {}) => {
   if (!query || typeof query !== "object" || Array.isArray(query)) throw new ApiError(400, "Invalid cash collection filters");
-  const { tab, search = "", month = "", date = "", page = "1", limit = "25" } = query;
+  const { tab, search = "", month = "", date = "", page = "1", limit = "25", section = "all" } = query;
   if ((tab !== undefined && !["today", "yesterday", "pending", "completed", "all"].includes(tab)) ||
+    !["all", "page", "summary"].includes(section) ||
     typeof search !== "string" || search.length > 120 ||
     typeof month !== "string" || (month && !/^[1-9]\d{3}-(0[1-9]|1[0-2])$/.test(month)) ||
     typeof date !== "string" || (date && !isValidDayKey(date)) ||
@@ -24,7 +31,7 @@ const parseCashQuery = (query = {}) => {
   if (!allRows && (typeof limit !== "string" || !/^\d+$/.test(limit) || !Number.isSafeInteger(Number(limit)) || Number(limit) < 1 || Number(limit) > MAX_PAGE_LIMIT)) {
     throw new ApiError(400, `Cash collection page size must be 1 to ${MAX_PAGE_LIMIT}, or All`);
   }
-  return { tab, search, month, date, requestedPage: Number(page), limit: allRows ? "all" : Number(limit),
+  return { tab, search, month, date, section, requestedPage: Number(page), limit: allRows ? "all" : Number(limit),
     status: ["pending", "collected", "all"].includes(query.status) ? query.status : "pending" };
 };
 
@@ -381,18 +388,31 @@ export const getPaymentHistory = async (req, res, next) => {
   }
 };
 async function readCashCollectionView(req) {
-    const { tab, search, month, date, requestedPage, limit, status } = parseCashQuery(req.query);
+    const parsed = parseCashQuery(req.query);
+    const { tab, search, month, date, requestedPage, limit, status } = parsed;
+    if (parsed.section === "page") return readCashCollectionPage(req, parsed);
 
-    /*
-     * NOTE ON SCALE:
-     * We load every cash/mixed PaymentHistory record into memory and
-     * compute remainingAmount in JS, because old records can't be
-     * trusted to have an accurate `isCollected` flag stored. This is
-     * fine at moderate volume (hundreds/low thousands of records). If
-     * this collection grows large, move this to a Mongo aggregation
-     * pipeline ($addFields + $match + $facet) so filtering and
-     * pagination happen in the DB instead of in Node.
-     */
+    const dateRange = date
+      ? { $gte: dayStartIST(date), $lte: dayEndIST(date) }
+      : month
+        ? {
+            $gte: dayStartIST(`${month}-01`),
+            $lt: dayStartIST(monthStart(month)),
+          }
+        : null;
+    const dateMatch = dateRange
+      ? {
+          $or: [
+            { customPaymentDate: dateRange },
+            { customPaymentDate: null, paymentDate: dateRange },
+            {
+              customPaymentDate: null,
+              paymentDate: null,
+              createdAt: dateRange,
+            },
+          ],
+        }
+      : null;
     const rawPayments = await PaymentHistory.find({
       ...cashScope(req),
       type: { $ne: "refund" },
@@ -400,10 +420,9 @@ async function readCashCollectionView(req) {
         { paymentMethod: "cash" },
         { paymentMethod: "mixed", "paymentBreakdown.cash": { $gt: 0 } },
       ],
+      ...(dateMatch ? { $and: [dateMatch] } : {}),
     })
       .select("bookingId customer vehicle booking amount paymentMethod paymentBreakdown type note createdBy createdAt paymentDate customPaymentDate paymentTime collectedAmount isCollected collectionHistory lastCollectedAt lastCollectedByName")
-      .populate("createdBy", "name fullName username")
-      .sort({ createdAt: -1, _id: -1 })
       .lean();
 
     const computed = rawPayments.map(computePaymentFields);
@@ -474,6 +493,46 @@ async function readCashCollectionView(req) {
       filtered = matches;
     }
 
+    if (parsed.section === "summary") {
+      const total = filtered.length;
+      const summary = cashSummary(filtered);
+      const groups = new Map();
+      for (const payment of filtered) {
+        const key = payment.paymentDay;
+        if (!groups.has(key)) groups.set(key, []);
+        groups.get(key).push(payment);
+      }
+      const totalPages = limit === "all" ? 1 : Math.max(1, Math.ceil(total / limit));
+      return {
+        success: true,
+        total,
+        status,
+        stats,
+        today,
+        yesterday,
+        cashTotal: summary.amount,
+        summary: {
+          ...summary,
+          partialCount: filtered.filter((payment) => !payment.isCollected && payment.collectedAmount > 0).length,
+        },
+        groups: [...groups].map(([groupDate, payments]) => ({
+          date: groupDate,
+          ...cashSummary(payments),
+        })),
+        filters: { tab: tab || (status === "collected" ? "completed" : status), month, date, search: search.trim() },
+        pagination: {
+          page: 1,
+          pageSize: limit,
+          total,
+          totalPages,
+          from: total ? 1 : 0,
+          to: Math.min(total, limit === "all" ? total : limit),
+          hasPrevious: false,
+          hasNext: totalPages > 1,
+        },
+      };
+    }
+
     // Sort/group by the payment's IST date, with deterministic ties so pages
     // never repeat a payment when several records share the same timestamp.
     filtered.sort((a, b) =>
@@ -486,6 +545,26 @@ async function readCashCollectionView(req) {
     const page = limit === "all" ? 1 : Math.min(requestedPage, totalPages);
     const skip = limit === "all" ? 0 : (page - 1) * limit;
     const paginatedPayments = limit === "all" ? filtered : filtered.slice(skip, skip + limit);
+    const creatorIds = [
+      ...new Set(
+        paginatedPayments
+          .map((payment) => payment.createdBy)
+          .filter((id) => mongoose.isObjectIdOrHexString(id))
+          .map(String),
+      ),
+    ];
+    const creators = creatorIds.length
+      ? await User.find({ _id: { $in: creatorIds } })
+          .select("name fullName username")
+          .lean()
+      : [];
+    const creatorsById = new Map(
+      creators.map((creator) => [String(creator._id), creator]),
+    );
+    const visiblePayments = paginatedPayments.map((payment) => ({
+      ...payment,
+      createdBy: creatorsById.get(String(payment.createdBy)) || null,
+    }));
     const hasMore = page < totalPages;
     const summary = cashSummary(filtered);
     const fullGroups = new Map();
@@ -503,9 +582,9 @@ async function readCashCollectionView(req) {
       visibleGroups.get(key).payments.push(payment);
     }
 
-    return {
+    const result = {
       success: true,
-      data: paginatedPayments,
+      data: visiblePayments,
       page,
       limit,
       total,
@@ -521,6 +600,148 @@ async function readCashCollectionView(req) {
       pagination: { page, pageSize: limit, total, totalPages, from: total ? skip + 1 : 0,
         to: skip + paginatedPayments.length, hasPrevious: page > 1, hasNext: hasMore },
     };
+    return result;
+}
+
+async function readCashCollectionPage(req, filter) {
+  const { tab, search, month, date, requestedPage, limit, status } = filter;
+  const today = toDayKey(startOfToday());
+  const yesterday = addDayKeys(today, -1);
+  const effectiveDay = tab === "today" ? today : tab === "yesterday" ? yesterday : "";
+  const dateRange = date
+    ? { $gte: dayStartIST(date), $lte: dayEndIST(date) }
+    : month
+      ? { $gte: dayStartIST(`${month}-01`), $lt: dayStartIST(monthStart(month)) }
+      : effectiveDay
+        ? { $gte: dayStartIST(effectiveDay), $lte: dayEndIST(effectiveDay) }
+        : null;
+  const dateMatch = dateRange
+    ? {
+        $or: [
+          { customPaymentDate: dateRange },
+          { customPaymentDate: null, paymentDate: dateRange },
+          { customPaymentDate: null, paymentDate: null, createdAt: dateRange },
+        ],
+      }
+    : null;
+  const match = {
+    ...cashScope(req),
+    type: { $ne: "refund" },
+    $or: [
+      { paymentMethod: "cash" },
+      { paymentMethod: "mixed", "paymentBreakdown.cash": { $gt: 0 } },
+    ],
+    ...(dateMatch ? { $and: [dateMatch] } : {}),
+  };
+  const query = search.trim().toLowerCase();
+  const normalizedQuery = query.replace(/[,\s₹]/g, "");
+  const currencyQuery = /[₹,]/.test(query) && /^[₹,\d\s.]+$/.test(query);
+  const skip = limit === "all" ? 0 : (requestedPage - 1) * limit;
+  const end = limit === "all" ? Infinity : skip + limit;
+  const rows = [];
+  const cursor = PaymentHistory.aggregate([
+    { $match: match },
+    {
+      $set: {
+        effectivePaymentDate: {
+          $ifNull: ["$customPaymentDate", { $ifNull: ["$paymentDate", "$createdAt"] }],
+        },
+      },
+    },
+    { $sort: { effectivePaymentDate: -1, _id: -1 } },
+  ])
+    .allowDiskUse(true)
+    .cursor({ batchSize: 100 });
+
+  for await (const raw of cursor) {
+    const payment = computePaymentFields(raw);
+    if (
+      (month && !payment.paymentDay?.startsWith(`${month}-`)) ||
+      (date && payment.paymentDay !== date) ||
+      (query && ![
+        ...(!currencyQuery ? [payment.customer?.fullName, payment.customer?.mobileNumber,
+          payment.vehicle?.vehicleName, payment.vehicle?.vehicleNumber] : []),
+        payment.collectibleAmount, payment.remainingAmount,
+      ].some((value) =>
+        String(value ?? "").toLowerCase().includes(query) ||
+        (normalizedQuery && String(value ?? "").toLowerCase().replace(/[,\s₹]/g, "").includes(normalizedQuery)),
+      ))
+    ) continue;
+
+    let include = true;
+    if (tab === "today") include = payment.paymentDay === today;
+    else if (tab === "yesterday") include = payment.paymentDay === yesterday;
+    else if (tab === "pending" || (!tab && status === "pending")) include = !payment.isCollected;
+    else if (tab === "completed" || (!tab && status === "collected")) {
+      include = payment.isCollected;
+      const { collectedFrom, collectedTo } = req.query;
+      if (include && (collectedFrom || collectedTo)) {
+        if (!payment.lastCollectedAt) include = false;
+        const collectedAt = new Date(payment.lastCollectedAt);
+        if (collectedFrom && collectedAt < new Date(collectedFrom)) include = false;
+        if (collectedTo && collectedAt > new Date(collectedTo)) include = false;
+      }
+    }
+    if (!include) continue;
+
+    rows.push(payment);
+    if (rows.length >= end + 1) break;
+  }
+
+  const hasNext = limit !== "all" && rows.length > end;
+  const paginated = limit === "all" ? rows : rows.slice(skip, end);
+  const creatorIds = [
+    ...new Set(
+      paginated
+        .map((payment) => payment.createdBy)
+        .filter((id) => mongoose.isObjectIdOrHexString(id))
+        .map(String),
+    ),
+  ];
+  const creators = creatorIds.length
+    ? await User.find({ _id: { $in: creatorIds } }).select("name fullName username").lean()
+    : [];
+  const creatorsById = new Map(creators.map((creator) => [String(creator._id), creator]));
+  const data = paginated.map((payment) => ({
+    ...payment,
+    createdBy: creatorsById.get(String(payment.createdBy)) || null,
+  }));
+  const grouped = new Map();
+  for (const payment of data) {
+    const key = payment.paymentDay;
+    if (!grouped.has(key)) grouped.set(key, { date: key, payments: [] });
+    const group = grouped.get(key);
+    group.payments.push(payment);
+  }
+  const pageGroups = [...grouped.values()].map((group) => ({
+    date: group.date,
+    ...cashSummary(group.payments),
+    payments: group.payments,
+  }));
+  const total = limit === "all" ? data.length : null;
+  return {
+    success: true,
+    data,
+    page: requestedPage,
+    limit,
+    total,
+    hasMore: hasNext,
+    status,
+    today,
+    yesterday,
+    groups: pageGroups,
+    filters: { tab, month, date, search: search.trim() },
+    pagination: {
+      page: requestedPage,
+      pageSize: limit,
+      total,
+      totalPages: null,
+      from: data.length ? skip + 1 : 0,
+      to: skip + data.length,
+      hasPrevious: requestedPage > 1,
+      hasNext,
+    },
+  };
 }
 
 export const getCashCollectionPayments = async (req, res, next) => {

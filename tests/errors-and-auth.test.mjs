@@ -14,6 +14,16 @@ before(async () => {
   anon = client(ctx.base);
   user = await createUserAndLogin(ctx.base, { role: "SALES_EXECUTIVE" });
   api = client(ctx.base, user.token);
+  const { default: RolePermission } = await import("../src/models/rolePermission.model.js");
+  await RolePermission.create({
+    businessName: "Test Rentals",
+    role: "SALES_EXECUTIVE",
+    permissions: {
+      "page.bookings.view": true,
+      "page.bookings.create": true,
+    },
+    updatedBy: user.user.id,
+  });
 });
 
 after(async () => {
@@ -69,7 +79,7 @@ test("role checks answer 403 (restrictTo and allowRoles style)", async () => {
 
   const create = await api("POST", "/auth/employees", {});
   assert.equal(create.status, 403);
-  assert.equal(create.json.message, "Only Super Admin can create employees");
+  assert.equal(create.json.message, "You do not have permission to perform this action");
 });
 
 test("refresh token: missing is 401, rotation contract unchanged", async () => {
@@ -113,22 +123,22 @@ test("malformed JSON is a 400", async () => {
   assert.equal(res.status, 400);
 });
 
-test("POST /dashboard/maintenance requires a token; the revenue GETs stay public", async () => {
+test("dashboard data routes require an active session and explicit page access", async () => {
   const write = await anon("POST", "/dashboard/maintenance", {});
   assert.equal(write.status, 401);
 
   const withToken = await api("POST", "/dashboard/maintenance", {});
-  assert.equal(withToken.status, 400); // reaches the controller's own validation
-  assert.equal(withToken.json.message, "Vehicle is required");
+  assert.equal(withToken.status, 403);
 
   for (const path of ["/dashboard/stats", "/dashboard/import", "/dashboard/payments/import", "/dashboard/maintenance"]) {
-    const res = await anon("GET", path);
-    assert.equal(res.status, 200, `${path}: ${res.json.message}`);
+    const anonymous = await anon("GET", path);
+    assert.equal(anonymous.status, 401, path);
+    const unconfigured = await api("GET", path);
+    assert.equal(unconfigured.status, 403, path);
   }
 
-  // Deliberately still open: the web AllBookings page sends no token yet.
   const sheet = await anon("GET", "/dashboard/payments/booking");
-  assert.equal(sheet.status, 200);
+  assert.equal(sheet.status, 401);
 });
 
 test("lead search accepts regex characters (\"+91\", \"(\") instead of failing", async () => {

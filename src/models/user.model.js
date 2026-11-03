@@ -1,26 +1,10 @@
 import mongoose from "mongoose";
 import bcrypt from "bcryptjs";
 import validator from "validator";
+import { isRegisteredPermissionMap } from "../../shared/rbacPermissionRegistry.mjs";
+import { USER_ROLES } from "../../shared/userRoles.mjs";
 
-export const USER_ROLES = [
-  "SUPER_ADMIN",
-  "ADMIN",
-  "BRANCH_MANAGER",
-  "OPERATIONS",
-  "OPERATIONS_EXECUTIVE",
-  "BOOKING",
-  "BOOKING_EXECUTIVE",
-  "SALES_MANAGER",
-  "SALES_EXECUTIVE",
-  "FLEET_MANAGER",
-  "VEHICLE_SUPERVISOR",
-  "CUSTOMER_SUPPORT",
-  "ACCOUNTS_MANAGER",
-  "FINANCE_EXECUTIVE",
-  "DRIVER_COORDINATOR",
-  "INSPECTOR",
-  "FIELD_EXECUTIVE",
-];
+export { USER_ROLES };
 
 const userSchema = new mongoose.Schema(
   {
@@ -126,6 +110,28 @@ const userSchema = new mongoose.Schema(
       default: [],
     },
 
+    permissionOverrides: {
+      type: mongoose.Schema.Types.Mixed,
+      default: () => ({}),
+      validate: {
+        validator: (value) =>
+          isRegisteredPermissionMap(value, ["allow", "deny"]),
+        message:
+          "User overrides must contain registered permission keys with allow or deny values",
+      },
+    },
+
+    permissionOverridesUpdatedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      default: null,
+    },
+
+    permissionOverridesUpdatedAt: {
+      type: Date,
+      default: null,
+    },
+
     branchId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Branch",
@@ -145,7 +151,7 @@ const userSchema = new mongoose.Schema(
   },
   {
     timestamps: true,
-  }
+  },
 );
 
 userSchema.index({ email: 1 });

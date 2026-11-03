@@ -9,11 +9,24 @@ test("booking editor fetches employee-owned records and persists flat and nested
   t.after(() => ctx.stop());
   const { default: Booking } = await import("../src/models/booking.model.js");
   const { default: Vehicle } = await import("../src/models/vehicle.model.js");
+  const { default: RolePermission } = await import("../src/models/rolePermission.model.js");
   const owner = await createUserAndLogin(ctx.base);
   const outsider = await createUserAndLogin(ctx.base);
   const api = client(ctx.base, owner.token);
   const credentials = { fullName: "Booking Staff", mobileNumber: "9876543211", email: "booking-staff@test.dev", password: "Passw0rd!", role: "FLEET_MANAGER" };
   assert.equal((await api("POST", "/auth/employees", credentials)).status, 201);
+  await RolePermission.create({
+    businessName: owner.user.businessName,
+    role: "FLEET_MANAGER",
+    permissions: {
+      "page.bookings.view": true,
+      "page.bookings.create": true,
+      "page.bookings.edit": true,
+      "page.dashboard.create": true,
+      "page.dashboard.edit": true,
+    },
+    updatedBy: owner.user.id,
+  });
   const login = await client(ctx.base)("POST", "/auth/login", { emailOrMobile: credentials.email, password: credentials.password });
   assert.equal(login.status, 200);
   const staff = client(ctx.base, login.json.data.accessToken);
