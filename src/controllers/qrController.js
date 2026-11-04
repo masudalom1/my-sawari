@@ -11,11 +11,12 @@ const STATUS_FILTER = {
   revoked: "revoked",
 };
 
-// Fields that are safe to send publicly (anyone who scans a sticker can see them).
-// Owner name and mobile are never sent.
+// Fields sent to the dashboard pages.
+// Includes who assigned the QR (name + role). Customer id and mobile are never sent.
 const PUBLIC_FIELDS =
-  "token batchName status partnerId claimedAt assignedAt createdAt updatedAt " +
-  "claimDetails.businessName claimDetails.category claimDetails.location";
+  "token batchName status claimedAt assignedAt createdAt updatedAt " +
+  "claimDetails.businessName claimDetails.category claimDetails.location " +
+  "executiveName assignedBy.name assignedBy.role";
 
 const normalizeCode = (v) => String(v || "").trim().toUpperCase();
 const clean = (v) => String(v ?? "").trim();
@@ -94,79 +95,21 @@ export const getByCode = async (req, res, next) => {
 };
 
 // ============================================================
-// POST /api/v1/qr/qr-codes/:code/claim
-// body:     { businessName, ownerName, mobile, category, location }
-// response: { success, qr }      available -> assigned (no approval)
+// POST /api/v1/qr/qr-codes/:code/claim   (DISABLED)
+// The old open claim form let anyone claim a QR without logging in.
+// QR codes are now assigned only by logged-in team members
+// (POST /qr-codes/:code/assign). Kept so existing route imports don't break.
 // ============================================================
-export const claimCode = async (req, res, next) => {
-  try {
-    const code = normalizeCode(req.params.code);
-
-    if (!CODE_REGEX.test(code)) {
-      return res.status(404).json({ success: false, message: "QR code not found" });
-    }
-
-    const { businessName, ownerName, mobile, category, location } = req.body || {};
-    const phone = clean(mobile).replace(/[\s-]/g, "").replace(/^\+?91/, "");
-
-    if (clean(businessName).length < 2) {
-      return res.status(400).json({ success: false, message: "Enter the business name" });
-    }
-    if (clean(ownerName).length < 2) {
-      return res.status(400).json({ success: false, message: "Enter the owner's name" });
-    }
-    if (!/^[6-9]\d{9}$/.test(phone)) {
-      return res.status(400).json({ success: false, message: "Enter a valid 10-digit mobile number" });
-    }
-    if (!clean(category)) {
-      return res.status(400).json({ success: false, message: "Choose a business type" });
-    }
-    if (clean(location).length < 2) {
-      return res.status(400).json({ success: false, message: "Enter the location" });
-    }
-
-    const now = new Date();
-
-    // Atomic: only an "available" code can be claimed, so two people can't claim the same one
-    const qr = await ReferralQR.findOneAndUpdate(
-      { token: code, status: "available" },
-      {
-        $set: {
-          status: "assigned",
-          claimedAt: now,
-          assignedAt: now,
-          claimDetails: {
-            businessName: clean(businessName).slice(0, 120),
-            ownerName: clean(ownerName).slice(0, 80),
-            mobile: phone,
-            category: clean(category).slice(0, 60),
-            location: clean(location).slice(0, 200),
-          },
-        },
-      },
-      { new: true }
-    )
-      .select(PUBLIC_FIELDS)
-      .lean();
-
-    if (!qr) {
-      const existing = await ReferralQR.findOne({ token: code }).select("status").lean();
-
-      if (!existing) {
-        return res.status(404).json({ success: false, message: "QR code not found" });
-      }
-      if (existing.status === "revoked") {
-        return res.status(409).json({ success: false, message: "This QR code has been disabled." });
-      }
-      return res.status(409).json({ success: false, message: "This QR code has already been registered." });
-    }
-
-    return res.status(201).json({ success: true, qr });
-  } catch (err) {
-    next(err);
-  }
+export const claimCode = (req, res) => {
+  return res.status(410).json({
+    success: false,
+    message: "Self-registration is closed. QR codes are assigned by the MySawari team.",
+  });
 };
 
+// ============================================================
+// GET /api/v1/qr/qr-codes?status=&batch=&search=&page=&limit=
+// ============================================================
 export const listCodes = async (req, res, next) => {
   try {
     const page = Math.max(1, parseInt(req.query.page, 10) || 1);
@@ -188,6 +131,8 @@ export const listCodes = async (req, res, next) => {
         { token: rx },
         { "claimDetails.businessName": rx },
         { "claimDetails.location": rx },
+        { executiveName: rx },
+        { "assignedBy.name": rx },
       ];
     }
     const filter = status ? { ...base, status: STATUS_FILTER[status] } : base;
