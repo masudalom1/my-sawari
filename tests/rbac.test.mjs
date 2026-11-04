@@ -58,6 +58,8 @@ test("RBAC management is tenant-scoped, protected, and enforced on dashboard API
     ["PUT", "/auth/roles/BOOKING_EXECUTIVE/permissions", { permissions: {} }],
     ["PUT", `/auth/employees/${employee.user.id}/permissions`, { overrides: {} }],
     ["PATCH", `/auth/employees/${employee.user.id}/role`, { role: "ADMIN" }],
+    ["PATCH", `/auth/employees/${employee.user.id}/role`, { role: "SUPER_ADMIN" }],
+    ["DELETE", `/auth/employees/${employee.user.id}`],
   ]) {
     assert.equal(
       (await ordinaryAdminApi(method, path, body)).status,
@@ -130,6 +132,7 @@ test("RBAC management is tenant-scoped, protected, and enforced on dashboard API
     ["GET", `/auth/employees/${employee.user.id}/permissions`],
     ["POST", "/auth/employees", {}],
     ["PATCH", `/auth/employees/${employee.user.id}/role`, { role: "ADMIN" }],
+    ["DELETE", `/auth/employees/${employee.user.id}`],
     ["PATCH", `/auth/employees/${employee.user.id}/status`, { accountStatus: "SUSPENDED" }],
     ["PUT", "/auth/roles/BOOKING_EXECUTIVE/permissions", { permissions: {} }],
     ["PUT", `/auth/employees/${employee.user.id}/permissions`, { overrides: {} }],
@@ -150,6 +153,7 @@ test("RBAC management is tenant-scoped, protected, and enforced on dashboard API
     ["GET", `/auth/employees/${employee.user.id}/permissions`],
     ["POST", "/auth/employees", {}],
     ["PATCH", `/auth/employees/${employee.user.id}/role`, { role: "ADMIN" }],
+    ["DELETE", `/auth/employees/${employee.user.id}`],
     ["PATCH", `/auth/employees/${employee.user.id}/status`, { accountStatus: "SUSPENDED" }],
     ["PUT", "/auth/roles/BOOKING_EXECUTIVE/permissions", { permissions: {} }],
     ["PUT", `/auth/employees/${employee.user.id}/permissions`, { overrides: {} }],
@@ -489,6 +493,12 @@ test("RBAC management is tenant-scoped, protected, and enforced on dashboard API
     403,
     "role grants cannot bypass Super Admin-only RBAC APIs",
   );
+  const overrideBeforeRoleChange = await adminApi(
+    "PUT",
+    `/auth/employees/${employeeId}/permissions`,
+    { overrides: { "page.revenue.view": "allow" } },
+  );
+  assert.equal(overrideBeforeRoleChange.status, 200);
 
   const invalidKey = await adminApi("PUT", "/auth/roles/BOOKING_EXECUTIVE/permissions", {
     permissions: { "page.unknown.view": true },
@@ -507,11 +517,33 @@ test("RBAC management is tenant-scoped, protected, and enforced on dashboard API
   );
   assert.equal(crossTenantRoleUpdate.status, 404);
   assert.equal((await User.findById(employeeId).lean()).role, "BOOKING_EXECUTIVE");
+  const overridesBeforeRoleChange = await adminApi(
+    "GET",
+    `/auth/employees/${employeeId}/permissions`,
+  );
+  assert.equal(overridesBeforeRoleChange.status, 200);
 
   const promotion = await adminApi("PATCH", `/auth/employees/${employeeId}/role`, {
     role: "SUPER_ADMIN",
   });
-  assert.equal(promotion.status, 403);
+  assert.equal(promotion.status, 200, promotion.json.message);
+  assert.equal(promotion.json.data.role, "SUPER_ADMIN");
+  const promotionReversed = await adminApi(
+    "PATCH",
+    `/auth/employees/${employeeId}/role`,
+    { role: "BOOKING_EXECUTIVE" },
+  );
+  assert.equal(promotionReversed.status, 200, promotionReversed.json.message);
+  const promotedEmployeeAccess = await adminApi(
+    "GET",
+    `/auth/employees/${employeeId}/permissions`,
+  );
+  assert.equal(promotedEmployeeAccess.status, 200);
+  assert.deepEqual(
+    promotedEmployeeAccess.json.data.overrides,
+    overridesBeforeRoleChange.json.data.overrides,
+    "promotion and demotion preserve user-specific permission overrides",
+  );
 
   const unconfiguredSuperAdminPermissions = await adminApi(
     "PUT",
@@ -651,6 +683,39 @@ test("RBAC management is tenant-scoped, protected, and enforced on dashboard API
   const peerSuperAdmin = await createUserAndLogin(ctx.base);
   assert.equal(
     (
+      await adminApi("PATCH", "/auth/employees/not-an-object-id/role", {
+        role: "ADMIN",
+      })
+    ).status,
+    400,
+    "malformed employee IDs are rejected before database lookup",
+  );
+  assert.equal(
+    (
+      await adminApi("PATCH", `/auth/employees/${peerSuperAdmin.user.id}/role`, {
+        role: "UNKNOWN_ROLE",
+      })
+    ).status,
+    400,
+    "role changes validate against the backend role allowlist",
+  );
+  assert.equal(
+    (await adminApi("DELETE", "/auth/employees/not-an-object-id")).status,
+    400,
+    "malformed employee IDs are rejected",
+  );
+  assert.equal(
+    (await adminApi("DELETE", `/auth/employees/${admin.user.id}`)).status,
+    403,
+    "a Super Admin cannot delete their own account",
+  );
+  assert.equal(
+    (await adminApi("DELETE", "/auth/employees/ffffffffffffffffffffffff")).status,
+    404,
+    "a valid ID with no matching employee returns not found",
+  );
+  assert.equal(
+    (
       await adminApi("PATCH", `/auth/employees/${peerSuperAdmin.user.id}/status`, {
         accountStatus: "SUSPENDED",
       })
@@ -658,6 +723,83 @@ test("RBAC management is tenant-scoped, protected, and enforced on dashboard API
     403,
     "a Super Admin cannot deactivate another Super Admin, including the last active administrator",
   );
+  const peerDemoted = await adminApi(
+    "PATCH",
+    `/auth/employees/${peerSuperAdmin.user.id}/role`,
+    { role: "ADMIN" },
+  );
+  assert.equal(peerDemoted.status, 200, peerDemoted.json.message);
+  assert.equal(peerDemoted.json.data.role, "ADMIN");
+  const peerPromoted = await adminApi(
+    "PATCH",
+    `/auth/employees/${peerSuperAdmin.user.id}/role`,
+    { role: "SUPER_ADMIN" },
+  );
+  assert.equal(peerPromoted.status, 200, peerPromoted.json.message);
+  assert.equal(peerPromoted.json.data.role, "SUPER_ADMIN");
+  const selfDemoted = await adminApi(
+    "PATCH",
+    `/auth/employees/${admin.user.id}/role`,
+    { role: "ADMIN" },
+  );
+  assert.equal(selfDemoted.status, 200, selfDemoted.json.message);
+  assert.equal(
+    (await adminApi("GET", "/auth/employees")).status,
+    403,
+    "a role change takes effect on subsequent requests using the existing access token",
+  );
+  const selfPromoted = await client(ctx.base, peerSuperAdmin.token)(
+    "PATCH",
+    `/auth/employees/${admin.user.id}/role`,
+    { role: "SUPER_ADMIN" },
+  );
+  assert.equal(selfPromoted.status, 200, selfPromoted.json.message);
+  const peerDeleteResults = await Promise.all([
+    adminApi("DELETE", `/auth/employees/${peerSuperAdmin.user.id}`),
+    adminApi("DELETE", `/auth/employees/${peerSuperAdmin.user.id}`),
+  ]);
+  assert.equal(peerDeleteResults.filter(({ status }) => status === 200).length, 1);
+  assert.equal(
+    peerDeleteResults.filter(({ status }) => status === 404 || status === 409).length,
+    1,
+  );
+  const peerDelete = peerDeleteResults.find(({ status }) => status === 200);
+  assert.equal(peerDelete.json.data.user.accountStatus, "DELETED");
+  const deletedPeer = await User.findById(peerSuperAdmin.user.id)
+    .select("accountStatus deletedAt refreshToken")
+    .lean();
+  assert.equal(deletedPeer.accountStatus, "DELETED");
+  assert.ok(deletedPeer.deletedAt);
+  assert.equal(deletedPeer.refreshToken, null);
+  assert.equal((await client(ctx.base, peerSuperAdmin.token)("GET", "/auth/me")).status, 403);
+  const auditLogModel = (await import("../src/models/rbacAuditLog.model.js")).default;
+  assert.equal(
+    await auditLogModel.countDocuments({
+      action: "user.deleted",
+      targetUser: peerSuperAdmin.user.id,
+      actor: admin.user.id,
+    }),
+    1,
+    "the successful deletion is audited exactly once with its actor and target",
+  );
+
+  const soloSuperAdmin = await createUserAndLogin(ctx.base, {
+    businessName: "Solo Rentals",
+  });
+  const soloAdminApi = client(ctx.base, soloSuperAdmin.token);
+  const lastAdminDelete = await soloAdminApi(
+    "DELETE",
+    `/auth/employees/${soloSuperAdmin.user.id}`,
+  );
+  assert.equal(lastAdminDelete.status, 403);
+  assert.match(lastAdminDelete.json.message, /cannot delete your own account/);
+  const soloAdminRoleChange = await soloAdminApi(
+    "PATCH",
+    `/auth/employees/${soloSuperAdmin.user.id}/role`,
+    { role: "ADMIN" },
+  );
+  assert.equal(soloAdminRoleChange.status, 409);
+  assert.match(soloAdminRoleChange.json.message, /last active Super Admin/);
 
   const roleUpdated = await adminApi(
     "PATCH",
@@ -887,11 +1029,8 @@ test("RBAC management is tenant-scoped, protected, and enforced on dashboard API
   assert.equal(overrideEvent.actor, admin.user.id);
   assert.equal(overrideEvent.businessName, admin.user.businessName);
   assert.deepEqual(overrideEvent.changes.overrides, {
-    from: {
-      "page.dashboard.view": "deny",
-      "page.revenue.view": "allow",
-    },
-    to: {},
+    from: {},
+    to: { "page.revenue.view": "allow" },
   });
   assert.equal(
     JSON.stringify(events).includes("UpdatedPassword2!"),

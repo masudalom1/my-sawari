@@ -18,6 +18,7 @@ import {
   getEmployeePermissionOverrides,
   getCurrentEffectivePermissions,
   getRolePermissionConfiguration,
+  deleteEmployee,
   updateEmployeeDetails,
   updateEmployeePermissionOverrides,
   updateEmployeeStatus,
@@ -42,6 +43,7 @@ router.put("/roles/:role/permissions",authMiddleware,restrictTo("SUPER_ADMIN"),u
 router.get("/employees/:id/permissions",authMiddleware,restrictTo("SUPER_ADMIN"),getEmployeePermissionOverrides);
 router.put("/employees/:id/permissions",authMiddleware,restrictTo("SUPER_ADMIN"),updateEmployeePermissionOverrides);
 router.get("/employees/:id",authMiddleware,restrictTo("SUPER_ADMIN"),getEmployeeDetails);
+router.delete("/employees/:id",authMiddleware,restrictTo("SUPER_ADMIN"),deleteEmployee);
 router.patch("/employees/:id/status",authMiddleware,restrictTo("SUPER_ADMIN"),updateEmployeeStatus);
 router.patch("/employees/:id",authMiddleware,restrictTo("SUPER_ADMIN"),updateEmployeeDetails);
 router.get("/audit-history",authMiddleware,restrictTo("SUPER_ADMIN"),getRbacAuditHistory);

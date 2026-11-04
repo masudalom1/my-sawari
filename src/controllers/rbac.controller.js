@@ -1,3 +1,4 @@
+import mongoose from "mongoose";
 import validator from "validator";
 import User, { USER_ROLES } from "../models/user.model.js";
 import RolePermission from "../models/rolePermission.model.js";
@@ -16,6 +17,10 @@ import {
   RBAC_PERMISSION_KEYS,
   toPlainPermissionMap,
 } from "../config/rbacPermissions.js";
+import {
+  assertNotLastActiveSuperAdmin,
+  withUserManagementLock,
+} from "../services/userManagement.service.js";
 
 function assertSuperAdmin(req) {
   if (req.user?.role !== "SUPER_ADMIN") {
@@ -287,6 +292,90 @@ export const updateEmployeeStatus = asyncHandler(async (req, res) => {
   res.status(200).json({
     success: true,
     message: "Employee account status updated",
+    data: { user: serializeEmployee(employee) },
+  });
+});
+
+export const deleteEmployee = asyncHandler(async (req, res) => {
+  assertSuperAdmin(req);
+  const { id } = req.params;
+  if (!mongoose.isObjectIdOrHexString(id)) {
+    throw new ApiError(400, "Invalid employee ID");
+  }
+  if (req.user._id.equals(id)) {
+    throw new ApiError(403, "You cannot delete your own account");
+  }
+
+  const employee = await withUserManagementLock(
+    req.user.businessName,
+    async () => {
+      const session = await mongoose.startSession();
+      let deletedEmployee;
+      try {
+        await session.withTransaction(async () => {
+          const currentEmployee = await User.findOne({
+            _id: id,
+            businessName: req.user.businessName,
+            deletedAt: null,
+          }).session(session);
+          if (!currentEmployee) {
+            throw new ApiError(404, "Employee not found");
+          }
+          if (currentEmployee._id.equals(req.user._id)) {
+            throw new ApiError(403, "You cannot delete your own account");
+          }
+
+          await assertNotLastActiveSuperAdmin(currentEmployee, session);
+
+          const deletedAt = new Date();
+          deletedEmployee = await User.findOneAndUpdate(
+            {
+              _id: currentEmployee._id,
+              businessName: req.user.businessName,
+              role: currentEmployee.role,
+              accountStatus: currentEmployee.accountStatus,
+              deletedAt: null,
+            },
+            {
+              $set: {
+                accountStatus: "DELETED",
+                deletedAt,
+                refreshToken: null,
+              },
+            },
+            { new: true, runValidators: true, session },
+          )
+            .select("fullName email mobileNumber businessName role accountStatus createdAt lastLoginAt")
+            .lean();
+          if (!deletedEmployee) {
+            throw new ApiError(409, "Employee changed during deletion; refresh and try again");
+          }
+
+          await recordRbacAudit({
+            actor: req.user,
+            action: "user.deleted",
+            targetType: "user",
+            targetUser: deletedEmployee._id,
+            changes: {
+              accountStatus: {
+                from: currentEmployee.accountStatus,
+                to: "DELETED",
+              },
+              deletedAt: { from: null, to: deletedAt },
+            },
+            session,
+          });
+        });
+      } finally {
+        await session.endSession();
+      }
+      return deletedEmployee;
+    },
+  );
+
+  res.status(200).json({
+    success: true,
+    message: "Employee deleted successfully",
     data: { user: serializeEmployee(employee) },
   });
 });

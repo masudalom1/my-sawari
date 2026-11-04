@@ -1,3 +1,4 @@
+import mongoose from "mongoose";
 import User, { USER_ROLES } from "../models/user.model.js";
 import validator from "validator";
 import asyncHandler from "../utils/asyncHandler.js";
@@ -13,6 +14,10 @@ import {
 } from "../services/token.service.js";
 import { normalizeUserPermissionOverrideMap } from "../config/rbacPermissions.js";
 import { recordRbacAudit } from "../services/rbacAudit.service.js";
+import {
+  assertNotLastActiveSuperAdmin,
+  withUserManagementLock,
+} from "../services/userManagement.service.js";
 
 const sendAuthResponse = async (user, res, statusCode = 200) => {
   const accessToken = generateAccessToken(user);
@@ -407,65 +412,78 @@ export const updateEmployeeRole = async (req, res) => {
     const { id } = req.params;
     const { role } = req.body;
 
-    if (!role || !USER_ROLES.includes(role)) {
-      return res.status(400).json({
-        success: false,
-        message: "Invalid or missing role",
-      });
+    if (!mongoose.isObjectIdOrHexString(id)) {
+      throw new ApiError(400, "Invalid employee ID");
     }
 
-    // Prevent a non-super-admin from ever reaching this (belt & suspenders,
-    // route-level middleware already enforces this)
+    if (!role || !USER_ROLES.includes(role)) {
+      throw new ApiError(400, "Invalid or missing role");
+    }
+
     if (req.user.role !== "SUPER_ADMIN") {
-      return res.status(403).json({
-        success: false,
-        message: "Only Super Admin can change roles",
-      });
+      throw new ApiError(403, "Only Super Admin can change roles");
     }
     if (!req.user.businessName) {
       throw new ApiError(403, "A business scope is required to manage employees");
     }
 
-    const targetUser = await User.findOne({
-      _id: id,
-      businessName: req.user.businessName,
-      deletedAt: null,
-    });
-    if (!targetUser) {
-      throw new ApiError(404, "Employee not found");
-    }
+    const persistedUser = await withUserManagementLock(
+      req.user.businessName,
+      async () => {
+        const session = await mongoose.startSession();
+        let updatedUser;
+        try {
+          await session.withTransaction(async () => {
+            const targetUser = await User.findOne({
+              _id: id,
+              businessName: req.user.businessName,
+              deletedAt: null,
+            }).session(session);
+            if (!targetUser) {
+              throw new ApiError(404, "Employee not found");
+            }
 
-    if (targetUser._id.equals(req.user._id) && role !== "SUPER_ADMIN") {
-      throw new ApiError(403, "You cannot change your own Super Admin role");
-    }
+            if (targetUser.role === "SUPER_ADMIN" && role !== "SUPER_ADMIN") {
+              await assertNotLastActiveSuperAdmin(targetUser, session);
+            }
 
-    if (targetUser.role === "SUPER_ADMIN" && !targetUser._id.equals(req.user._id)) {
-      throw new ApiError(403, "Cannot change another Super Admin's role");
-    }
+            const previousRole = targetUser.role;
+            updatedUser = await User.findOneAndUpdate(
+              {
+                _id: targetUser._id,
+                businessName: req.user.businessName,
+                role: previousRole,
+                accountStatus: targetUser.accountStatus,
+                deletedAt: null,
+              },
+              { $set: { role } },
+              { new: true, runValidators: true, session },
+            )
+              .select("_id fullName email role")
+              .lean();
+            if (!updatedUser) {
+              throw new ApiError(
+                409,
+                "Employee changed during role update; refresh and try again",
+              );
+            }
 
-    if (role === "SUPER_ADMIN" && targetUser.role !== "SUPER_ADMIN") {
-      throw new ApiError(403, "Super Admin role assignment is protected");
-    }
+            await recordRbacAudit({
+              actor: req.user,
+              action: "user.role.updated",
+              targetType: "user",
+              targetUser: updatedUser._id,
+              changes: { role: { from: previousRole, to: role } },
+              session,
+            });
+          });
+        } finally {
+          await session.endSession();
+        }
 
-    const previousRole = targetUser.role;
-    targetUser.role = role;
-    await targetUser.save();
-    const persistedUser = await User.findOne({
-      _id: targetUser._id,
-      businessName: req.user.businessName,
-      deletedAt: null,
-    }).select("_id fullName email role").lean();
-    if (!persistedUser || persistedUser.role !== role) {
-      throw new ApiError(500, "The employee role update could not be verified");
-    }
-
-    await recordRbacAudit({
-      actor: req.user,
-      action: "user.role.updated",
-      targetType: "user",
-      targetUser: persistedUser._id,
-      changes: { role: { from: previousRole, to: role } },
-    });
+        return updatedUser;
+      },
+    );
 
     return res.status(200).json({
       success: true,

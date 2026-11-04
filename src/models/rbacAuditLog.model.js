@@ -20,6 +20,7 @@ const rbacAuditLogSchema = new mongoose.Schema(
         "user.updated",
         "user.role.updated",
         "user.status.updated",
+        "user.deleted",
         "user.overrides.updated",
         "user.password.changed",
         "role.permissions.updated",
