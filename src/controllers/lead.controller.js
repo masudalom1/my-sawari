@@ -2604,8 +2604,8 @@ export const createBookings = async (req, res, next) => {
     });
     if (paymentTimeError) return res.status(400).json({ success: false, message: paymentTimeError });
 
-    // Only new booking/advance snapshots use these values. A new paymentDate
-    // follows the existing model's fallback to its manual customPaymentDate.
+    // Keep the submitted transaction timestamp on the booking snapshot, even
+    // when the booking has no advance payment record yet.
     const paymentDateFields = collectedAt ? {
       paymentDate: collectedAt,
       paymentTime: formatBookingPaymentTime(collectedAt),

@@ -87,9 +87,9 @@ test("both UPI advances store the exact IST payment timestamp once, separate fro
   }
 });
 
-test("invalid or missing UPI collection timestamps are rejected before any booking or payment write", async () => {
+test("invalid or missing payment timestamps are rejected for every method before any write", async () => {
   const before = { bookings: await Booking.countDocuments(), payments: await PaymentHistory.countDocuments() };
-  for (const paymentMethod of ["phonepe", "gpay"]) {
+  for (const paymentMethod of ["cash", "phonepe", "gpay", "razorpay", "mixed"]) {
     for (const [fields, message] of [
       [{ paymentDate: "" }, /Payment Date is required/],
       [{ paymentDate: undefined }, /Payment Date is required/],
@@ -113,35 +113,41 @@ test("invalid or missing UPI collection timestamps are rejected before any booki
   assert.equal(await PaymentHistory.countDocuments(), before.payments);
 });
 
-test("Cash, Razorpay and Mixed ignore timestamp fields and retain existing amounts and allocations", async () => {
+test("Cash, Razorpay and Mixed persist payment timestamps and retain amounts and allocations", async () => {
   for (const paymentMethod of ["cash", "razorpay", "mixed"]) {
-    const input = body({ paymentMethod, paymentDate: "invalid", paymentTime: "invalid",
+    const input = body({ paymentMethod,
       ...(paymentMethod === "mixed" ? { paymentBreakdown: { cash: 200, phonePe: 200, razorpay: 100 } } : {}),
     });
     const created = await api("POST", "/leads/create", input);
     assert.equal(created.status, 201, created.json.message);
     const [payment] = await PaymentHistory.find({ bookingId: created.json.booking._id }).lean();
-    assert.equal(payment.paymentDate, null);
-    assert.equal(payment.paymentTime, "");
+    const expected = new Date(`${input.paymentDate}T${input.paymentTime}:00+05:30`);
+    assert.equal(payment.paymentDate.toISOString(), expected.toISOString());
+    assert.equal(payment.customPaymentDate.toISOString(), expected.toISOString());
+    assert.equal(payment.paymentTime, "2:35 pm");
     assert.equal(payment.amount, 500);
     assert.equal(payment.paymentMethod, paymentMethod);
     assert.equal(payment.paymentBreakdown.cash + payment.paymentBreakdown.phonePe + payment.paymentBreakdown.gpay + payment.paymentBreakdown.razorpay, 500);
     const booking = await Booking.findById(created.json.booking._id).lean();
     for (const snapshot of [booking, booking.payment]) {
-      for (const field of ["paymentDate", "paymentTime", "customPaymentDate"]) assert.equal(Object.hasOwn(snapshot, field), false);
+      assert.equal(snapshot.paymentDate.toISOString(), expected.toISOString());
+      assert.equal(snapshot.customPaymentDate.toISOString(), expected.toISOString());
+      assert.equal(snapshot.paymentTime, "2:35 pm");
     }
   }
 });
 
-test("zero UPI advances require no timestamp and create no payment record", async () => {
-  for (const paymentMethod of ["phonepe", "gpay"]) {
-    const input = body({ paymentMethod, bookingAmount: 0, paymentDate: undefined, paymentTime: undefined, upiLast4: "" });
+test("zero advances require timestamps for all methods and create no payment record", async () => {
+  for (const paymentMethod of ["cash", "phonepe", "gpay", "razorpay", "mixed"]) {
+    const input = body({ paymentMethod, bookingAmount: 0, upiLast4: "" });
     const created = await api("POST", "/leads/create", input);
     assert.equal(created.status, 201, created.json.message);
     assert.equal(await PaymentHistory.countDocuments({ bookingId: created.json.booking._id }), 0);
     const booking = await Booking.findById(created.json.booking._id).lean();
     for (const snapshot of [booking, booking.payment]) {
-      for (const field of ["paymentDate", "paymentTime", "customPaymentDate"]) assert.equal(Object.hasOwn(snapshot, field), false);
+      assert.ok(snapshot.paymentDate instanceof Date);
+      assert.ok(snapshot.customPaymentDate instanceof Date);
+      assert.equal(snapshot.paymentTime, "2:35 pm");
     }
   }
 });
@@ -233,7 +239,7 @@ test("backend timestamp validation follows the IST wall-clock contract independe
     ["2026-10-28", "00:30", "2026-10-27T19:00:00.000Z"],
     ["2024-02-29", "23:59", "2024-02-29T18:29:00.000Z"],
   ];
-  for (const paymentMethod of ["phonepe", "gpay"]) {
+  for (const paymentMethod of ["cash", "phonepe", "gpay", "razorpay", "mixed"]) {
     for (const [paymentDate, paymentTime, expected] of validCases) {
       const result = validateBookingPaymentTime({ paymentMethod, bookingAmount: 500, paymentDate, paymentTime }, now);
       assert.equal(result.error, "");
@@ -251,10 +257,10 @@ test("backend timestamp validation follows the IST wall-clock contract independe
       assert.equal(result.collectedAt, null);
     }
   }
-  for (const paymentMethod of ["cash", "mixed", "razorpay"]) {
-    assert.deepEqual(
-      validateBookingPaymentTime({ paymentMethod, bookingAmount: 500, paymentDate: "invalid", paymentTime: "invalid" }, now),
-      { error: "", collectedAt: null },
-    );
+  for (const paymentMethod of ["cash", "phonepe", "gpay", "mixed", "razorpay"]) {
+    assert.deepEqual(validateBookingPaymentTime({ paymentMethod, paymentDate: "", paymentTime: "" }, now), {
+      error: "Payment Date is required.",
+      collectedAt: null,
+    });
   }
 });

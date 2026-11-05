@@ -4,8 +4,8 @@
 //  - Handshake: Bearer access token in `auth.token` (or an Authorization
 //    header). Cookies are deliberately NOT accepted here: a WebSocket opened
 //    from another site would carry them automatically.
-//  - Rooms are assigned by the server from the verified user's role; clients
-//    have no way to join or name a room.
+//  - Tenant-scoped rooms are assigned by the server from the verified user's
+//    role and company; clients have no way to join or name a room.
 //  - A socket is disconnected when its token expires, and when its account is
 //    blocked / suspended / deleted (checked whenever a user record changes),
 //    matching what REST would answer to that user's next request.
@@ -14,6 +14,18 @@ import { resolveActiveUser } from "../middlewares/auth.middleware.js";
 import User, { USER_ROLES } from "../models/user.model.js";
 
 export const DASHBOARD_ROOM = "dashboard";
+const dashboardRoom = (companyId) => `${DASHBOARD_ROOM}:${companyId}`;
+
+function referenceId(value) {
+  const id = value?._id || value;
+  return id ? String(id) : null;
+}
+
+export function companyIdForUser(user) {
+  return referenceId(user?.company) ||
+    referenceId(user?.createdBy) ||
+    referenceId(user?._id);
+}
 
 // Roles that receive dashboard change events. Same as REST today: the
 // dashboard data is readable by every signed-in role. Narrow this list to
@@ -46,6 +58,7 @@ export async function authenticateSocket(socket, next) {
     );
     socket.data.userId = String(user._id);
     socket.data.role = user.role;
+    socket.data.companyId = companyIdForUser(user);
     socket.data.tokenExp = typeof decoded.exp === "number" ? decoded.exp : null;
     next();
   } catch (err) {
@@ -79,9 +92,14 @@ function endSession(socket, reason) {
 }
 
 export function applyRooms(socket) {
-  if (DASHBOARD_ROLES.has(socket.data.role)) socket.join(DASHBOARD_ROOM);
-  else socket.leave(DASHBOARD_ROOM);
-  return socket.rooms.has(DASHBOARD_ROOM);
+  for (const room of socket.rooms) {
+    if (room.startsWith(`${DASHBOARD_ROOM}:`)) socket.leave(room);
+  }
+  const companyId = socket.data.companyId;
+  if (DASHBOARD_ROLES.has(socket.data.role) && companyId) {
+    socket.join(dashboardRoom(companyId));
+  }
+  return Boolean(companyId && socket.rooms.has(dashboardRoom(companyId)));
 }
 
 export function scheduleTokenExpiry(socket) {
@@ -110,7 +128,7 @@ export async function revalidateSockets(io) {
 
   const ids = [...new Set(sockets.map((s) => s.data.userId).filter(Boolean))];
   const users = await User.find({ _id: { $in: ids } })
-    .select("_id role accountStatus deletedAt")
+    .select("_id role accountStatus deletedAt company createdBy")
     .lean();
   const byId = new Map(users.map((u) => [String(u._id), u]));
 
@@ -120,9 +138,17 @@ export async function revalidateSockets(io) {
       endSession(socket, "access_revoked");
       continue;
     }
+    const previousCompanyId = socket.data.companyId;
     if (user.role !== socket.data.role) {
       socket.data.role = user.role;
-      applyRooms(socket);
+    }
+    socket.data.companyId = companyIdForUser(user);
+    const subscribed = applyRooms(socket);
+    if (previousCompanyId !== socket.data.companyId) {
+      socket.emit("realtime:ready", {
+        subscribed,
+        companyId: socket.data.companyId,
+      });
     }
   }
 }
