@@ -113,6 +113,51 @@ test("relative tabs use IST createdAt; channel, month, date and transaction sear
   for (const total of Object.values(empty.json.methodTotals)) assert.deepEqual(total, { amount: 0, count: 0 });
 });
 
+test("date type controls UPI filtering, grouping and page/summary results", async () => {
+  const ownerId = new ctx.mongoose.Types.ObjectId(owner);
+  const instant = (value) => new Date(`${value}T10:00:00Z`);
+  const fixtures = [
+    { createdAt: instant("2024-01-02"), paymentDate: instant("2024-02-03"), collectedAt: instant("2024-03-04") },
+    { createdAt: instant("2024-02-03"), paymentDate: instant("2024-01-02"), collectedAt: instant("2024-02-03") },
+  ].map((dates) => ({
+    _id: oid(), company: ownerId, bookingId: oid(), createdBy: ownerId, type: "booking",
+    paymentMethod: "phonepe", amount: 100, collectedPhonePe: 100, isPhonePeCollected: true,
+    customer: { fullName: "UPI date basis fixture" }, vehicle: { vehicleName: "Date basis car" },
+    createdAt: dates.createdAt, paymentDate: dates.paymentDate, updatedAt: dates.createdAt,
+    collectionHistory: [{ channel: "phonepe", amount: 100, collectedBy: ownerId, collectedAt: dates.collectedAt }],
+  }));
+  await PaymentHistory.collection.insertMany(fixtures);
+  try {
+    for (const [dateType, date, expectedIndex] of [
+      ["created", "2024-01-02", 0],
+      ["payment", "2024-02-03", 0],
+      ["collected", "2024-03-04", 0],
+      ["collected", "2024-02-03", 1],
+    ]) {
+      const base = `tab=all&search=UPI%20date%20basis%20fixture&dateType=${dateType}&date=${date}`;
+      const page = await get(`${base}&section=page&limit=25`);
+      assert.equal(page.status, 200);
+      assert.equal(page.json.data.length, 1);
+      assert.equal(page.json.dateType, dateType);
+      assert.equal(page.json.dateBasis, {
+        created: "createdAt",
+        payment: "paymentDate",
+        collected: "collectedDate",
+      }[dateType]);
+      assert.equal(page.json.groups[0].date, date);
+      assert.equal(page.json.data[0]._id, String(fixtures[expectedIndex]._id));
+      const summary = await get(`${base}&section=summary`);
+      assert.equal(summary.status, 200);
+      assert.equal(summary.json.total, 1);
+    }
+
+    const invalid = await get("tab=all&dateType=invalid");
+    assert.equal(invalid.status, 400);
+  } finally {
+    await PaymentHistory.deleteMany({ _id: { $in: fixtures.map((row) => row._id) } });
+  }
+});
+
 test("all page sizes include the full filtered totals and deterministic pages without duplicates", async () => {
   const rows = await PaymentHistory.insertMany(Array.from({ length: 107 }, (_, index) => ({ company: owner, bookingId: oid(), createdBy: owner,
     type: "booking", paymentMethod: "gpay", amount: 1, customer: { fullName: "Pagination UPI" }, paymentDate: `${today}T12:00:00+05:30` })));
@@ -162,7 +207,7 @@ test("page and summary sections return first-page rows independently from totals
 });
 
 test("malformed filters and client-selected scope are rejected", async () => {
-  for (const query of ["tab=bad", "method=cash", "limit=0", "limit=500", "page=0", "page=1x", "month=2026-13", "date=2026-02-30", "company=anything", "month=2026-10&date=2026-11-01"]) {
+  for (const query of ["tab=bad", "method=cash", "dateType=invalid", "limit=0", "limit=500", "page=0", "page=1x", "month=2026-13", "date=2026-02-30", "company=anything", "month=2026-10&date=2026-11-01"]) {
     assert.equal((await get(query)).status, 400, query);
   }
 });

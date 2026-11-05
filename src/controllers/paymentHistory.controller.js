@@ -15,12 +15,13 @@ const monthStart = (month) => {
 
 const parseCashQuery = (query = {}) => {
   if (!query || typeof query !== "object" || Array.isArray(query)) throw new ApiError(400, "Invalid cash collection filters");
-  const { tab, search = "", month = "", date = "", page = "1", limit = "25", section = "all" } = query;
+  const { tab, search = "", month = "", date = "", dateType = "payment", page = "1", limit = "25", section = "all" } = query;
   if ((tab !== undefined && !["today", "yesterday", "pending", "completed", "all"].includes(tab)) ||
     !["all", "page", "summary"].includes(section) ||
     typeof search !== "string" || search.length > 120 ||
     typeof month !== "string" || (month && !/^[1-9]\d{3}-(0[1-9]|1[0-2])$/.test(month)) ||
     typeof date !== "string" || (date && !isValidDayKey(date)) ||
+    !["created", "payment", "collected"].includes(dateType) ||
     (month && date && !date.startsWith(`${month}-`))) {
     throw new ApiError(400, "Invalid cash collection filters");
   }
@@ -31,7 +32,7 @@ const parseCashQuery = (query = {}) => {
   if (!allRows && (typeof limit !== "string" || !/^\d+$/.test(limit) || !Number.isSafeInteger(Number(limit)) || Number(limit) < 1 || Number(limit) > MAX_PAGE_LIMIT)) {
     throw new ApiError(400, `Cash collection page size must be 1 to ${MAX_PAGE_LIMIT}, or All`);
   }
-  return { tab, search, month, date, section, requestedPage: Number(page), limit: allRows ? "all" : Number(limit),
+  return { tab, search, month, date, dateType, section, requestedPage: Number(page), limit: allRows ? "all" : Number(limit),
     status: ["pending", "collected", "all"].includes(query.status) ? query.status : "pending" };
 };
 
@@ -66,6 +67,7 @@ const computePaymentFields = (payment) => {
   const lastEntry = collectionHistory.at(-1);
   const effectivePaymentDate = [payment.customPaymentDate, payment.paymentDate, payment.createdAt]
     .find((value) => value && Number.isFinite(new Date(value).getTime())) || null;
+  const lastCollectedAt = lastEntry?.collectedAt || (method === "cash" ? payment.lastCollectedAt : null);
 
   return {
     ...payment,
@@ -76,8 +78,51 @@ const computePaymentFields = (payment) => {
     collectionHistory,
     effectivePaymentDate,
     paymentDay: effectivePaymentDate ? toDayKey(effectivePaymentDate) : null,
-    lastCollectedAt: lastEntry?.collectedAt || (method === "cash" ? payment.lastCollectedAt : null),
+    createdDay: payment.createdAt && Number.isFinite(new Date(payment.createdAt).getTime())
+      ? toDayKey(payment.createdAt)
+      : null,
+    collectedDay: lastCollectedAt && Number.isFinite(new Date(lastCollectedAt).getTime())
+      ? toDayKey(lastCollectedAt)
+      : null,
+    lastCollectedAt,
     lastCollectedByName: lastEntry?.collectedByName || (method === "cash" ? payment.lastCollectedByName : null) || null,
+  };
+};
+
+const cashDateValue = (payment, dateType) =>
+  dateType === "created"
+    ? payment.createdAt
+    : dateType === "collected"
+      ? payment.lastCollectedAt
+      : payment.effectivePaymentDate;
+const cashDateDay = (payment, dateType) =>
+  dateType === "created"
+    ? payment.createdDay
+    : dateType === "collected"
+      ? payment.collectedDay
+      : payment.paymentDay;
+const cashDateMatch = (dateType, dateRange) => {
+  if (!dateRange) return null;
+  if (dateType === "created") return { createdAt: dateRange };
+  if (dateType === "collected") return {
+    $or: [
+      {
+        collectionHistory: {
+          $elemMatch: {
+            collectedAt: dateRange,
+            $or: [{ channel: "cash" }, { channel: null }],
+          },
+        },
+      },
+      { lastCollectedAt: dateRange },
+    ],
+  };
+  return {
+    $or: [
+      { customPaymentDate: dateRange },
+      { customPaymentDate: null, paymentDate: dateRange },
+      { customPaymentDate: null, paymentDate: null, createdAt: dateRange },
+    ],
   };
 };
 
@@ -389,7 +434,7 @@ export const getPaymentHistory = async (req, res, next) => {
 };
 async function readCashCollectionView(req) {
     const parsed = parseCashQuery(req.query);
-    const { tab, search, month, date, requestedPage, limit, status } = parsed;
+    const { tab, search, month, date, dateType, requestedPage, limit, status } = parsed;
     if (parsed.section === "page") return readCashCollectionPage(req, parsed);
 
     const dateRange = date
@@ -400,19 +445,7 @@ async function readCashCollectionView(req) {
             $lt: dayStartIST(monthStart(month)),
           }
         : null;
-    const dateMatch = dateRange
-      ? {
-          $or: [
-            { customPaymentDate: dateRange },
-            { customPaymentDate: null, paymentDate: dateRange },
-            {
-              customPaymentDate: null,
-              paymentDate: null,
-              createdAt: dateRange,
-            },
-          ],
-        }
-      : null;
+    const dateMatch = cashDateMatch(dateType, dateRange);
     const rawPayments = await PaymentHistory.find({
       ...cashScope(req),
       type: { $ne: "refund" },
@@ -436,8 +469,8 @@ async function readCashCollectionView(req) {
     const normalizedQuery = query.replace(/[,\s₹]/g, "");
     const currencyQuery = /[₹,]/.test(query) && /^[₹,\d\s.]+$/.test(query);
     const matches = computed.filter((payment) =>
-      (!month || payment.paymentDay?.startsWith(`${month}-`)) &&
-      (!date || payment.paymentDay === date) && (!query || [
+      (!month || cashDateDay(payment, dateType)?.startsWith(`${month}-`)) &&
+      (!date || cashDateDay(payment, dateType) === date) && (!query || [
       ...(!currencyQuery ? [payment.customer?.fullName, payment.customer?.mobileNumber,
         payment.vehicle?.vehicleName, payment.vehicle?.vehicleNumber] : []),
       payment.collectibleAmount, payment.remainingAmount,
@@ -451,8 +484,8 @@ async function readCashCollectionView(req) {
     const collectedToday = completed.filter((payment) => payment.lastCollectedAt &&
       new Date(payment.lastCollectedAt) >= todayStart && new Date(payment.lastCollectedAt) <= todayEnd);
     const stats = {
-      today: cashSummary(matches.filter((payment) => payment.paymentDay === today)),
-      yesterday: cashSummary(matches.filter((payment) => payment.paymentDay === yesterday)),
+      today: cashSummary(matches.filter((payment) => cashDateDay(payment, dateType) === today)),
+      yesterday: cashSummary(matches.filter((payment) => cashDateDay(payment, dateType) === yesterday)),
       pending: overall.pending,
       collectedToday: { count: collectedToday.length, amount: cashSummary(collectedToday).collected.amount },
       collectedTotal: { count: completed.length, amount: cashSummary(completed).collected.amount },
@@ -465,7 +498,7 @@ async function readCashCollectionView(req) {
 
     if (tab === "today" || tab === "yesterday") {
       const day = tab === "today" ? today : yesterday;
-      filtered = matches.filter((payment) => payment.paymentDay === day);
+      filtered = matches.filter((payment) => cashDateDay(payment, dateType) === day);
     } else if (tab === "pending" || (!tab && status === "pending")) {
       filtered = matches.filter((payment) => !payment.isCollected);
     } else if (tab === "completed" || (!tab && status === "collected")) {
@@ -498,13 +531,14 @@ async function readCashCollectionView(req) {
       const summary = cashSummary(filtered);
       const groups = new Map();
       for (const payment of filtered) {
-        const key = payment.paymentDay;
+        const key = cashDateDay(payment, dateType);
         if (!groups.has(key)) groups.set(key, []);
         groups.get(key).push(payment);
       }
       const totalPages = limit === "all" ? 1 : Math.max(1, Math.ceil(total / limit));
       return {
         success: true,
+        dateType,
         total,
         status,
         stats,
@@ -536,8 +570,8 @@ async function readCashCollectionView(req) {
     // Sort/group by the payment's IST date, with deterministic ties so pages
     // never repeat a payment when several records share the same timestamp.
     filtered.sort((a, b) =>
-      (b.effectivePaymentDate ? new Date(b.effectivePaymentDate).getTime() : -Infinity) -
-      (a.effectivePaymentDate ? new Date(a.effectivePaymentDate).getTime() : -Infinity) ||
+      (cashDateValue(b, dateType) ? new Date(cashDateValue(b, dateType)).getTime() : -Infinity) -
+      (cashDateValue(a, dateType) ? new Date(cashDateValue(a, dateType)).getTime() : -Infinity) ||
       String(b._id).localeCompare(String(a._id)));
 
     const total = filtered.length;
@@ -569,13 +603,13 @@ async function readCashCollectionView(req) {
     const summary = cashSummary(filtered);
     const fullGroups = new Map();
     for (const payment of filtered) {
-      const key = payment.paymentDay;
+      const key = cashDateDay(payment, dateType);
       if (!fullGroups.has(key)) fullGroups.set(key, []);
       fullGroups.get(key).push(payment);
     }
     const visibleGroups = new Map();
     for (const payment of paginatedPayments) {
-      const key = payment.paymentDay;
+      const key = cashDateDay(payment, dateType);
       if (!visibleGroups.has(key)) visibleGroups.set(key, {
         date: key, ...cashSummary(fullGroups.get(key)), payments: [],
       });
@@ -584,6 +618,7 @@ async function readCashCollectionView(req) {
 
     const result = {
       success: true,
+      dateType,
       data: visiblePayments,
       page,
       limit,
@@ -604,7 +639,7 @@ async function readCashCollectionView(req) {
 }
 
 async function readCashCollectionPage(req, filter) {
-  const { tab, search, month, date, requestedPage, limit, status } = filter;
+  const { tab, search, month, date, dateType, requestedPage, limit, status } = filter;
   const today = toDayKey(startOfToday());
   const yesterday = addDayKeys(today, -1);
   const effectiveDay = tab === "today" ? today : tab === "yesterday" ? yesterday : "";
@@ -615,15 +650,7 @@ async function readCashCollectionPage(req, filter) {
       : effectiveDay
         ? { $gte: dayStartIST(effectiveDay), $lte: dayEndIST(effectiveDay) }
         : null;
-  const dateMatch = dateRange
-    ? {
-        $or: [
-          { customPaymentDate: dateRange },
-          { customPaymentDate: null, paymentDate: dateRange },
-          { customPaymentDate: null, paymentDate: null, createdAt: dateRange },
-        ],
-      }
-    : null;
+  const dateMatch = cashDateMatch(dateType, dateRange);
   const match = {
     ...cashScope(req),
     type: { $ne: "refund" },
@@ -639,6 +666,11 @@ async function readCashCollectionPage(req, filter) {
   const skip = limit === "all" ? 0 : (requestedPage - 1) * limit;
   const end = limit === "all" ? Infinity : skip + limit;
   const rows = [];
+  const sortField = dateType === "created"
+    ? "createdAt"
+    : dateType === "collected"
+      ? "cashCollectedDate"
+      : "effectivePaymentDate";
   const cursor = PaymentHistory.aggregate([
     { $match: match },
     {
@@ -648,7 +680,30 @@ async function readCashCollectionPage(req, filter) {
         },
       },
     },
-    { $sort: { effectivePaymentDate: -1, _id: -1 } },
+    {
+      $set: {
+        cashCollectedDate: {
+          $let: {
+            vars: {
+              cashEntries: {
+                $filter: {
+                  input: { $ifNull: ["$collectionHistory", []] },
+                  as: "entry",
+                  cond: { $eq: [{ $ifNull: ["$$entry.channel", "cash"] }, "cash"] },
+                },
+              },
+            },
+            in: {
+              $ifNull: [
+                { $arrayElemAt: ["$$cashEntries.collectedAt", -1] },
+                { $cond: [{ $eq: ["$paymentMethod", "cash"] }, "$lastCollectedAt", null] },
+              ],
+            },
+          },
+        },
+      },
+    },
+    { $sort: { [sortField]: -1, _id: -1 } },
   ])
     .allowDiskUse(true)
     .cursor({ batchSize: 100 });
@@ -656,8 +711,8 @@ async function readCashCollectionPage(req, filter) {
   for await (const raw of cursor) {
     const payment = computePaymentFields(raw);
     if (
-      (month && !payment.paymentDay?.startsWith(`${month}-`)) ||
-      (date && payment.paymentDay !== date) ||
+      (month && !cashDateDay(payment, dateType)?.startsWith(`${month}-`)) ||
+      (date && cashDateDay(payment, dateType) !== date) ||
       (query && ![
         ...(!currencyQuery ? [payment.customer?.fullName, payment.customer?.mobileNumber,
           payment.vehicle?.vehicleName, payment.vehicle?.vehicleNumber] : []),
@@ -669,8 +724,8 @@ async function readCashCollectionPage(req, filter) {
     ) continue;
 
     let include = true;
-    if (tab === "today") include = payment.paymentDay === today;
-    else if (tab === "yesterday") include = payment.paymentDay === yesterday;
+    if (tab === "today") include = cashDateDay(payment, dateType) === today;
+    else if (tab === "yesterday") include = cashDateDay(payment, dateType) === yesterday;
     else if (tab === "pending" || (!tab && status === "pending")) include = !payment.isCollected;
     else if (tab === "completed" || (!tab && status === "collected")) {
       include = payment.isCollected;
@@ -708,7 +763,7 @@ async function readCashCollectionPage(req, filter) {
   }));
   const grouped = new Map();
   for (const payment of data) {
-    const key = payment.paymentDay;
+    const key = cashDateDay(payment, dateType);
     if (!grouped.has(key)) grouped.set(key, { date: key, payments: [] });
     const group = grouped.get(key);
     group.payments.push(payment);
@@ -721,6 +776,7 @@ async function readCashCollectionPage(req, filter) {
   const total = limit === "all" ? data.length : null;
   return {
     success: true,
+    dateType,
     data,
     page: requestedPage,
     limit,

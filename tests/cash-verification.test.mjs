@@ -40,6 +40,7 @@ test("cash routes require authentication and reject invalid filters", async () =
   assert.equal((await client(ctx.base)("GET", ENDPOINT)).status, 401);
   assert.equal((await client(ctx.base)("POST", `${ENDPOINT}/${cash._id}/collect`, { amount: 1 })).status, 401);
   assert.equal((await api("GET", `${ENDPOINT}?tab=invalid`)).status, 400);
+  assert.equal((await api("GET", `${ENDPOINT}?dateType=invalid`)).status, 400);
 });
 
 test("today uses IST payment dates and returns cash only with exact full-set totals", async () => {
@@ -150,6 +151,43 @@ test("month and exact date filters use IST boundaries, leap days and the same se
       assert.equal((await api("GET", `${ENDPOINT}?tab=all&${query}`)).status, 400);
     }
   } finally { await PaymentHistory.deleteMany({ _id: { $in: fixtures.map((row) => row._id) } }); }
+});
+
+test("date type controls cash filtering, grouping and page/summary results", async () => {
+  const ownerId = new ctx.mongoose.Types.ObjectId(owner);
+  const collectedAt = (value) => new Date(`${value}T10:00:00Z`);
+  const rows = [
+    { createdAt: collectedAt("2024-01-02"), paymentDate: collectedAt("2024-02-03"), collectedAt: collectedAt("2024-03-04") },
+    { createdAt: collectedAt("2024-02-03"), paymentDate: collectedAt("2024-01-02"), collectedAt: collectedAt("2024-02-03") },
+  ].map((dates) => ({
+    company: ownerId, bookingId: oid(), createdBy: ownerId, type: "booking", paymentMethod: "cash",
+    amount: 100, collectedAmount: 100, isCollected: true, customer: { fullName: "Cash date basis fixture" },
+    createdAt: dates.createdAt, paymentDate: dates.paymentDate, updatedAt: dates.createdAt,
+    collectionHistory: [{ channel: "cash", amount: 100, collectedBy: ownerId, collectedAt: dates.collectedAt }],
+  }));
+  const inserted = await PaymentHistory.collection.insertMany(rows);
+  try {
+    for (const [dateType, date, expectedIndex] of [
+      ["created", "2024-01-02", 0],
+      ["payment", "2024-02-03", 0],
+      ["collected", "2024-03-04", 0],
+      ["collected", "2024-02-03", 1],
+    ]) {
+      const query = `tab=all&search=Cash%20date%20basis%20fixture&dateType=${dateType}&date=${date}`;
+      const page = await api("GET", `${ENDPOINT}?${query}&section=page&limit=all`);
+      assert.equal(page.status, 200);
+      assert.equal(page.json.total, 1);
+      assert.equal(page.json.dateType, dateType);
+      assert.equal(page.json.groups[0].date, date);
+      assert.equal(page.json.data[0]._id, String(Object.values(inserted.insertedIds)[expectedIndex]));
+      const summary = await api("GET", `${ENDPOINT}?${query}&section=summary`);
+      assert.equal(summary.status, 200);
+      assert.equal(summary.json.total, 1);
+      assert.equal(summary.json.groups[0].date, date);
+    }
+  } finally {
+    await PaymentHistory.deleteMany({ _id: { $in: Object.values(inserted.insertedIds) } });
+  }
 });
 
 test("25, 50, 100 and All return complete stable pages with the same filtered totals", async () => {
