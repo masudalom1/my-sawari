@@ -88,7 +88,6 @@ const paymentHistorySchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: "Booking",
       required: true,
-      index: true,
     },
 
     handoverId: {
@@ -283,7 +282,8 @@ paymentHistorySchema.index({ paymentMethod: 1, isPhonePeCollected: 1, lastCollec
 paymentHistorySchema.index({ paymentMethod: 1, createdAt: -1 });
 paymentHistorySchema.index({ paymentMethod: 1, lastCollectedAt: -1 });
 paymentHistorySchema.index({ type: 1, createdAt: -1 });
-paymentHistorySchema.index({ createdAt: -1 });
+paymentHistorySchema.index({ createdAt: -1, _id: -1 });
+paymentHistorySchema.index({ bookingId: 1, createdAt: -1 });
 paymentHistorySchema.index({ paymentDate: -1 });
 paymentHistorySchema.index({ customPaymentDate: -1 });
 

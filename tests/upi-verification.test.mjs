@@ -50,6 +50,8 @@ test("GET returns the three digital methods and only explicit UPI portions of mi
   assert.equal(new Set(result.json.data.map((row) => row._id)).size, 4);
   const row = result.json.data.find((row) => row._id === String(mixed._id));
   assert.equal(row.upiAmount, 900); assert.equal(row.amount, 1000);
+  assert.equal(row.company, undefined);
+  assert.equal(row.__v, undefined);
   assert.deepEqual(Object.values(row.verification).map((part) => part.amount), [200, 300, 400]);
   assert.ok(result.json.data.every((row) => row.canVerify));
   assert.equal(result.json.groups.length, 2);
@@ -193,17 +195,78 @@ test("page and summary sections return first-page rows independently from totals
     const page = await get("tab=all&search=Independent%20UPI%20sections&limit=25&page=1&section=page");
     assert.equal(page.status, 200);
     assert.equal(page.json.data.length, 25);
-    assert.equal(page.json.total, null);
+    assert.equal(page.json.total, 60);
+    assert.equal(page.json.pagination.totalPages, 3);
+    assert.equal(page.json.pagination.totalRecords, 60);
     assert.equal(page.json.summary, undefined);
     assert.equal(page.json.hasMore, true);
+
+    const secondPage = await get("tab=all&search=Independent%20UPI%20sections&limit=25&page=2&section=page");
+    assert.equal(secondPage.status, 200);
+    assert.equal(secondPage.json.data.length, 25);
+    assert.equal(secondPage.json.pagination.page, 2);
+    assert.equal(secondPage.json.pagination.from, 26);
+    assert.equal(secondPage.json.pagination.to, 50);
+    assert.equal(secondPage.json.pagination.hasPreviousPage, true);
+    assert.equal(secondPage.json.pagination.hasNextPage, true);
+    assert.equal(new Set([...page.json.data, ...secondPage.json.data].map((row) => row._id)).size, 50);
+
+    const clamped = await get("tab=all&search=Independent%20UPI%20sections&limit=25&page=999&section=page");
+    assert.equal(clamped.status, 200);
+    assert.equal(clamped.json.pagination.page, 3);
+    assert.equal(clamped.json.data.length, 10);
+    assert.equal(clamped.json.pagination.from, 51);
+    assert.equal(clamped.json.pagination.to, 60);
 
     const summary = await get("tab=all&search=Independent%20UPI%20sections&section=summary");
     assert.equal(summary.status, 200);
     assert.equal(summary.json.total, 60);
     assert.equal(summary.json.summary.amount, 600);
+    const completeView = await get("tab=all&search=Independent%20UPI%20sections&limit=25");
+    assert.deepEqual(summary.json.summary, completeView.json.summary);
+    assert.deepEqual(summary.json.methodTotals, completeView.json.methodTotals);
+    assert.deepEqual(summary.json.stats, completeView.json.stats);
     assert.equal(summary.json.data, undefined);
     assert.equal(summary.json.groups, undefined);
   } finally { await PaymentHistory.deleteMany({ _id: { $in: rows.map((row) => row._id) } }); }
+});
+
+test("UPI page keeps missing optional dates and times while sorting by the selected date basis", async () => {
+  const marker = "UPI optional date fixture";
+  const ownerId = new ctx.mongoose.Types.ObjectId(owner);
+  const rows = [
+    { createdAt: dayStartIST("2024-01-02"), paymentDate: undefined },
+    { createdAt: new Date(dayStartIST("2024-01-02").getTime() - 1), paymentDate: undefined },
+    { createdAt: dayStartIST("2024-01-04"), paymentDate: dayStartIST("2024-01-02") },
+    { createdAt: dayStartIST("2024-01-01"), paymentDate: dayStartIST("2024-01-03") },
+  ].map((dates) => ({
+    _id: oid(), company: ownerId, bookingId: oid(), createdBy: ownerId,
+    type: "booking", paymentMethod: "phonepe", amount: 100,
+    customer: { fullName: marker }, vehicle: { vehicleName: "UPI optional-date car" },
+    paymentTime: "", updatedAt: dates.createdAt, ...dates,
+  }));
+  await PaymentHistory.collection.insertMany(rows);
+  try {
+    const all = await get(`tab=all&section=page&dateType=payment&search=${encodeURIComponent(marker)}`);
+    assert.equal(all.status, 200);
+    assert.deepEqual(all.json.data.map((row) => row._id), [
+      String(rows[3]._id), String(rows[2]._id), String(rows[1]._id), String(rows[0]._id),
+    ]);
+    assert.ok(all.json.data.filter((row) => !row.paymentDate).every((row) =>
+      row.effectivePaymentDate === null && row.paymentTime === "",
+    ));
+
+    const created = await get(
+      `tab=all&section=page&dateType=created&date=2024-01-02&search=${encodeURIComponent(marker)}`,
+    );
+    assert.equal(created.status, 200);
+    assert.deepEqual(created.json.data.map((row) => row._id), [String(rows[0]._id)]);
+    assert.equal(created.json.data[0].dateDay, "2024-01-02");
+    assert.equal(created.json.data[0].paymentDate, null);
+    assert.equal(created.json.data[0].paymentTime, "");
+  } finally {
+    await PaymentHistory.deleteMany({ _id: { $in: rows.map((row) => row._id) } });
+  }
 });
 
 test("malformed filters and client-selected scope are rejected", async () => {

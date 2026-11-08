@@ -79,6 +79,12 @@ test("mixed records expose only the cash portion and cash audit history", async 
   assert.equal(row.remainingAmount, 800);
   assert.equal(row.lastCollectedByName, "Cash collector");
   assert.deepEqual(row.collectionHistory.map((entry) => entry.channel), ["cash"]);
+  assert.equal(row.company, undefined);
+  assert.equal(row.__v, undefined);
+  assert.equal(row.lastCollectedBy, undefined);
+  assert.equal(row.vehicle.vehicleId, undefined);
+  assert.equal(row.collectionHistory[0].collectedBy, undefined);
+  assert.equal(row.collectionHistory[0].adjustment, undefined);
   assert.equal(row.createdBy.fullName.startsWith("Test User"), true);
   assert.equal(row.createdBy.password, undefined);
   assert.equal(row.createdBy.email, undefined);
@@ -244,14 +250,36 @@ test("page and summary sections return first-page rows independently from totals
     const page = await api("GET", `${url}&limit=25&page=1&section=page`);
     assert.equal(page.status, 200);
     assert.equal(page.json.data.length, 25);
-    assert.equal(page.json.total, null);
+    assert.equal(page.json.total, 60);
+    assert.equal(page.json.pagination.totalPages, 3);
+    assert.equal(page.json.pagination.totalRecords, 60);
     assert.equal(page.json.summary, undefined);
     assert.equal(page.json.hasMore, true);
+
+    const secondPage = await api("GET", `${url}&limit=25&page=2&section=page`);
+    assert.equal(secondPage.status, 200);
+    assert.equal(secondPage.json.data.length, 25);
+    assert.equal(secondPage.json.pagination.page, 2);
+    assert.equal(secondPage.json.pagination.from, 26);
+    assert.equal(secondPage.json.pagination.to, 50);
+    assert.equal(secondPage.json.pagination.hasPreviousPage, true);
+    assert.equal(secondPage.json.pagination.hasNextPage, true);
+    assert.equal(new Set([...page.json.data, ...secondPage.json.data].map((row) => row._id)).size, 50);
+
+    const clamped = await api("GET", `${url}&limit=25&page=999&section=page`);
+    assert.equal(clamped.status, 200);
+    assert.equal(clamped.json.pagination.page, 3);
+    assert.equal(clamped.json.data.length, 10);
+    assert.equal(clamped.json.pagination.from, 51);
+    assert.equal(clamped.json.pagination.to, 60);
 
     const summary = await api("GET", `${url}&section=summary`);
     assert.equal(summary.status, 200);
     assert.equal(summary.json.total, 60);
     assert.equal(summary.json.summary.amount, 600);
+    const completeView = await api("GET", `${url}&limit=25`);
+    assert.deepEqual(summary.json.summary, completeView.json.summary);
+    assert.deepEqual(summary.json.stats, completeView.json.stats);
     assert.equal(summary.json.data, undefined);
     assert.ok(summary.json.groups.every((group) => group.payments === undefined));
   } finally { await PaymentHistory.deleteMany({ _id: { $in: inserted.map((row) => row._id) } }); }
