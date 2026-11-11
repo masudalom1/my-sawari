@@ -17,13 +17,20 @@ import {
 
 export const UPI_CHANNELS = ["phonepe", "gpay", "razorpay"];
 const TABS = ["today", "yesterday", "pending", "completed", "all"];
+const DATE_BASIS = {
+  created: "createdAt",
+  payment: "paymentDate",
+  collected: "collectedDate",
+};
 const monthStart = (month) => {
   const [year, monthNumber] = month.split("-").map(Number);
   const next = new Date(Date.UTC(year, monthNumber, 1));
   return next.toISOString().slice(0, 10);
 };
 const fields =
-  "company bookingId customer vehicle amount paymentMethod paymentBreakdown type transactionId upiLast4 createdBy createdAt paymentDate customPaymentDate paymentTime collectedAmount collectedPhonePe isCollected isPhonePeCollected collectionHistory lastCollectedAt lastCollectedByName __v";
+  "bookingId customer vehicle amount paymentMethod paymentBreakdown type transactionId upiLast4 createdBy createdAt paymentDate customPaymentDate paymentTime collectedAmount collectedPhonePe isCollected isPhonePeCollected collectionHistory lastCollectedAt lastCollectedByName __v";
+const viewFields = fields.split(/\s+/).filter((field) => field !== "__v").join(" ");
+const fieldProjection = Object.fromEntries(viewFields.split(/\s+/).map((field) => [field, 1]));
 // Use the same deployment-owned access boundary as Cash Verification. A client
 // cannot choose the company, collector or verification time.
 export const upiScope = (user) =>
@@ -44,7 +51,7 @@ const paise = (value) => {
 export function parseUpiQuery(query = {}) {
   if (!query || typeof query !== "object" || Array.isArray(query))
     throw new ApiError(400, "Invalid UPI filters");
-  const allowed = ["tab", "method", "month", "date", "search", "page", "limit", "section"];
+  const allowed = ["tab", "method", "month", "date", "dateType", "search", "page", "limit", "section"];
   if (Object.keys(query).some((key) => !allowed.includes(key)))
     throw new ApiError(400, "Unknown UPI filter");
   const result = {
@@ -52,6 +59,7 @@ export function parseUpiQuery(query = {}) {
     method: "all",
     month: "",
     date: "",
+    dateType: "created",
     search: "",
     page: "1",
     limit: "25",
@@ -67,6 +75,7 @@ export function parseUpiQuery(query = {}) {
     ) ||
     !TABS.includes(result.tab) ||
     !["all", "mixed", ...UPI_CHANNELS].includes(result.method) ||
+    !["created", "payment", "collected"].includes(result.dateType) ||
     result.search.length > 120 ||
     (result.month && !/^[1-9]\d{3}-(0[1-9]|1[0-2])$/.test(result.month)) ||
     (result.date && !isValidDayKey(result.date)) ||
@@ -246,41 +255,68 @@ export function upiPaymentRow(payment) {
   };
 }
 
-const summaryOf = (rows) => ({
-  count: rows.length,
-  amount:
-    rows.reduce((sum, row) => sum + Math.round(row.upiAmount * 100), 0) / 100,
-  // A mixed receipt can contain both pending and completed components. Count
-  // it in each applicable status, as the tabs do, but only once in the total.
+const createSummaryAccumulator = () => ({
+  count: 0,
+  amount: 0,
+  verifiedCount: 0,
+  verifiedAmount: 0,
+  pendingCount: 0,
+  pendingAmount: 0,
+  reviewCount: 0,
+});
+
+const addSummaryRow = (summary, row) => {
+  summary.count += 1;
+  summary.amount += Math.round(row.upiAmount * 100);
+  if (
+    row.visibleChannels.some((channel) => row.verification[channel].verified)
+  )
+    summary.verifiedCount += 1;
+  summary.verifiedAmount += Math.round(row.verifiedAmount * 100);
+  if (!row.verified) {
+    summary.pendingCount += 1;
+    summary.pendingAmount += Math.round(row.remainingAmount * 100);
+  }
+  if (row.reviewReasons.length > 0) summary.reviewCount += 1;
+};
+
+const finishSummary = (summary) => ({
+  count: summary.count,
+  amount: summary.amount / 100,
   verified: {
-    count: rows.filter((row) =>
-      row.visibleChannels.some((channel) => row.verification[channel].verified),
-    ).length,
-    amount:
-      rows.reduce((sum, row) => sum + Math.round(row.verifiedAmount * 100), 0) /
-      100,
+    count: summary.verifiedCount,
+    amount: summary.verifiedAmount / 100,
   },
   pending: {
-    count: rows.filter((row) => !row.verified).length,
-    amount:
-      rows.reduce(
-        (sum, row) => sum + Math.round(row.remainingAmount * 100),
-        0,
-      ) / 100,
+    count: summary.pendingCount,
+    amount: summary.pendingAmount / 100,
   },
-  reviewCount: rows.filter((row) => row.reviewReasons.length > 0).length,
+  reviewCount: summary.reviewCount,
 });
+
+const summaryOf = (rows) => {
+  const summary = createSummaryAccumulator();
+  for (const row of rows) addSummaryRow(summary, row);
+  return finishSummary(summary);
+};
 
 function scopeToChannels(row, channels) {
   const visibleChannels = channels.filter(
     (channel) => row.verification[channel].amount > 0,
   );
   const parts = visibleChannels.map((channel) => row.verification[channel]);
+  const collectedAt = parts
+    .flatMap((part) => part.history)
+    .map((entry) => entry.collectedAt)
+    .filter((value) => value && Number.isFinite(new Date(value).getTime()))
+    .sort((a, b) => new Date(b).getTime() - new Date(a).getTime())[0] || null;
   const total = (key) =>
     parts.reduce((sum, part) => sum + Math.round(part[key] * 100), 0) / 100;
   return {
     ...row,
     visibleChannels,
+    collectedAt,
+    collectedDay: collectedAt ? toDayKey(collectedAt) : null,
     upiAmount: total("amount"),
     verifiedAmount: total("verifiedAmount"),
     remainingAmount: total("remainingAmount"),
@@ -291,23 +327,41 @@ function scopeToChannels(row, channels) {
   };
 }
 
+function withDateBasis(row, dateType) {
+  const dateValue = dateType === "created"
+    ? row.createdAt
+    : dateType === "collected"
+      ? row.collectedAt
+      : row.effectivePaymentDate;
+  return {
+    ...row,
+    dateValue,
+    dateDay: dateValue && Number.isFinite(new Date(dateValue).getTime())
+      ? toDayKey(dateValue)
+      : null,
+  };
+}
+
 export async function readUpiView(user, query) {
   const filter = parseUpiQuery(query);
   if (filter.section === "page") return readUpiPage(user, filter);
-  const createdAtRange = filter.date
+  const createdAtRange = filter.dateType === "created" && filter.date
     ? { $gte: dayStartIST(filter.date), $lte: dayEndIST(filter.date) }
-    : filter.month
+    : filter.dateType === "created" && filter.month
       ? {
           $gte: dayStartIST(`${filter.month}-01`),
           $lt: dayStartIST(monthStart(filter.month)),
         }
       : null;
-  const payments = await PaymentHistory.find({
+  const paymentQuery = {
     ...upiScope(user),
     type: { $in: PAYMENT_RECEIPT_TYPES },
     ...(createdAtRange ? { createdAt: createdAtRange } : {}),
-  })
-    .select(fields)
+  };
+  if (filter.section === "summary")
+    return readUpiSummary(filter, paymentQuery);
+  const payments = await PaymentHistory.find(paymentQuery)
+    .select(viewFields)
     .lean();
   const today = toDayKey(new Date()),
     yesterday = addDayKeys(today, -1);
@@ -321,12 +375,15 @@ export async function readUpiView(user, query) {
   // mixed receipts to their digital portion before applying channel status.
   const matchesForMethod = (method) =>
     paymentRows
-      .map((row) => {
-        return scopeToChannels(
-          row,
-          UPI_CHANNELS.includes(method) ? [method] : UPI_CHANNELS,
-        );
-      })
+      .map((row) =>
+        withDateBasis(
+          scopeToChannels(
+            row,
+            UPI_CHANNELS.includes(method) ? [method] : UPI_CHANNELS,
+          ),
+          filter.dateType,
+        ),
+      )
       .filter(
         (row) =>
           row.upiAmount > 0 &&
@@ -334,8 +391,6 @@ export async function readUpiView(user, query) {
             (method === "mixed"
               ? row.paymentMethod === "mixed"
               : row.verification[method].amount > 0)) &&
-          (!filter.month || row.recordedDay?.startsWith(`${filter.month}-`)) &&
-          (!filter.date || row.recordedDay === filter.date) &&
           (!search ||
             [
               row.customer?.fullName,
@@ -354,24 +409,31 @@ export async function readUpiView(user, query) {
                 .includes(search),
             )),
       );
-  const forTab = (matches, tab) => {
-    if (tab === "today" || tab === "yesterday")
-      return matches.filter(
-        (row) => row.recordedDay === (tab === "today" ? today : yesterday),
-      );
-    if (tab !== "pending" && tab !== "completed") return matches;
-    return matches
+  const forTab = (matches, tab) =>
+    matches
       .map((row) =>
-        scopeToChannels(
-          row,
-          row.visibleChannels.filter(
-            (channel) =>
-              row.verification[channel].verified === (tab === "completed"),
-          ),
+        withDateBasis(
+          tab === "pending" || tab === "completed"
+            ? scopeToChannels(
+                row,
+                row.visibleChannels.filter(
+                  (channel) =>
+                    row.verification[channel].verified ===
+                    (tab === "completed"),
+                ),
+              )
+            : row,
+          filter.dateType,
         ),
       )
-      .filter((row) => row.upiAmount > 0);
-  };
+      .filter(
+        (row) =>
+          row.upiAmount > 0 &&
+          (!filter.month || row.dateDay?.startsWith(`${filter.month}-`)) &&
+          (!filter.date || row.dateDay === filter.date) &&
+          ((tab !== "today" && tab !== "yesterday") ||
+            row.dateDay === (tab === "today" ? today : yesterday)),
+      );
   const methods = Object.fromEntries(
     ["all", ...UPI_CHANNELS].map((method) => [
       method,
@@ -389,34 +451,10 @@ export async function readUpiView(user, query) {
   const stats = Object.fromEntries(
     TABS.map((tab) => [tab, summaryOf(forTab(matches, tab))]),
   );
-  if (filter.section === "summary") {
-    const total = selectedRows.length;
-    const totalPages = filter.limit === "all"
-      ? 1
-      : Math.max(1, Math.ceil(total / Number(filter.limit)));
-    return {
-      success: true,
-      dateBasis: "createdAt",
-      total,
-      summary: summaryOf(selectedRows),
-      methodTotals,
-      stats: { ...stats, verified: stats.completed },
-      pagination: {
-        page: 1,
-        pageSize: filter.limit === "all" ? "all" : Number(filter.limit),
-        total,
-        totalPages,
-        from: total ? 1 : 0,
-        to: filter.limit === "all" ? total : Math.min(total, Number(filter.limit)),
-      },
-      today,
-      yesterday,
-    };
-  }
   const rows = selectedRows.sort(
     (a, b) =>
-      (b.createdAt ? new Date(b.createdAt).getTime() : -Infinity) -
-        (a.createdAt ? new Date(a.createdAt).getTime() : -Infinity) ||
+      (b.dateValue ? new Date(b.dateValue).getTime() : -Infinity) -
+        (a.dateValue ? new Date(a.dateValue).getTime() : -Infinity) ||
       String(b._id).localeCompare(String(a._id)),
   );
   const totalPages =
@@ -437,7 +475,7 @@ export async function readUpiView(user, query) {
         .map(String),
     ),
   ];
-  const creators = filter.section !== "summary" && creatorIds.length
+  const creators = creatorIds.length
     ? await User.find({ _id: { $in: creatorIds } })
         .select("fullName username")
         .lean()
@@ -451,14 +489,15 @@ export async function readUpiView(user, query) {
   }));
   const dates = new Map();
   for (const row of visibleData) {
-    if (!dates.has(row.recordedDay))
-      dates.set(row.recordedDay, { date: row.recordedDay, payments: [] });
-    dates.get(row.recordedDay).payments.push(row);
+    if (!dates.has(row.dateDay))
+      dates.set(row.dateDay, { date: row.dateDay, payments: [] });
+    dates.get(row.dateDay).payments.push(row);
   }
   const result = {
     success: true,
     data: visibleData,
-    dateBasis: "createdAt",
+    dateType: filter.dateType,
+    dateBasis: DATE_BASIS[filter.dateType],
     groups: [...dates.values()].map((group) => ({
       ...group, count: group.payments.length,
       amount: group.payments.reduce((sum, row) => sum + Math.round(row.upiAmount * 100), 0) / 100,
@@ -481,31 +520,214 @@ export async function readUpiView(user, query) {
   return result;
 }
 
-async function readUpiPage(user, filter) {
-  const createdAtRange = filter.date
-    ? { $gte: dayStartIST(filter.date), $lte: dayEndIST(filter.date) }
-    : filter.month
-      ? {
-          $gte: dayStartIST(`${filter.month}-01`),
-          $lt: dayStartIST(monthStart(filter.month)),
-        }
-      : null;
-  const query = {
-    ...upiScope(user),
-    type: { $in: PAYMENT_RECEIPT_TYPES },
-    ...(createdAtRange ? { createdAt: createdAtRange } : {}),
-  };
+function upiRowForTab(row, tab, filter, today, yesterday) {
+  let scoped = row;
+  if (tab === "pending" || tab === "completed") {
+    scoped = scopeToChannels(
+      row,
+      row.visibleChannels.filter(
+        (channel) =>
+          row.verification[channel].verified === (tab === "completed"),
+      ),
+    );
+    scoped = withDateBasis(scoped, filter.dateType);
+  }
+  if (
+    scoped.upiAmount <= 0 ||
+    (filter.month && !scoped.dateDay?.startsWith(`${filter.month}-`)) ||
+    (filter.date && scoped.dateDay !== filter.date) ||
+    (tab === "today" && scoped.dateDay !== today) ||
+    (tab === "yesterday" && scoped.dateDay !== yesterday)
+  )
+    return null;
+  return scoped;
+}
+
+function matchesUpiSearch(row, search) {
+  return (
+    !search ||
+    [
+      row.customer?.fullName,
+      row.customer?.mobileNumber,
+      row.vehicle?.vehicleName,
+      row.vehicle?.vehicleNumber,
+      row._id,
+      row.bookingId,
+      row.transactionId,
+      ...row.upiLast4,
+      row.upiAmount,
+      row.remainingAmount,
+    ].some((value) =>
+      String(value ?? "")
+        .toLowerCase()
+        .includes(search),
+    )
+  );
+}
+
+async function readUpiSummary(filter, query) {
   const today = toDayKey(new Date());
   const yesterday = addDayKeys(today, -1);
   const search = filter.search.toLowerCase();
-  const skip = filter.limit === "all" ? 0 : (filter.page - 1) * Number(filter.limit);
-  const end = filter.limit === "all" ? Infinity : skip + Number(filter.limit);
-  const matches = [];
+  const methodKeys = ["all", ...UPI_CHANNELS];
+  const methodsToScan = [...new Set([...methodKeys, filter.method])];
+  const methodAccumulators = Object.fromEntries(
+    methodKeys.map((method) => [method, createSummaryAccumulator()]),
+  );
+  const statsAccumulators = Object.fromEntries(
+    TABS.map((tab) => [tab, createSummaryAccumulator()]),
+  );
+  const selectedSummary = createSummaryAccumulator();
   const cursor = PaymentHistory.find(query)
-    .select(fields)
-    .sort({ createdAt: -1, _id: -1 })
+    .select(viewFields)
     .lean()
     .cursor({ batchSize: 100 });
+
+  for await (const payment of cursor) {
+    const paymentMethod = normalizePaymentMethod(payment.paymentMethod);
+    if (![...UPI_CHANNELS, "mixed"].includes(paymentMethod)) continue;
+    const row = upiPaymentRow(payment);
+
+    for (const method of methodsToScan) {
+      const scoped = withDateBasis(
+        scopeToChannels(
+          row,
+          UPI_CHANNELS.includes(method) ? [method] : UPI_CHANNELS,
+        ),
+        filter.dateType,
+      );
+      if (
+        scoped.upiAmount <= 0 ||
+        (method === "mixed" && scoped.paymentMethod !== "mixed") ||
+        (UPI_CHANNELS.includes(method) &&
+          scoped.verification[method].amount <= 0) ||
+        !matchesUpiSearch(scoped, search)
+      )
+        continue;
+
+      if (method === filter.method) {
+        for (const tab of TABS) {
+          const tabRow = upiRowForTab(scoped, tab, filter, today, yesterday);
+          if (tabRow) addSummaryRow(statsAccumulators[tab], tabRow);
+        }
+        const selectedRow = upiRowForTab(
+          scoped,
+          filter.tab,
+          filter,
+          today,
+          yesterday,
+        );
+        if (selectedRow) addSummaryRow(selectedSummary, selectedRow);
+      }
+
+      if (methodKeys.includes(method)) {
+        const selectedTabRow = upiRowForTab(
+          scoped,
+          filter.tab,
+          filter,
+          today,
+          yesterday,
+        );
+        if (selectedTabRow)
+          addSummaryRow(methodAccumulators[method], selectedTabRow);
+      }
+    }
+  }
+
+  const summary = finishSummary(selectedSummary);
+  const methodTotals = Object.fromEntries(
+    methodKeys.map((method) => {
+      const total = finishSummary(methodAccumulators[method]);
+      return [method, { amount: total.amount, count: total.count }];
+    }),
+  );
+  const stats = Object.fromEntries(
+    TABS.map((tab) => [tab, finishSummary(statsAccumulators[tab])]),
+  );
+  const total = summary.count;
+  const totalPages =
+    filter.limit === "all"
+      ? 1
+      : Math.max(1, Math.ceil(total / Number(filter.limit)));
+  return {
+    success: true,
+    dateType: filter.dateType,
+    dateBasis: DATE_BASIS[filter.dateType],
+    total,
+    summary,
+    methodTotals,
+    stats: { ...stats, verified: stats.completed },
+    pagination: {
+      page: 1,
+      pageSize: filter.limit === "all" ? "all" : Number(filter.limit),
+      total,
+      totalPages,
+      from: total ? 1 : 0,
+      to: filter.limit === "all" ? total : Math.min(total, Number(filter.limit)),
+    },
+    today,
+    yesterday,
+  };
+}
+
+async function readUpiPage(user, filter) {
+  const today = toDayKey(new Date());
+  const yesterday = addDayKeys(today, -1);
+  const dateRanges = [];
+  if (filter.date) {
+    dateRanges.push({ $gte: dayStartIST(filter.date), $lte: dayEndIST(filter.date) });
+  } else if (filter.month) {
+    dateRanges.push({
+      $gte: dayStartIST(`${filter.month}-01`),
+      $lt: dayStartIST(monthStart(filter.month)),
+    });
+  }
+  if (filter.tab === "today" || filter.tab === "yesterday") {
+    const tabDay = filter.tab === "today" ? today : yesterday;
+    dateRanges.push({ $gte: dayStartIST(tabDay), $lte: dayEndIST(tabDay) });
+  }
+  const dateMatches = filter.dateType === "created"
+    ? dateRanges.map((range) => ({ createdAt: range }))
+    : filter.dateType === "payment"
+      ? dateRanges.map((range) => ({
+          // Either field can be the effective date on legacy records. This
+          // superset is narrowed using the existing precedence below.
+          $or: [{ customPaymentDate: range }, { paymentDate: range }],
+        }))
+      : [];
+  const query = {
+    ...upiScope(user),
+    type: { $in: PAYMENT_RECEIPT_TYPES },
+    ...(dateMatches.length ? { $and: dateMatches } : {}),
+  };
+  const search = filter.search.toLowerCase();
+  const skip = filter.limit === "all" ? 0 : (filter.page - 1) * Number(filter.limit);
+  const end = filter.limit === "all" ? Infinity : skip + Number(filter.limit);
+  const pageSize = filter.limit === "all" ? Infinity : Number(filter.limit);
+  const pageRows = [];
+  const tailRows = [];
+  let total = 0;
+  const needsFullSort = filter.dateType === "collected" || filter.limit === "all";
+  const cursor = filter.dateType === "payment"
+    ? PaymentHistory.aggregate([
+        { $match: query },
+        {
+          $set: {
+            _upiEffectivePaymentDate: {
+              $ifNull: ["$customPaymentDate", "$paymentDate"],
+            },
+          },
+        },
+        { $sort: { _upiEffectivePaymentDate: -1, _id: -1 } },
+        { $project: fieldProjection },
+      ])
+        .allowDiskUse(true)
+        .cursor({ batchSize: 100 })
+    : PaymentHistory.find(query)
+        .select(viewFields)
+        .sort({ createdAt: -1, _id: -1 })
+        .lean()
+        .cursor({ batchSize: 100 });
 
   for await (const payment of cursor) {
     if (!["phonepe", "gpay", "razorpay", "mixed"].includes(normalizePaymentMethod(payment.paymentMethod))) continue;
@@ -513,13 +735,11 @@ async function readUpiPage(user, filter) {
     const channels = filter.method === "all" || filter.method === "mixed"
       ? UPI_CHANNELS
       : [filter.method];
-    row = scopeToChannels(row, channels);
+    row = withDateBasis(scopeToChannels(row, channels), filter.dateType);
     if (
       row.upiAmount <= 0 ||
       (filter.method === "mixed" && row.paymentMethod !== "mixed") ||
       (UPI_CHANNELS.includes(filter.method) && row.verification[filter.method].amount <= 0) ||
-      (filter.month && !row.recordedDay?.startsWith(`${filter.month}-`)) ||
-      (filter.date && row.recordedDay !== filter.date) ||
       (search && ![
         row.customer?.fullName, row.customer?.mobileNumber, row.vehicle?.vehicleName,
         row.vehicle?.vehicleNumber, row._id, row.bookingId, row.transactionId,
@@ -527,8 +747,6 @@ async function readUpiPage(user, filter) {
       ].some((value) => String(value ?? "").toLowerCase().includes(search)))
     ) continue;
 
-    if (filter.tab === "today" && row.recordedDay !== today) continue;
-    if (filter.tab === "yesterday" && row.recordedDay !== yesterday) continue;
     if (filter.tab === "pending" || filter.tab === "completed") {
       row = scopeToChannels(
         row,
@@ -536,15 +754,44 @@ async function readUpiPage(user, filter) {
           (channel) => row.verification[channel].verified === (filter.tab === "completed"),
         ),
       );
+      row = withDateBasis(row, filter.dateType);
       if (row.upiAmount <= 0) continue;
     }
+    if (
+      (filter.month && !row.dateDay?.startsWith(`${filter.month}-`)) ||
+      (filter.date && row.dateDay !== filter.date) ||
+      (filter.tab === "today" && row.dateDay !== today) ||
+      (filter.tab === "yesterday" && row.dateDay !== yesterday)
+    ) continue;
 
-    matches.push(row);
-    if (matches.length >= end + 1) break;
+    total += 1;
+    if (needsFullSort) {
+      pageRows.push(row);
+      continue;
+    }
+    const rank = total - 1;
+    if (rank >= skip && rank < end) pageRows.push({ rank, row });
+    tailRows.push({ rank, row });
+    if (tailRows.length > pageSize) tailRows.shift();
   }
 
-  const hasNext = filter.limit !== "all" && matches.length > end;
-  const visible = filter.limit === "all" ? matches : matches.slice(skip, end);
+  const totalPages = filter.limit === "all"
+    ? 1
+    : Math.max(1, Math.ceil(total / pageSize));
+  const page = filter.limit === "all" ? 1 : Math.min(filter.page, totalPages);
+  const pageSkip = filter.limit === "all" ? 0 : (page - 1) * pageSize;
+  const selectedRows = needsFullSort
+    ? pageRows.sort(
+        (a, b) =>
+          (b.dateValue ? new Date(b.dateValue).getTime() : -Infinity) -
+            (a.dateValue ? new Date(a.dateValue).getTime() : -Infinity) ||
+          String(b._id).localeCompare(String(a._id)),
+      ).slice(pageSkip, pageSkip + pageSize)
+    : (page === filter.page ? pageRows : tailRows)
+        .filter(({ rank }) => rank >= pageSkip && rank < pageSkip + pageSize)
+        .map(({ row }) => row);
+  const hasNext = page < totalPages;
+  const visible = selectedRows;
   const creatorIds = [
     ...new Set(
       visible
@@ -563,14 +810,14 @@ async function readUpiPage(user, filter) {
   }));
   const dates = new Map();
   for (const row of data) {
-    if (!dates.has(row.recordedDay)) dates.set(row.recordedDay, { date: row.recordedDay, payments: [] });
-    dates.get(row.recordedDay).payments.push(row);
+    if (!dates.has(row.dateDay)) dates.set(row.dateDay, { date: row.dateDay, payments: [] });
+    dates.get(row.dateDay).payments.push(row);
   }
-  const total = filter.limit === "all" ? data.length : null;
-  const page = filter.page;
   return {
     success: true,
     data,
+    dateType: filter.dateType,
+    dateBasis: DATE_BASIS[filter.dateType],
     groups: [...dates.values()].map((group) => ({
       ...group,
       count: group.payments.length,
@@ -581,11 +828,15 @@ async function readUpiPage(user, filter) {
       page,
       pageSize: filter.limit === "all" ? "all" : Number(filter.limit),
       total,
-      totalPages: null,
-      from: data.length ? skip + 1 : 0,
-      to: skip + data.length,
+      totalRecords: total,
+      totalPages,
+      limit: filter.limit === "all" ? "all" : pageSize,
+      from: data.length ? pageSkip + 1 : 0,
+      to: pageSkip + data.length,
       hasPrevious: page > 1,
       hasNext: filter.limit === "all" ? false : hasNext,
+      hasPreviousPage: page > 1,
+      hasNextPage: hasNext,
     },
     hasMore: hasNext,
     today,

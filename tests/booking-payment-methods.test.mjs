@@ -35,7 +35,7 @@ function book(extra) {
     customerName: "Asha", mobileNumber: `98765${String(slot).padStart(5, "0")}`, tripType: "local",
     fromDate: dayFromToday(slot * 2), toDate: dayFromToday(slot * 2 + 1), flexibleTime: true, pickupTime: "10:00 AM", dropTime: "10:00 AM",
     vehicleId, vehicleType: "car", ...extra,
-    ...(["phonepe", "gpay"].includes(extra.paymentMethod) && extra.bookingAmount > 0
+    ...(extra.paymentMethod
       ? { paymentDate: dayFromToday(-1), paymentTime: "14:35" } : {}),
   });
 }

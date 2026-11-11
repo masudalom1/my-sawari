@@ -19,7 +19,7 @@
 // only after its commit, when readers can already see them. One place also
 // covers every mutation path, including writes from other instances.
 //
-// Delivery: only authenticated sockets in the dashboard room (socketAuth.js).
+// Delivery: authenticated sockets in their server-assigned company room.
 //
 // The same signal invalidates the response cache (see responseCache.js).
 
@@ -30,6 +30,7 @@ import {
   applyRooms,
   authenticateSocket,
   clearSocketTimers,
+  companyIdForUser,
   revalidateSockets,
   scheduleTokenExpiry,
 } from "./socketAuth.js";
@@ -54,6 +55,7 @@ const ALL_TOPICS = [
       .map(([, topic]) => topic),
   ),
 ];
+const RESYNC_TOPICS = [...new Set([...ALL_TOPICS, "permissions"])];
 const SERVER_ONLY_TOPICS = new Set(["users"]);
 const PERMISSION_USER_FIELDS = new Set([
   "accountStatus",
@@ -77,11 +79,12 @@ let generation = 0;
 let stream = null;
 let stopped = false;
 let retryMs = RETRY_MIN_MS;
-let seq = 0; // event number: lets clients spot duplicates / gaps
+const seqByCompany = new Map();
 
 const invalidationListeners = new Set();
 
-let pendingTopics = new Set();
+const pendingTopicsByCompany = new Map();
+const pendingGlobalTopics = new Set();
 let debounceTimer = null;
 let maxWaitTimer = null;
 
@@ -89,6 +92,8 @@ let maxWaitTimer = null;
 
 // Bumped on every detected change; cached data from an older generation is stale.
 export const getGeneration = () => generation;
+export const getSequenceForCompany = (companyId) =>
+  seqByCompany.get(String(companyId)) || 0;
 
 // Caching is only safe while every write (from every instance) is seen.
 export const isChangeStreamActive = () => mode === "changeStream";
@@ -106,32 +111,57 @@ function flushEmit() {
   debounceTimer = null;
   maxWaitTimer = null;
 
-  const changed = [...pendingTopics];
-  pendingTopics = new Set();
-  if (!changed.length || !io) return;
+  const pendingByCompany = new Map(pendingTopicsByCompany);
+  pendingTopicsByCompany.clear();
+  const globalTopics = new Set(pendingGlobalTopics);
+  pendingGlobalTopics.clear();
+  if ((!pendingByCompany.size && !globalTopics.size) || !io) return;
 
-  if (changed.includes("users")) {
+  const hasUserChanges =
+    globalTopics.has("users") ||
+    [...pendingByCompany.values()].some((topics) => topics.has("users"));
+  if (hasUserChanges) {
     revalidateSockets(io).catch((err) =>
       console.error("[realtime] session re-check failed:", err.message),
     );
   }
 
-  const topics = changed.filter((t) => !SERVER_ONLY_TOPICS.has(t));
-  if (!topics.length) return;
+  const companyIds = new Set(pendingByCompany.keys());
+  if (globalTopics.size) {
+    for (const socket of io.of("/").sockets.values()) {
+      if (socket.data.companyId) companyIds.add(String(socket.data.companyId));
+    }
+  }
 
-  seq += 1;
-  console.log(`[realtime] changed #${seq}: ${topics.join(", ")}`);
-  // Only to authorized sockets (room assigned at authentication). The
-  // payload names what changed; no documents, customer or payment data.
-  io.to(DASHBOARD_ROOM).emit("dashboard:changed", {
-    topics,
-    seq,
-    at: new Date().toISOString(),
-  });
+  for (const companyId of companyIds) {
+    const topics = new Set([
+      ...globalTopics,
+      ...(pendingByCompany.get(companyId) || []),
+    ]);
+    const publicTopics = [...topics].filter(
+      (topic) => !SERVER_ONLY_TOPICS.has(topic),
+    );
+    if (!publicTopics.length) continue;
+
+    const seq = getSequenceForCompany(companyId) + 1;
+    seqByCompany.set(companyId, seq);
+    console.log(`[realtime] changed #${seq}: ${publicTopics.join(", ")}`);
+    io.to(`${DASHBOARD_ROOM}:${companyId}`).emit("dashboard:changed", {
+      companyId,
+      topics: publicTopics,
+      seq,
+      at: new Date().toISOString(),
+    });
+  }
 }
 
-function scheduleEmit(topics) {
-  for (const t of topics) pendingTopics.add(t);
+function scheduleEmit(topics, companyId) {
+  const target = companyId ? String(companyId) : null;
+  const destination = target
+    ? (pendingTopicsByCompany.get(target) || new Set())
+    : pendingGlobalTopics;
+  for (const topic of topics) destination.add(topic);
+  if (target) pendingTopicsByCompany.set(target, destination);
   clearTimeout(debounceTimer);
   debounceTimer = setTimeout(flushEmit, EMIT_DEBOUNCE_MS);
   if (!maxWaitTimer) maxWaitTimer = setTimeout(flushEmit, EMIT_MAX_WAIT_MS);
@@ -149,9 +179,9 @@ function invalidate() {
 }
 
 // Something changed: drop cached data now, tell browsers shortly.
-export function markChanged(topics = ALL_TOPICS) {
+export function markChanged(topics = ALL_TOPICS, companyId = null) {
   invalidate();
-  scheduleEmit(topics);
+  scheduleEmit(topics, companyId);
 }
 
 // ---------- Write-request tracking ----------
@@ -182,7 +212,7 @@ export function trackWriteRequests(req, res, next) {
   res.on("finish", () => {
     if (res.statusCode >= 400) return;
     if (mode === "changeStream") invalidate();
-    else markChanged(topics);
+    else markChanged(topics, companyIdForUser(req.user));
   });
   next();
 }
@@ -211,12 +241,57 @@ export function topicsFor(change) {
   return STRUCTURAL_EVENTS.includes(change?.operationType) ? ALL_TOPICS : [];
 }
 
+function companyIdFromDocument(collection, document) {
+  if (!document) return null;
+  if (collection === "users") return companyIdForUser(document);
+  if (collection === "rolepermissions") return null;
+  const companyId = document.company?._id || document.company;
+  return companyId ? String(companyId) : null;
+}
+
+async function companyIdForChange(change) {
+  const collection = change?.ns?.coll;
+  let document = change?.fullDocument || change?.fullDocumentBeforeChange;
+  if (!document && change?.documentKey?._id && collection) {
+    document = await mongoose.connection.db
+      .collection(collection)
+      .findOne(
+        { _id: change.documentKey._id },
+        { projection: { company: 1, createdBy: 1, updatedBy: 1, vehicle: 1 } },
+      );
+  }
+  const directCompany = companyIdFromDocument(collection, document);
+  if (directCompany) return directCompany;
+
+  if (collection === "maintenances" && document?.vehicle) {
+    const vehicle = await mongoose.connection.db
+      .collection("vehicles")
+      .findOne(
+        { _id: document.vehicle?._id || document.vehicle },
+        { projection: { company: 1 } },
+      );
+    return companyIdFromDocument("vehicles", vehicle);
+  }
+
+  if (collection === "rolepermissions" && document?.updatedBy) {
+    const user = await mongoose.connection.db
+      .collection("users")
+      .findOne(
+        { _id: document.updatedBy },
+        { projection: { _id: 1, company: 1, createdBy: 1 } },
+      );
+    return companyIdForUser(user);
+  }
+
+  return null;
+}
+
 async function runChangeStream() {
   const db = mongoose.connection.db;
   const pipeline = [
     { $match: { "ns.coll": { $in: Object.keys(TOPIC_BY_COLLECTION) } } },
-    // Only what is needed to know WHAT changed: keeps traffic from a
-    // bandwidth-limited cluster tiny (no document bodies or updated values).
+    // Project only tenant-routing references and changed field names. Record
+    // contents and customer/payment data are never sent to browsers.
     {
       $project: {
         ns: 1,
@@ -233,11 +308,26 @@ async function runChangeStream() {
           },
         },
         "updateDescription.removedFields": 1,
+        "fullDocument.company": 1,
+        "fullDocument.createdBy": 1,
+        "fullDocument.updatedBy": 1,
+        "fullDocument.businessName": 1,
+        "fullDocument._id": 1,
+        "fullDocument.vehicle": 1,
+        "fullDocumentBeforeChange.company": 1,
+        "fullDocumentBeforeChange.createdBy": 1,
+        "fullDocumentBeforeChange.updatedBy": 1,
+        "fullDocumentBeforeChange.businessName": 1,
+        "fullDocumentBeforeChange._id": 1,
+        "fullDocumentBeforeChange.vehicle": 1,
       },
     },
   ];
 
-  stream = db.watch(pipeline);
+  stream = db.watch(pipeline, {
+    fullDocument: "updateLookup",
+    fullDocumentBeforeChange: "whenAvailable",
+  });
 
   // First round-trip: throws right away on a standalone server.
   const first = await stream.tryNext();
@@ -247,12 +337,15 @@ async function runChangeStream() {
   retryMs = RETRY_MIN_MS;
   console.log("[realtime] change stream active");
   // Anything written while the stream was down was not seen: refresh all.
-  if (wasInactive) markChanged(ALL_TOPICS);
-  if (first) markChanged(topicsFor(first));
+  if (wasInactive) markChanged(RESYNC_TOPICS);
+  if (first) {
+    const topics = topicsFor(first);
+    if (topics.length) markChanged(topics, await companyIdForChange(first));
+  }
 
   for await (const change of stream) {
     const topics = topicsFor(change);
-    if (topics.length) markChanged(topics);
+    if (topics.length) markChanged(topics, await companyIdForChange(change));
   }
 }
 
@@ -309,7 +402,11 @@ export function startRealtime(httpServer) {
     socket.on("disconnect", () => clearSocketTimers(socket));
     // No client -> server events are handled: clients cannot pick rooms.
     // `seq` is the last event number; the client resyncs over REST anyway.
-    socket.emit("realtime:ready", { subscribed, seq });
+    socket.emit("realtime:ready", {
+      subscribed,
+      companyId: socket.data.companyId,
+      seq: getSequenceForCompany(socket.data.companyId),
+    });
   });
 
   mode = "requests";

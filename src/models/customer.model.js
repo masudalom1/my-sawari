@@ -2,8 +2,8 @@ import mongoose from "mongoose";
 
 const { Schema } = mongoose;
 
-// The "customers" collection is owned by the customer app. This backend only
-// reads it (membership lookup), so the schema lists just the fields used here.
+// The "customers" collection is owned by the customer app; this backend reads
+// the shared profile fields without writing to it.
 const customerSchema = new Schema(
   {
     customerName: {
@@ -20,6 +20,15 @@ const customerSchema = new Schema(
     status: {
       type: String,
       trim: true,
+    },
+
+    email: {
+      type: String,
+      trim: true,
+    },
+
+    walletBalance: {
+      type: Number,
     },
   },
   {

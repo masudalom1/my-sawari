@@ -19,6 +19,14 @@ let User;
 const sockets = [];
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const fetchAsAdmin = (path, options = {}) =>
+  fetch(`${ctx.base}${path}`, {
+    ...options,
+    headers: {
+      ...options.headers,
+      Authorization: `Bearer ${admin.token}`,
+    },
+  });
 
 const waitFor = async (check, ms = 10000) => {
   const end = Date.now() + ms;
@@ -70,8 +78,12 @@ const nextChange = (s, topic, ms = 10000) =>
     s.on("dashboard:changed", onChange);
   });
 
-const newVehicle = async () =>
-  (await Vehicle.collection.insertOne({ vehicleName: "Test", isDeleted: false })).insertedId;
+const newVehicle = async (company = admin.user.id) =>
+  (await Vehicle.collection.insertOne({
+    company: new Vehicle.db.base.Types.ObjectId(company),
+    vehicleName: "Test",
+    isDeleted: false,
+  })).insertedId;
 
 before(async () => {
   ctx = await startTestApp();
@@ -152,6 +164,7 @@ test("a failed account lookup is 503 (retry), not a rejected login", async () =>
 test("a valid token connects and is subscribed by the server", async () => {
   const { ready } = await open(admin.token);
   assert.equal(ready.subscribed, true);
+  assert.equal(ready.companyId, admin.user.id);
   assert.equal(typeof ready.seq, "number");
 });
 
@@ -186,13 +199,15 @@ test("a write made outside this server's routes reaches connected dashboards", a
   // Raw driver write: no Express route, no Mongoose middleware involved
   await Maintenance.collection.insertOne({
     vehicle,
+    company: new Vehicle.db.base.Types.ObjectId(admin.user.id),
     startDate: new Date(),
     endDate: new Date(Date.now() + 86400000),
     isDeleted: false,
   });
   const payload = await event;
   // Only what changed: no documents, ids, customer or payment fields
-  assert.deepEqual(Object.keys(payload).sort(), ["at", "seq", "topics"]);
+  assert.deepEqual(Object.keys(payload).sort(), ["at", "companyId", "seq", "topics"]);
+  assert.equal(payload.companyId, admin.user.id);
   assert.ok(!payload.topics.includes("users"));
 });
 
@@ -205,7 +220,7 @@ test("one successful API mutation -> one event, after the data is readable", asy
   const events = [];
   const onChange = async (p) => {
     events.push(p);
-    const list = await fetch(`${ctx.base}/dashboard/maintenance/timeline`).then((r) => r.json());
+    const list = await fetchAsAdmin("/dashboard/maintenance/timeline").then((r) => r.json());
     readableAtEvent ??= list.data.some((m) => String(m.vehicle) === String(vehicle));
   };
   socket.on("dashboard:changed", onChange);
@@ -248,6 +263,7 @@ test("an aborted transaction emits nothing; a committed one emits once", async (
   const vehicle = await newVehicle();
   const doc = () => ({
     vehicle,
+    company: new Vehicle.db.base.Types.ObjectId(admin.user.id),
     startDate: new Date(),
     endDate: new Date(Date.now() + 86400000),
     isDeleted: false,
@@ -280,12 +296,40 @@ test("event numbers increase by one, so clients can drop duplicates", async () =
   const onChange = (p) => seqs.push(p.seq);
   socket.on("dashboard:changed", onChange);
   for (let i = 0; i < 2; i++) {
-    await Vehicle.collection.insertOne({ vehicleName: `Seq ${i}`, isDeleted: false });
+    await Vehicle.collection.insertOne({
+      company: new Vehicle.db.base.Types.ObjectId(admin.user.id),
+      vehicleName: `Seq ${i}`,
+      isDeleted: false,
+    });
     await sleep(1800);
   }
   socket.off("dashboard:changed", onChange);
   assert.equal(seqs.length, 2);
   assert.equal(seqs[1], seqs[0] + 1);
+});
+
+test("change events are delivered only to sockets in the affected company room", async () => {
+  const other = await createUserAndLogin(ctx.base);
+  const { s: otherSocket, ready } = await open(other.token);
+  assert.equal(ready.companyId, other.user.id);
+
+  const vehicle = await newVehicle(other.user.id);
+  await sleep(1700);
+  const otherEvent = nextChange(otherSocket, "maintenances");
+  const adminEventsPromise = collect(socket, 1800, () =>
+    Maintenance.collection.insertOne({
+      vehicle,
+      startDate: new Date(),
+      endDate: new Date(Date.now() + 86400000),
+      isDeleted: false,
+    }),
+  );
+  const tenantEvent = await otherEvent;
+  const adminEvents = await adminEventsPromise;
+
+  assert.equal(tenantEvent.companyId, other.user.id);
+  assert.ok(tenantEvent.topics.includes("maintenances"));
+  assert.equal(adminEvents.length, 0);
 });
 
 test("client events cannot join rooms or trigger broadcasts", async () => {
@@ -301,37 +345,38 @@ test("client events cannot join rooms or trigger broadcasts", async () => {
 // ---------- Cache ----------
 
 test("cached dashboard reads are reused until the data changes", async () => {
-  const url = `${ctx.base}/dashboard/maintenance/timeline`;
+  const url = "/dashboard/maintenance/timeline";
 
-  const first = await fetch(url);
+  const first = await fetchAsAdmin(url);
   const firstBody = await first.json();
   assert.equal(first.headers.get("x-dashboard-cache"), "miss");
 
-  const second = await fetch(url);
+  const second = await fetchAsAdmin(url);
   assert.equal(second.headers.get("x-dashboard-cache"), "hit");
   assert.deepEqual(await second.json(), firstBody);
 
   const event = nextChange(socket, "maintenances");
   await Maintenance.collection.insertOne({
     vehicle: firstBody.data[0].vehicle,
+    company: new Vehicle.db.base.Types.ObjectId(admin.user.id),
     startDate: new Date(),
     endDate: new Date(Date.now() + 86400000),
     isDeleted: false,
   });
   await event;
 
-  const third = await fetch(url);
+  const third = await fetchAsAdmin(url);
   const thirdBody = await third.json();
   assert.equal(third.headers.get("x-dashboard-cache"), "miss");
   assert.equal(thirdBody.count, firstBody.count + 1);
 });
 
 test("a write request through the API invalidates the cache before it responds", async () => {
-  const url = `${ctx.base}/dashboard/maintenance/timeline`;
-  await fetch(url);
-  assert.equal((await fetch(url)).headers.get("x-dashboard-cache"), "hit");
+  const url = "/dashboard/maintenance/timeline";
+  await fetchAsAdmin(url);
+  assert.equal((await fetchAsAdmin(url)).headers.get("x-dashboard-cache"), "hit");
 
   // Any write request (even a rejected one) clears cached reads up front
-  await fetch(`${ctx.base}/dashboard/maintenance`, { method: "POST" });
-  assert.equal((await fetch(url)).headers.get("x-dashboard-cache"), "miss");
+  await fetchAsAdmin("/dashboard/maintenance", { method: "POST" });
+  assert.equal((await fetchAsAdmin(url)).headers.get("x-dashboard-cache"), "miss");
 });

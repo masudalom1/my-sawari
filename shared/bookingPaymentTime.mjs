@@ -1,13 +1,11 @@
 // Keep validateBookingPaymentTime in sync with the Operations frontend's utils/bookingPaymentTime.mjs.
 // HTML date/time controls contain India wall-clock time, never the browser's timezone.
-export function validateBookingPaymentTime({ paymentMethod, bookingAmount, paymentDate, paymentTime }, now = new Date()) {
-  const hasDate = paymentDate !== "" && paymentDate != null;
-  const hasTime = paymentTime !== "" && paymentTime != null;
-  if (!["phonepe", "gpay"].includes(paymentMethod) || (!(Number(bookingAmount) > 0) && !hasDate && !hasTime)) {
+export function validateBookingPaymentTime({ paymentMethod, paymentDate, paymentTime }, now = new Date()) {
+  if (!["cash", "phonepe", "gpay", "razorpay", "mixed"].includes(paymentMethod)) {
     return { error: "", collectedAt: null };
   }
   if (paymentDate === "" || paymentDate == null) {
-    return { error: "Payment Date is required for PhonePe or GPay.", collectedAt: null };
+    return { error: "Payment Date is required.", collectedAt: null };
   }
   const day = typeof paymentDate === "string" && /^\d{4}-\d{2}-\d{2}$/.test(paymentDate)
     ? new Date(`${paymentDate}T00:00:00.000Z`) : null;
@@ -15,7 +13,7 @@ export function validateBookingPaymentTime({ paymentMethod, bookingAmount, payme
     return { error: "Enter a valid Payment Date (YYYY-MM-DD).", collectedAt: null };
   }
   if (paymentTime === "" || paymentTime == null) {
-    return { error: "Payment Time is required for PhonePe or GPay.", collectedAt: null };
+    return { error: "Payment Time is required.", collectedAt: null };
   }
   if (typeof paymentTime !== "string" || !/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(paymentTime)) {
     return { error: "Enter a valid Payment Time (HH:MM).", collectedAt: null };

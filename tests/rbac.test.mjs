@@ -383,7 +383,7 @@ test("RBAC management is tenant-scoped, protected, and enforced on dashboard API
       location: "Bengaluru",
     },
   );
-  assert.equal(publicClaim.status, 201);
+  assert.equal(publicClaim.status, 410, "public self-registration remains disabled");
 
   const customEmployee = await adminApi("POST", "/auth/employees", {
     fullName: "Custom Access User",

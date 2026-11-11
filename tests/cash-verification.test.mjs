@@ -40,6 +40,7 @@ test("cash routes require authentication and reject invalid filters", async () =
   assert.equal((await client(ctx.base)("GET", ENDPOINT)).status, 401);
   assert.equal((await client(ctx.base)("POST", `${ENDPOINT}/${cash._id}/collect`, { amount: 1 })).status, 401);
   assert.equal((await api("GET", `${ENDPOINT}?tab=invalid`)).status, 400);
+  assert.equal((await api("GET", `${ENDPOINT}?dateType=invalid`)).status, 400);
 });
 
 test("today uses IST payment dates and returns cash only with exact full-set totals", async () => {
@@ -78,6 +79,12 @@ test("mixed records expose only the cash portion and cash audit history", async 
   assert.equal(row.remainingAmount, 800);
   assert.equal(row.lastCollectedByName, "Cash collector");
   assert.deepEqual(row.collectionHistory.map((entry) => entry.channel), ["cash"]);
+  assert.equal(row.company, undefined);
+  assert.equal(row.__v, undefined);
+  assert.equal(row.lastCollectedBy, undefined);
+  assert.equal(row.vehicle.vehicleId, undefined);
+  assert.equal(row.collectionHistory[0].collectedBy, undefined);
+  assert.equal(row.collectionHistory[0].adjustment, undefined);
   assert.equal(row.createdBy.fullName.startsWith("Test User"), true);
   assert.equal(row.createdBy.password, undefined);
   assert.equal(row.createdBy.email, undefined);
@@ -152,6 +159,43 @@ test("month and exact date filters use IST boundaries, leap days and the same se
   } finally { await PaymentHistory.deleteMany({ _id: { $in: fixtures.map((row) => row._id) } }); }
 });
 
+test("date type controls cash filtering, grouping and page/summary results", async () => {
+  const ownerId = new ctx.mongoose.Types.ObjectId(owner);
+  const collectedAt = (value) => new Date(`${value}T10:00:00Z`);
+  const rows = [
+    { createdAt: collectedAt("2024-01-02"), paymentDate: collectedAt("2024-02-03"), collectedAt: collectedAt("2024-03-04") },
+    { createdAt: collectedAt("2024-02-03"), paymentDate: collectedAt("2024-01-02"), collectedAt: collectedAt("2024-02-03") },
+  ].map((dates) => ({
+    company: ownerId, bookingId: oid(), createdBy: ownerId, type: "booking", paymentMethod: "cash",
+    amount: 100, collectedAmount: 100, isCollected: true, customer: { fullName: "Cash date basis fixture" },
+    createdAt: dates.createdAt, paymentDate: dates.paymentDate, updatedAt: dates.createdAt,
+    collectionHistory: [{ channel: "cash", amount: 100, collectedBy: ownerId, collectedAt: dates.collectedAt }],
+  }));
+  const inserted = await PaymentHistory.collection.insertMany(rows);
+  try {
+    for (const [dateType, date, expectedIndex] of [
+      ["created", "2024-01-02", 0],
+      ["payment", "2024-02-03", 0],
+      ["collected", "2024-03-04", 0],
+      ["collected", "2024-02-03", 1],
+    ]) {
+      const query = `tab=all&search=Cash%20date%20basis%20fixture&dateType=${dateType}&date=${date}`;
+      const page = await api("GET", `${ENDPOINT}?${query}&section=page&limit=all`);
+      assert.equal(page.status, 200);
+      assert.equal(page.json.total, 1);
+      assert.equal(page.json.dateType, dateType);
+      assert.equal(page.json.groups[0].date, date);
+      assert.equal(page.json.data[0]._id, String(Object.values(inserted.insertedIds)[expectedIndex]));
+      const summary = await api("GET", `${ENDPOINT}?${query}&section=summary`);
+      assert.equal(summary.status, 200);
+      assert.equal(summary.json.total, 1);
+      assert.equal(summary.json.groups[0].date, date);
+    }
+  } finally {
+    await PaymentHistory.deleteMany({ _id: { $in: Object.values(inserted.insertedIds) } });
+  }
+});
+
 test("25, 50, 100 and All return complete stable pages with the same filtered totals", async () => {
   const today = toDayKey(new Date());
   const inserted = await PaymentHistory.insertMany(Array.from({ length: 537 }, (_, index) => ({
@@ -206,14 +250,36 @@ test("page and summary sections return first-page rows independently from totals
     const page = await api("GET", `${url}&limit=25&page=1&section=page`);
     assert.equal(page.status, 200);
     assert.equal(page.json.data.length, 25);
-    assert.equal(page.json.total, null);
+    assert.equal(page.json.total, 60);
+    assert.equal(page.json.pagination.totalPages, 3);
+    assert.equal(page.json.pagination.totalRecords, 60);
     assert.equal(page.json.summary, undefined);
     assert.equal(page.json.hasMore, true);
+
+    const secondPage = await api("GET", `${url}&limit=25&page=2&section=page`);
+    assert.equal(secondPage.status, 200);
+    assert.equal(secondPage.json.data.length, 25);
+    assert.equal(secondPage.json.pagination.page, 2);
+    assert.equal(secondPage.json.pagination.from, 26);
+    assert.equal(secondPage.json.pagination.to, 50);
+    assert.equal(secondPage.json.pagination.hasPreviousPage, true);
+    assert.equal(secondPage.json.pagination.hasNextPage, true);
+    assert.equal(new Set([...page.json.data, ...secondPage.json.data].map((row) => row._id)).size, 50);
+
+    const clamped = await api("GET", `${url}&limit=25&page=999&section=page`);
+    assert.equal(clamped.status, 200);
+    assert.equal(clamped.json.pagination.page, 3);
+    assert.equal(clamped.json.data.length, 10);
+    assert.equal(clamped.json.pagination.from, 51);
+    assert.equal(clamped.json.pagination.to, 60);
 
     const summary = await api("GET", `${url}&section=summary`);
     assert.equal(summary.status, 200);
     assert.equal(summary.json.total, 60);
     assert.equal(summary.json.summary.amount, 600);
+    const completeView = await api("GET", `${url}&limit=25`);
+    assert.deepEqual(summary.json.summary, completeView.json.summary);
+    assert.deepEqual(summary.json.stats, completeView.json.stats);
     assert.equal(summary.json.data, undefined);
     assert.ok(summary.json.groups.every((group) => group.payments === undefined));
   } finally { await PaymentHistory.deleteMany({ _id: { $in: inserted.map((row) => row._id) } }); }
