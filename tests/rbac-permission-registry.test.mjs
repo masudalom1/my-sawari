@@ -15,7 +15,7 @@ const routeDirectory = path.resolve(
   "../src/routes",
 );
 
-test("central registry defines unique stable permissions for implemented actions", () => {
+test("central registry defines unique stable permission keys", () => {
   assert.deepEqual(RBAC_PERMISSION_KEYS, [
     "page.dashboard.view",
     "page.dashboard.create",
@@ -33,6 +33,7 @@ test("central registry defines unique stable permissions for implemented actions
     "page.pendingToCollect.collect",
     "page.verifyUpiCollections.view",
     "page.verifyUpiCollections.verify",
+    "page.appUsers.view",
     "page.settings.view",
     "page.settings.create",
     "page.settings.edit",
@@ -98,5 +99,25 @@ test("Coming Soon modules have no route or configurable permissions", () => {
   );
   assert.ok(
     comingSoon.every(({ href, actions }) => href === null && actions.length === 0),
+  );
+});
+
+test("App Users exposes only a grantable view permission without adding navigation", () => {
+  const appUsers = PERMISSION_MODULES.find(({ key }) => key === "appUsers");
+  assert.deepEqual(
+    {
+      label: appUsers.label,
+      href: appUsers.href,
+      navigation: appUsers.navigation,
+      actions: appUsers.actions,
+      permission: PERMISSIONS.appUsers.view,
+    },
+    {
+      label: "App Users",
+      href: "/app-users",
+      navigation: true,
+      actions: ["view"],
+      permission: "page.appUsers.view",
+    },
   );
 });

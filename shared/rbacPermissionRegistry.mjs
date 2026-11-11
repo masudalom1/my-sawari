@@ -65,6 +65,14 @@ export const PERMISSION_MODULES = Object.freeze([
     status: "coming-soon",
   },
   {
+    key: "appUsers",
+    label: "App Users",
+    href: "/app-users",
+    group: "Fleet operations",
+    navigation: true,
+    actions: ["view"],
+  },
+  {
     key: "maintenance",
     label: "Maintenance & Service",
     href: null,

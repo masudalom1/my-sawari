@@ -11,6 +11,8 @@ import {
   createLeadBooking,
   getBookingDetails,
   getBookingsDashboard,
+  getAppInstalls,
+  getAppUserDetail,
   getLeadBookingDetails,
   getLeadBookings,
   getLeadById,
@@ -28,6 +30,8 @@ router.get("/dashboard", protect, requirePermission(PERMISSIONS.bookings.view), 
 router.get("/booking", protect, requirePermission(PERMISSIONS.bookings.view), getBookingsDashboard);
 router.get("/", protect, requirePermission(PERMISSIONS.bookings.view), getLeads);
 router.post("/", protect, requirePermission(PERMISSIONS.bookings.create), createLead);
+router.get("/app-installs", protect, requirePermission(PERMISSIONS.appUsers.view), getAppInstalls);
+router.get("/app-installs/:id", protect, requirePermission(PERMISSIONS.appUsers.view), getAppUserDetail);
 router.get("/:id", protect, requirePermission(PERMISSIONS.bookings.view), getLeadById);
 router.put("/:id", protect, requirePermission(PERMISSIONS.bookings.edit), updateLead);
 

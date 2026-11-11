@@ -9,10 +9,15 @@ import { validateNewBookingFields } from "../../shared/newBookingValidation.mjs"
 import Lead from "../models/lead.model.js";
 import LeadHistory from "../models/leadHistory.model.js";
 import Booking from "../models/booking.model.js";
+import Customer from "../models/customer.model.js";
 import Vehicle from "../models/vehicle.model.js";
 import Maintenance from "../models/maintenance.model.js";
 import PaymentHistory,{toBookingMonth} from "../models/paymentHistory.model.js";
 import { sendBookingCreatedMessage } from "../services/wati.service.js";
+import { resolveRequestPermissions } from "../services/permissionResolver.js";
+import { PERMISSIONS } from "../config/rbacPermissions.js";
+import CustomerActivity from "../models/customerActivity.model.js";
+import { normalizeMobileNumber } from "../services/membershipLookup.js";
 
 const dashboardCache = new Map();
 const CACHE_TTL_MS = 8000;
@@ -1229,6 +1234,720 @@ export const getLeadHistory = async (req, res) => {
     });
   }
 };
+
+const toAppUserProfile = (customer) => ({
+  id: String(customer._id),
+  name: customer.customerName,
+  mobile: customer.mobileNumber,
+  status: customer.status,
+  joinedAt: customer.createdAt,
+});
+
+const APP_USER_ACTIVITY_LIMIT = 100;
+const APP_USER_BOOKING_LIMIT = 60;
+const ONGOING_BOOKING_STATUSES = [
+  "confirmed",
+  "handover_pending",
+  "vehicle_handover",
+  "active",
+];
+const QUIET_CUSTOMER_ACTIONS = new Set([
+  "view_screen",
+  "open_location_sheet",
+  "open_dates_sheet",
+  "view_profile",
+  "change_vehicle_type",
+  "change_driver_mode",
+]);
+const CUSTOMER_ACTIVITY_LABELS = {
+  APP_OPENED: () => "Opened MySawari app",
+  AUTH_LOGIN: () => "Signed in to account",
+  AUTH_LOGOUT: () => "Logged out of account",
+  view_car: (details) =>
+    `Viewed ${details.carName || "a car"}${details.pricePerDay ? ` (₹${details.pricePerDay}/day)` : ""}`,
+  click_car: (details) => `Selected ${details.carName || "a car"}`,
+  trip_search: (details) =>
+    `Searched cars${details.destination ? ` for ${details.destination}` : ""}`,
+  search_query: (details) => `Searched "${details.query || ""}"`,
+  select_dates: (details) =>
+    `Selected dates: ${details.startDate || ""}${details.endDate ? ` → ${details.endDate}` : ""}`,
+  select_location: (details) =>
+    `Selected location: ${details.locationName || details.address || ""}`,
+  view_destination: (details) =>
+    `Explored destination: ${details.destination || ""}`,
+  apply_filter: (details) =>
+    `Applied car filters${details.category ? ` (${details.category})` : ""}`,
+  initiate_checkout: (details) =>
+    `Initiated checkout${details.carName ? ` for ${details.carName}` : ""}${details.totalAmount ? ` · ₹${details.totalAmount}` : ""}`,
+  payment_started: (details) =>
+    `Initiated payment${details.amount ? ` · ₹${details.amount}` : ""}`,
+  payment_success: (details) =>
+    `Payment successful${details.amount ? ` · ₹${details.amount}` : ""}`,
+  payment_failed: (details) =>
+    `Payment failed${details.amount ? ` (₹${details.amount})` : ""}${details.reason ? ` · ${String(details.reason).slice(0, 70)}` : ""}`,
+  payment_unconfirmed: (details) =>
+    `Payment unconfirmed${details.amount ? ` · ₹${details.amount}` : ""}`,
+  contact_support: () => "Contacted support team",
+};
+
+function isMongoAuthorizationError(error) {
+  return error?.code === 13 ||
+    error?.code === 18 ||
+    ["Unauthorized", "AuthenticationFailed"].includes(error?.codeName);
+}
+
+function customerMobileForms(mobile) {
+  const normalized = normalizeMobileNumber(mobile);
+  if (!normalized) return { normalized: "", forms: [] };
+  const forms = [...new Set([
+    mobile,
+    normalized,
+    `+91${normalized}`,
+    `91${normalized}`,
+    `+91 ${normalized}`,
+    `${normalized.slice(0, 5)} ${normalized.slice(5)}`,
+  ].filter((value) => typeof value === "string" && value))];
+  return { normalized, forms };
+}
+
+function resolveBookingCompanyId(user) {
+  const scope = user?.company?._id ||
+    user?.company ||
+    user?.createdBy?._id ||
+    user?.createdBy ||
+    user?._id;
+  return mongoose.isObjectIdOrHexString(scope)
+    ? new mongoose.Types.ObjectId(scope)
+    : null;
+}
+
+async function hasUniqueCustomerMobile(customer, mobileForms) {
+  if (mobileForms.length === 0) return false;
+  const matches = await Customer.find({
+    mobileNumber: { $in: mobileForms },
+  })
+    .select("_id")
+    .limit(2)
+    .lean();
+  return matches.length === 1 &&
+    String(matches[0]._id) === String(customer._id);
+}
+
+function formatCustomerActivity(event) {
+  const details = event.details && typeof event.details === "object"
+    ? event.details
+    : {};
+  const makeLabel = CUSTOMER_ACTIVITY_LABELS[event.action];
+  const label = makeLabel
+    ? makeLabel(details)
+    : String(event.action || "Customer activity").replace(/_/g, " ");
+  return {
+    id: String(event._id),
+    action: event.action,
+    label,
+    at: event.createdAt,
+    count: 1,
+    screen: event.screen || "",
+  };
+}
+
+function buildCustomerActivity(events) {
+  const timeline = [];
+  for (const event of events) {
+    if (QUIET_CUSTOMER_ACTIONS.has(event.action)) continue;
+    const item = formatCustomerActivity(event);
+    const previous = timeline[timeline.length - 1];
+    const timeDelta = previous
+      ? Math.abs(new Date(previous.at).getTime() - new Date(item.at).getTime())
+      : Number.POSITIVE_INFINITY;
+    if (
+      previous &&
+      previous.action === item.action &&
+      previous.label === item.label &&
+      timeDelta < 2 * 60 * 1000
+    ) {
+      previous.count += 1;
+    } else {
+      timeline.push(item);
+    }
+  }
+  return timeline.slice(0, APP_USER_ACTIVITY_LIMIT).map((item) => ({
+    ...item,
+    label: item.count > 1 ? `${item.label} (${item.count} times)` : item.label,
+  }));
+}
+
+async function loadAppUserActivity(customer, mobileForms, mobileIsUnambiguous) {
+  const database = CustomerActivity.db.db;
+  let collections;
+  try {
+    collections = await database
+      .listCollections({ name: CustomerActivity.collection.name }, { nameOnly: true })
+      .toArray();
+  } catch (error) {
+    if (isMongoAuthorizationError(error)) {
+      return {
+        availability: { status: "denied", reason: "customer_activity_read_denied" },
+        latestEvent: null,
+        viewedCars: null,
+        totalCarViews: null,
+        timeline: null,
+        _events: [],
+      };
+    }
+    throw error;
+  }
+  if (collections.length === 0) {
+    return {
+      availability: { status: "unavailable", reason: "customer_activity_collection_missing" },
+      latestEvent: null,
+      viewedCars: null,
+      totalCarViews: null,
+      timeline: null,
+      _events: [],
+    };
+  }
+
+  const identityFilters = [{ customerId: customer._id }];
+  if (mobileIsUnambiguous && mobileForms.length > 0) {
+    identityFilters.push({
+      customerId: null,
+      mobileNumber: { $in: mobileForms },
+    });
+  }
+  const identityFilter = { $or: identityFilters };
+  try {
+    const [events, carViewCounts] = await Promise.all([
+      CustomerActivity.find({
+        ...identityFilter,
+        action: { $not: /^sent_/ },
+      })
+        .sort({ createdAt: -1, _id: -1 })
+        .limit(APP_USER_ACTIVITY_LIMIT)
+        .select("action screen details createdAt")
+        .lean(),
+      CustomerActivity.aggregate([
+        {
+          $match: {
+            ...identityFilter,
+            action: "view_car",
+            "details.carName": { $type: "string", $ne: "" },
+          },
+        },
+        { $group: { _id: "$details.carName", views: { $sum: 1 } } },
+        { $sort: { views: -1, _id: 1 } },
+        {
+          $group: {
+            _id: null,
+            totalViews: { $sum: "$views" },
+            cars: { $push: { name: "$_id", views: "$views" } },
+          },
+        },
+        {
+          $project: {
+            _id: 0,
+            totalViews: 1,
+            cars: { $slice: ["$cars", 5] },
+          },
+        },
+      ]),
+    ]);
+    const carViews = carViewCounts[0] || { totalViews: 0, cars: [] };
+    const isEmpty = events.length === 0 && carViews.totalViews === 0;
+    return {
+      availability: { status: isEmpty ? "empty" : "available", reason: null },
+      latestEvent: events[0]
+        ? {
+            action: events[0].action,
+            label: formatCustomerActivity(events[0]).label,
+            at: events[0].createdAt,
+          }
+        : null,
+      viewedCars: carViews.cars,
+      totalCarViews: carViews.totalViews,
+      timeline: buildCustomerActivity(events),
+      _events: events,
+    };
+  } catch (error) {
+    if (isMongoAuthorizationError(error)) {
+      return {
+        availability: { status: "denied", reason: "customer_activity_read_denied" },
+        latestEvent: null,
+        viewedCars: null,
+        totalCarViews: null,
+        timeline: null,
+        _events: [],
+      };
+    }
+    throw error;
+  }
+}
+
+function toAppUserBookingRow(booking) {
+  return {
+    id: String(booking._id),
+    bookingId: booking.bookingCode || "",
+    vehicle: booking.vehicleName || "",
+    vehicleNumber: booking.vehicleNumber || "",
+    destination: booking.destination || "",
+    tripType: booking.tripType || "",
+    days: Number(booking.totalDays) || 0,
+    pickupTime: booking.pickupTime || "",
+    dropTime: booking.dropTime || "",
+    coupon: booking.couponCode || "",
+    from: booking.fromDate || null,
+    to: booking.toDate || null,
+    status: booking.status || "",
+    pickupLocation: booking.pickupLocation || "",
+    dropLocation: booking.dropLocation || "",
+    amount: Number(booking.payment?.totalAmount) || 0,
+    paid: Number(booking.payment?.bookingAmountPaid) || 0,
+    balance: Number(booking.payment?.balanceAmount) || 0,
+    createdAt: booking.createdAt || null,
+  };
+}
+
+async function loadAppUserBookings(
+  customer,
+  mobileForms,
+  mobileIsUnambiguous,
+  canViewBookings,
+  user,
+) {
+  if (!canViewBookings) {
+    return {
+      availability: { status: "denied", reason: "booking_permission_required" },
+      trips: null,
+      completed: null,
+      spent: null,
+      spentAvailability: { status: "denied", reason: "booking_permission_required" },
+      counts: null,
+      history: null,
+      latestBooking: null,
+      latestCompletedBooking: null,
+    };
+  }
+
+  const companyId = resolveBookingCompanyId(user);
+  if (!companyId) {
+    return {
+      availability: { status: "unavailable", reason: "booking_company_scope_unavailable" },
+      trips: null,
+      completed: null,
+      spent: null,
+      spentAvailability: { status: "unavailable", reason: "booking_company_scope_unavailable" },
+      counts: null,
+      history: null,
+      latestBooking: null,
+      latestCompletedBooking: null,
+    };
+  }
+
+  const identityConditions = [
+    { customerId: customer._id },
+    { customer: customer._id },
+  ];
+  if (mobileIsUnambiguous) {
+    identityConditions.push({
+      customerId: null,
+      customer: null,
+      mobileNumber: { $in: mobileForms },
+    });
+  }
+  const filter = {
+    company: companyId,
+    isDeleted: { $ne: true },
+    $or: identityConditions,
+  };
+  const projection = {
+    bookingCode: 1,
+    customerId: 1,
+    customer: 1,
+    vehicleName: 1,
+    vehicleNumber: 1,
+    destination: 1,
+    tripType: 1,
+    totalDays: 1,
+    pickupTime: 1,
+    dropTime: 1,
+    couponCode: 1,
+    fromDate: 1,
+    toDate: 1,
+    status: 1,
+    pickupLocation: 1,
+    dropLocation: 1,
+    payment: 1,
+    createdAt: 1,
+  };
+  try {
+    const [rows, latestBooking, latestCompletedBooking, [totals = {
+      all: 0,
+      completed: 0,
+      ongoing: 0,
+      currentTrip: 0,
+      cancelled: 0,
+    }]] =
+      await Promise.all([
+        Booking.collection
+          .find(filter, { projection })
+          .sort({ createdAt: -1, _id: -1 })
+          .limit(APP_USER_BOOKING_LIMIT)
+          .toArray(),
+        Booking.collection
+          .find({
+            ...filter,
+            status: { $nin: ["cancelled"] },
+          }, { projection: { createdAt: 1 } })
+          .sort({ createdAt: -1, _id: -1 })
+          .limit(1)
+          .next(),
+        Booking.collection
+          .find({ ...filter, status: "completed" }, { projection: { createdAt: 1 } })
+          .sort({ createdAt: -1, _id: -1 })
+          .limit(1)
+          .next(),
+        Booking.collection.aggregate([
+          { $match: filter },
+          {
+            $group: {
+              _id: null,
+              all: { $sum: 1 },
+              completed: {
+                $sum: { $cond: [{ $eq: ["$status", "completed"] }, 1, 0] },
+              },
+              ongoing: {
+                $sum: {
+                  $cond: [{ $in: ["$status", ONGOING_BOOKING_STATUSES] }, 1, 0],
+                },
+              },
+              currentTrip: {
+                $sum: {
+                  $cond: [
+                    { $in: ["$status", ["active", "vehicle_handover"]] },
+                    1,
+                    0,
+                  ],
+                },
+              },
+              cancelled: {
+                $sum: { $cond: [{ $eq: ["$status", "cancelled"] }, 1, 0] },
+              },
+            },
+          },
+          { $project: { _id: 0 } },
+        ]).toArray(),
+      ]);
+    const historyIsEmpty = totals.all === 0;
+    const spent = historyIsEmpty ? 0 : null;
+    const spentAvailability = historyIsEmpty
+      ? { status: "empty", reason: null }
+      : { status: "unavailable", reason: "booking_spend_source_unverified" };
+    if (!mobileIsUnambiguous && rows.length === 0) {
+      return {
+        availability: {
+          status: "unavailable",
+          reason: mobileForms.length > 0
+            ? "customer_mobile_association_ambiguous"
+            : "customer_mobile_unavailable",
+        },
+        trips: null,
+        completed: null,
+        spent: null,
+        spentAvailability: { status: "unavailable", reason: mobileForms.length > 0
+          ? "customer_mobile_association_ambiguous"
+          : "customer_mobile_unavailable" },
+        counts: null,
+        history: null,
+        latestBooking: null,
+        latestCompletedBooking: null,
+      };
+    }
+    return {
+      availability: {
+        status: historyIsEmpty ? "empty" : "available",
+        reason: null,
+        scope: "caller_company",
+      },
+      trips: totals.all - totals.cancelled,
+      completed: totals.completed,
+      spent,
+      currentTripCount: totals.currentTrip,
+      spentAvailability,
+      counts: {
+        all: totals.all,
+        completed: totals.completed,
+        ongoing: totals.ongoing,
+        cancelled: totals.cancelled,
+      },
+      history: {
+        data: rows.map(toAppUserBookingRow),
+        limit: APP_USER_BOOKING_LIMIT,
+        hasMore: totals.all > rows.length,
+      },
+      latestBooking,
+      latestCompletedBooking,
+    };
+  } catch (error) {
+    if (isMongoAuthorizationError(error)) {
+      return {
+        availability: { status: "denied", reason: "booking_read_denied" },
+        trips: null,
+        completed: null,
+        spent: null,
+        spentAvailability: { status: "denied", reason: "booking_read_denied" },
+        counts: null,
+        history: null,
+        latestBooking: null,
+        latestCompletedBooking: null,
+      };
+    }
+    throw error;
+  }
+}
+
+function buildAppUserSuggestions(customer, bookings, activity) {
+  if (!["available", "empty"].includes(bookings.availability.status)) {
+    return {
+      segment: { availability: { status: "unavailable", reason: "booking_signals_unavailable" }, value: null },
+      recommendation: { availability: { status: "unavailable", reason: "booking_signals_unavailable" }, text: null },
+      messageDraft: { availability: { status: "unavailable", reason: "booking_signals_unavailable" }, text: null },
+    };
+  }
+
+  const now = Date.now();
+  const daysSince = (date) => Math.max(
+    0,
+    Math.floor((now - new Date(date).getTime()) / 86400000),
+  );
+  const firstName = customer.customerName && customer.customerName !== "New Customer"
+    ? customer.customerName.trim().split(/\s+/)[0]
+    : "";
+  const greeting = firstName ? `Hi ${firstName}` : "Hi";
+  const completedTripCount = bookings.completed || 0;
+  const nonCancelledTripCount = bookings.trips || 0;
+  const latestCheckout = activity._events?.find((event) =>
+    ["initiate_checkout", "payment_started", "payment_failed"].includes(event.action),
+  );
+  const latestBookingAt = bookings.latestBooking?.createdAt;
+  const checkoutDays = latestCheckout ? daysSince(latestCheckout.createdAt) : null;
+  const latestCarName = activity.viewedCars?.[0]?.name;
+  let segment;
+  let recommendation;
+  let messageDraft;
+
+  if (
+    (bookings.spent !== null && bookings.spent >= 15000) ||
+    nonCancelledTripCount >= 3
+  ) {
+    segment = { key: "vip", label: "VIP Customer", tone: "green" };
+    recommendation = `High-value customer (${completedTripCount} completed trips). Prioritize premium service.`;
+    messageDraft = `${greeting}, thank you for choosing MySawari as your preferred car rental! Message us directly whenever you need a car ready.`;
+  } else if (bookings.currentTripCount > 0) {
+    segment = { key: "on_trip", label: "On a trip now", tone: "green" };
+    recommendation = "Check in during the trip and ask if everything is going well.";
+    messageDraft = `${greeting}, this is MySawari. Hope your trip is going well! Call us anytime if you need help.`;
+  } else if (
+    latestCheckout &&
+    checkoutDays <= 7 &&
+    (!latestBookingAt || new Date(latestCheckout.createdAt) > new Date(latestBookingAt))
+  ) {
+    segment = { key: "almost", label: "Almost booked", tone: "red" };
+    recommendation = `Checkout activity was recorded ${checkoutDays} day(s) ago. Offer help with the booking.`;
+    messageDraft = `${greeting}, this is MySawari. We saw you were about to book${latestCarName ? ` ${latestCarName}` : ""}. Need any help?`;
+  } else if (nonCancelledTripCount === 0 && bookings.counts?.all === 0) {
+    segment = { key: "no_booking", label: "No bookings in this company", tone: "amber" };
+    recommendation = `No bookings were found in your company's booking scope. Offer help choosing a car.`;
+    messageDraft = `${greeting}, welcome to MySawari! Tell us your dates and where you want to go, and we will help find a car.`;
+  } else if (
+    bookings.latestBooking?.createdAt &&
+    daysSince(bookings.latestBooking.createdAt) > 45
+  ) {
+    segment = { key: "lapsed", label: "Gone quiet", tone: "blue" };
+    recommendation = `Last booking in your company's scope was ${daysSince(bookings.latestBooking.createdAt)} days ago. Consider a win-back offer.`;
+    messageDraft = `${greeting}, we miss you at MySawari! Planning a trip soon? Message us to discuss a price for ${bookings.history?.data[0]?.vehicle || "a car"}.`;
+  } else if (nonCancelledTripCount > 0) {
+    segment = { key: "loyal", label: "Recent customer", tone: "green" };
+    recommendation = "Recently booked. Ask for a review and mention referral rewards.";
+    messageDraft = `${greeting}, thanks for travelling with MySawari!`;
+  } else {
+    const joinedDays = customer.createdAt ? daysSince(customer.createdAt) : null;
+    segment = { key: "no_booking", label: "No bookings in this company", tone: "amber" };
+    recommendation = joinedDays === null
+      ? "No bookings were found in your company's booking scope. Offer help choosing a car."
+      : `Joined ${joinedDays} day(s) ago; no bookings were found in your company's scope. Offer help choosing a car.`;
+    messageDraft = `${greeting}, welcome to MySawari! Tell us your dates and where you want to go, and we will help find a car.`;
+  }
+
+  return {
+    segment: { availability: { status: "available", reason: null }, value: segment },
+    recommendation: { availability: { status: "available", reason: null }, text: recommendation },
+    messageDraft: { availability: { status: "available", reason: null }, text: messageDraft },
+  };
+}
+
+export const getAppUserDetail = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    if (!mongoose.isObjectIdOrHexString(id)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid customer id",
+      });
+    }
+
+    const customer = await Customer.findById(id)
+      .select({
+        customerName: 1,
+        mobileNumber: 1,
+        status: 1,
+        createdAt: 1,
+        email: 1,
+        walletBalance: 1,
+      })
+      .lean();
+    if (!customer) {
+      return res.status(404).json({
+        success: false,
+        message: "Customer not found",
+      });
+    }
+
+    const permissions = await resolveRequestPermissions(req);
+    const canViewBookings =
+      permissions.effectivePermissions[PERMISSIONS.bookings.view] === true;
+    const { forms: mobileForms } = customerMobileForms(customer.mobileNumber);
+    const mobileIsUnambiguous = await hasUniqueCustomerMobile(customer, mobileForms);
+    const [activity, bookings] = await Promise.all([
+      loadAppUserActivity(customer, mobileForms, mobileIsUnambiguous),
+      loadAppUserBookings(
+        customer,
+        mobileForms,
+        mobileIsUnambiguous,
+        canViewBookings,
+        req.user,
+      ),
+    ]);
+    const suggestions = buildAppUserSuggestions(customer, bookings, activity);
+    const lastActivityAt = activity._events[0]?.createdAt || null;
+    const bookingLastActiveAt = bookings.latestBooking?.createdAt || null;
+    const lastActiveAt = [lastActivityAt, bookingLastActiveAt]
+      .filter(Boolean)
+      .sort((left, right) => new Date(right).getTime() - new Date(left).getTime())[0] || null;
+    const email = typeof customer.email === "string" && customer.email.trim()
+      ? customer.email
+      : null;
+    const walletBalance = typeof customer.walletBalance === "number" &&
+      Number.isFinite(customer.walletBalance)
+      ? customer.walletBalance
+      : null;
+    const unavailableProfileFields = [
+      ...(email === null ? ["email"] : []),
+      ...(walletBalance === null ? ["walletBalance"] : []),
+    ];
+    const lastActiveAvailability = lastActiveAt
+      ? { status: "available", reason: null }
+      : activity.availability.status === "denied" ||
+          activity.availability.status === "unavailable"
+        ? activity.availability
+        : bookings.availability.status === "denied" ||
+            bookings.availability.status === "unavailable"
+          ? bookings.availability
+          : { status: "empty", reason: null };
+    const activityResponse = {
+      availability: activity.availability,
+      latestEvent: activity.latestEvent,
+      totalCarViews: activity.totalCarViews,
+      timeline: activity.timeline,
+    };
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        ...toAppUserProfile(customer),
+        email,
+        walletBalance,
+        lastActiveAt,
+        bookings: {
+          availability: bookings.availability,
+          trips: bookings.trips,
+          completed: bookings.completed,
+          spent: bookings.spent,
+          spentAvailability: bookings.spentAvailability,
+          counts: bookings.counts,
+          history: bookings.history,
+          scope: bookings.availability.scope || null,
+        },
+        activity: activityResponse,
+        viewedCars: activity.viewedCars,
+        segment: suggestions.segment,
+        recommendation: suggestions.recommendation,
+        messageDraft: suggestions.messageDraft,
+        sectionAvailability: {
+          profile: {
+            status: unavailableProfileFields.length === 0 ? "available" : "partial",
+            unavailableFields: unavailableProfileFields,
+          },
+          lastActiveAt: lastActiveAvailability,
+          bookings: bookings.availability,
+          spent: bookings.spentAvailability,
+          activity: activity.availability,
+          viewedCars: activity.availability.status === "available" ||
+              activity.availability.status === "empty"
+            ? {
+                status: activity.totalCarViews === 0 ? "empty" : "available",
+                reason: null,
+              }
+            : activity.availability,
+          segment: suggestions.segment.availability,
+          recommendation: suggestions.recommendation.availability,
+          messageDraft: suggestions.messageDraft.availability,
+        },
+      },
+    });
+  } catch (error) {
+    return next(error);
+  }
+};
+
+export const getAppInstalls = async (req, res, next) => {
+  try {
+    const page = Math.max(Number.parseInt(req.query.page, 10) || 1, 1);
+    const limit = Math.min(
+      Math.max(Number.parseInt(req.query.limit, 10) || 20, 1),
+      50,
+    );
+    const skip = (page - 1) * limit;
+    const filter = {};
+    const query = typeof req.query.q === "string" ? req.query.q.trim() : "";
+
+    if (query) {
+      const regex = new RegExp(escapeRegex(query), "i");
+      filter.$or = [{ customerName: regex }, { mobileNumber: regex }];
+    }
+
+    const [customers, total] = await Promise.all([
+      Customer.find(filter)
+        .select({ customerName: 1, mobileNumber: 1, status: 1, createdAt: 1 })
+        .sort({ createdAt: -1, _id: -1 })
+        .skip(skip)
+        .limit(limit)
+        .lean(),
+      Customer.countDocuments(filter),
+    ]);
+    const data = customers.map(toAppUserProfile);
+
+    res.status(200).json({
+      success: true,
+      page,
+      total,
+      hasMore: skip + data.length < total,
+      data,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
 //v1.0 [not use]
 export const getBookingsDashboards = async (req, res) => {
   try {
