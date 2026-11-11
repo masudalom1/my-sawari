@@ -53,7 +53,32 @@ function handoverFields(handover) {
     // When the vehicle actually came back
     actualReturnDateTime: handover?.returnDetails?.returnedAt || null,
     handoverStatus: handover?.handoverStatus || null,
+    vehicleHistory: exchangeHistory(handover),
   };
+}
+
+// ADDED: a rental's vehicle exchanges in the shape the colour sheet reads
+// (same shape as Booking.vehicleHistory). Photos are left out.
+// Vehicle A was used until changedAt, vehicle B from changedAt.
+function exchangeHistory(handover) {
+  if (!Array.isArray(handover?.vehicleHistory)) return [];
+  return handover.vehicleHistory
+    .filter((h) => h?.newVehicle?.vehicleId && h?.changedAt)
+    .map((h) => ({
+      fromVehicle: {
+        vehicleId: h.oldVehicle?.vehicleId || null,
+        vehicleName: h.oldVehicle?.vehicleName || "",
+        vehicleNumber: h.oldVehicle?.vehicleNumber || "",
+      },
+      toVehicle: {
+        vehicleId: h.newVehicle.vehicleId,
+        vehicleName: h.newVehicle.vehicleName || "",
+        vehicleNumber: h.newVehicle.vehicleNumber || "",
+      },
+      changedAt: h.changedAt,
+      note: h.reason || "",
+    }))
+    .sort((a, b) => new Date(a.changedAt) - new Date(b.changedAt));
 }
 
 export const getVehiclesForImport = async (req, res) => {
@@ -113,25 +138,29 @@ const RECENT_CHANGE_MS = 2 * TIMELINE_DAY_MS; // recently returned / completed /
 const LIVE_LOOKBACK_MS = 30 * TIMELINE_DAY_MS; // not-handed-over bookings this old still count
 const RANGE_PAD_MS = 2 * TIMELINE_DAY_MS;
 const MAX_RANGE_MS = 400 * TIMELINE_DAY_MS;
- 
+
 const BOOKING_FIELDS =
   "_id bookingCode customerName mobileNumber destination fromDate toDate " +
   "pickupTime dropTime flexibleTime originalEndDate totalDays vehicleId vehicleName vehicleNumber status " +
   "pickup.location pickup.landmark";
- 
+
 const HANDOVER_FIELDS =
   "_id bookingId customer.fullName customer.mobileNumber customer.destination " +
   "vehicle.vehicleId vehicle.vehicleName vehicle.vehicleNumber " +
   "trip.pickupDateTime trip.dropDateTime trip.numberOfDays " +
-  "handoverStatus returnDetails.returnedAt createdAt";
+  "handoverStatus returnDetails.returnedAt createdAt" +
+  // ADDED: vehicle exchanges (for the colour sheet split)
+  " vehicleHistory.oldVehicle vehicleHistory.newVehicle vehicleHistory.changedAt vehicleHistory.reason";
 
 // A booking's handover only feeds handoverFields() + resolveStatus()
 const BOOKING_HANDOVER_FIELDS =
-  "_id bookingId trip.dropDateTime handoverStatus returnDetails.returnedAt createdAt";
+  "_id bookingId trip.dropDateTime handoverStatus returnDetails.returnedAt createdAt" +
+  // ADDED: vehicle exchanges (for the colour sheet split)
+  " vehicleHistory.oldVehicle vehicleHistory.newVehicle vehicleHistory.changedAt vehicleHistory.reason";
 
 // ---------- Same rules as dashboard.controller.js ----------
 
- 
+
 function formatBooking(booking, handover) {
   return {
     _id: booking._id,
@@ -155,7 +184,7 @@ function formatBooking(booking, handover) {
     ...handoverFields(handover),
   };
 }
- 
+
 function formatWalkIn(h) {
   return {
     _id: h._id,
@@ -177,7 +206,7 @@ function formatWalkIn(h) {
     ...handoverFields(h),
   };
 }
- 
+
 // Latest non-cancelled handover per booking (same as /bookings/import)
 async function latestHandoverByBooking(ids) {
   const latest = new Map();
@@ -252,7 +281,7 @@ async function loadLiveBookings(now) {
     })
       .select("_id")
       .lean(),
- 
+
     // Recently cancelled / deleted walk-ins
     Handover.find({
       bookingId: null,
@@ -278,10 +307,10 @@ async function loadLiveBookings(now) {
       const ids = handovers.filter((h) => h.bookingId).map((h) => h.bookingId);
       return ids.length
         ? loadBookingsWithHandovers({
-            ...liveBase,
-            _id: { $in: ids },
-            $nor: liveRules,
-          })
+          ...liveBase,
+          _id: { $in: ids },
+          $nor: liveRules,
+        })
         : [[], new Map()];
     }),
   ]);
@@ -299,12 +328,12 @@ async function loadLiveBookings(now) {
     ),
   };
 }
- 
+
 // ---------- scope=range ----------
 async function loadRangeBookings(from, to) {
   const lo = new Date(from.getTime() - RANGE_PAD_MS);
   const hi = new Date(to.getTime() + RANGE_PAD_MS);
- 
+
   const [[bookings, latest], walkIns] = await Promise.all([
     loadBookingsWithHandovers({
       isDeleted: false,
@@ -340,24 +369,24 @@ async function loadRangeBookings(from, to) {
 
   return { bookings: formatTimeline(bookings, walkIns, latest), removedIds: [] };
 }
- 
+
 function parseDateParam(value) {
   if (!value) return null;
   const d = new Date(String(value));
   return Number.isNaN(d.getTime()) ? null : d;
 }
- 
+
 export const getTimelineBookings = async (req, res) => {
   try {
     const now = new Date();
     const scope = req.query.scope === "range" ? "range" : "live";
- 
+
     let result;
- 
+
     if (scope === "range") {
       const from = parseDateParam(req.query.from);
       const to = parseDateParam(req.query.to);
- 
+
       if (!from || !to || to <= from) {
         return res.status(400).json({
           success: false,
@@ -370,12 +399,12 @@ export const getTimelineBookings = async (req, res) => {
           message: "range is too large (max ~13 months).",
         });
       }
- 
+
       result = await loadRangeBookings(from, to);
     } else {
       result = await loadLiveBookings(now);
     }
- 
+
     return res.status(200).json({
       success: true,
       scope,
@@ -393,7 +422,7 @@ export const getTimelineBookings = async (req, res) => {
     });
   }
 };
- 
+
 // Same records as getMaintenances, without populate (timeline needs ids only)
 export const getTimelineMaintenances = async (req, res) => {
   try {
@@ -401,7 +430,7 @@ export const getTimelineMaintenances = async (req, res) => {
       .select("_id vehicle startDate endDate status")
       .sort({ startDate: 1 })
       .lean();
- 
+
     return res.status(200).json({
       success: true,
       count: maintenances.length,
@@ -448,7 +477,10 @@ export const getBookingsForImport = async (req, res) => {
           bookingId: { $ne: null },
         },
         {
-          select: "_id bookingId handoverStatus returnDetails.returnedAt trip.dropDateTime createdAt",
+          select:
+            "_id bookingId handoverStatus returnDetails.returnedAt trip.dropDateTime createdAt" +
+            // ADDED: vehicle exchanges (for the colour sheet split)
+            " vehicleHistory.oldVehicle vehicleHistory.newVehicle vehicleHistory.changedAt vehicleHistory.reason",
           sort: { createdAt: -1 }, // latest handover first
         },
       ),
@@ -456,7 +488,10 @@ export const getBookingsForImport = async (req, res) => {
         Handover,
         { isDeleted: false, handoverStatus: { $ne: "cancelled" }, bookingId: null },
         {
-          select: "_id bookingId customer vehicle trip payment handoverStatus returnDetails createdAt",
+          select:
+            "_id bookingId customer vehicle trip payment handoverStatus returnDetails createdAt" +
+            // ADDED: vehicle exchanges (for the colour sheet split)
+            " vehicleHistory.oldVehicle vehicleHistory.newVehicle vehicleHistory.changedAt vehicleHistory.reason",
           sort: { createdAt: -1 },
         },
       ),
@@ -744,7 +779,7 @@ export const getPaymentsForImport = async (req, res) => {
     if (unlinkedCount > 0) {
       console.warn(
         `getPaymentsForImport: ${unlinkedCount} payment(s) found only via vehicle snapshot — ` +
-          "their ids are missing from vehicle.payments. Push the id when creating these payments.",
+        "their ids are missing from vehicle.payments. Push the id when creating these payments.",
       );
     }
 
@@ -1609,8 +1644,8 @@ function prCreatedPeriod({ range, year }, now) {
     granularity === "hour"
       ? Array.from({ length: p.hour + 1 }, (_, h) => `${todayKey}T${prPad(h)}`)
       : Array.from({ length: dayCount }, (_, i) =>
-          prISTDayKey(new Date(start.getTime() + i * DAY_MS)),
-        );
+        prISTDayKey(new Date(start.getTime() + i * DAY_MS)),
+      );
 
   return {
     prefilter: { createdAt: { $gte: lo, $lte: hi } },
@@ -2674,12 +2709,12 @@ const buildBookingLedgers = async (bookingIds, companyId) => {
   const handoverRefs = [...bookingByHandoverRef.keys()].map(toObjId);
   const handoversByRef = handoverRefs.length
     ? await Handover.find({
-        isDeleted: { $ne: true },
-        _id: { $in: handoverRefs },
-        $nor: [{ bookingId: { $in: ids } }],
-      })
-        .select(HANDOVER_FIELDS_LEDGER)
-        .lean()
+      isDeleted: { $ne: true },
+      _id: { $in: handoverRefs },
+      $nor: [{ bookingId: { $in: ids } }],
+    })
+      .select(HANDOVER_FIELDS_LEDGER)
+      .lean()
     : [];
   const handovers = sortLikeMongo(
     [...handoversByBookingId, ...handoversByRef],
@@ -2704,33 +2739,33 @@ const buildBookingLedgers = async (bookingIds, companyId) => {
   const bookingHandoverIds = [...handoverToBooking.keys()].map(toObjId);
   const [returns, paymentsByHandover] = bookingHandoverIds.length
     ? await Promise.all([
-        parallelFindIn(
-          VehicleReturn,
-          "handover",
-          bookingHandoverIds,
-          {},
-          {
-            select:
-              "handover createdAt receivingTime " +
-              "settlementDetails.amountCollected settlementDetails.paymentBreakdown " +
-              "settlementDetails.paymentMode settlementDetails.status settlementDetails.finalBalance " +
-              "settlementDetails.lateReturnFine settlementDetails.extraKmFine " +
-              "settlementDetails.fuelUsageAmount settlementDetails.damageAmount",
-            sort: NEWEST_FIRST,
-          },
-        ),
-        // Rule 2 part of step 4, minus what rule 1 already read
-        PaymentHistory.find({
-          ...companyMatch,
-          $or: [
-            { handoverId: { $in: bookingHandoverIds } },
-            { bookingId: { $in: bookingHandoverIds } },
-          ],
-          $nor: [{ bookingId: { $in: ids } }],
-        })
-          .select(ID_LINK_FIELDS)
-          .lean(),
-      ])
+      parallelFindIn(
+        VehicleReturn,
+        "handover",
+        bookingHandoverIds,
+        {},
+        {
+          select:
+            "handover createdAt receivingTime " +
+            "settlementDetails.amountCollected settlementDetails.paymentBreakdown " +
+            "settlementDetails.paymentMode settlementDetails.status settlementDetails.finalBalance " +
+            "settlementDetails.lateReturnFine settlementDetails.extraKmFine " +
+            "settlementDetails.fuelUsageAmount settlementDetails.damageAmount",
+          sort: NEWEST_FIRST,
+        },
+      ),
+      // Rule 2 part of step 4, minus what rule 1 already read
+      PaymentHistory.find({
+        ...companyMatch,
+        $or: [
+          { handoverId: { $in: bookingHandoverIds } },
+          { bookingId: { $in: bookingHandoverIds } },
+        ],
+        $nor: [{ bookingId: { $in: ids } }],
+      })
+        .select(ID_LINK_FIELDS)
+        .lean(),
+    ])
     : [[], []];
 
   const returnByBooking = new Map(); // bookingId -> newest return
@@ -2885,12 +2920,12 @@ const buildBookingLedgers = async (bookingIds, companyId) => {
     ];
     const otherExisting = otherIds.length
       ? new Set(
-          (
-            await Booking.find({ _id: { $in: otherIds.map(toObjId) } })
-              .select("_id")
-              .lean()
-          ).map((b) => String(b._id)),
-        )
+        (
+          await Booking.find({ _id: { $in: otherIds.map(toObjId) } })
+            .select("_id")
+            .lean()
+        ).map((b) => String(b._id)),
+      )
       : new Set();
 
     for (const p of unlinked) {
@@ -2935,8 +2970,8 @@ const buildBookingLedgers = async (bookingIds, companyId) => {
   }
   console.log(
     `[ledger] bookings=${ids.length} handovers=${handovers.length} returns=${returns.length} | ` +
-      `payments linked: byId=${byId} byHandover=${byHandover} byCustomerVehicleDates=${byMatch} ` +
-      `(fallback candidates checked=${fallbackChecked})`,
+    `payments linked: byId=${byId} byHandover=${byHandover} byCustomerVehicleDates=${byMatch} ` +
+    `(fallback candidates checked=${fallbackChecked})`,
   );
 
   // ---------- 6. Compose ledger per booking ----------
@@ -3085,7 +3120,7 @@ const buildBookingLedgers = async (bookingIds, companyId) => {
 
   console.log(
     `[ledger] returns found=${returns.length} withCollection=${returnsWithCollection} ` +
-      `collectionNotInPayments=${returnsNotLogged}`,
+    `collectionNotInPayments=${returnsNotLogged}`,
   );
 
   return ledgers;
@@ -3193,16 +3228,16 @@ export const getBookingPayments = async (req, res) => {
       const hoIds = handoversInMonth.map((h) => h._id);
       const handoverBookingIds = hoIds.length
         ? await PaymentHistory.distinct("bookingId", {
-            type: "booking",
-            "booking.fromDate": null, // missing or empty
-            $or: [
-              ...(hoBookingIds.length
-                ? [{ bookingId: { $in: hoBookingIds } }]
-                : []),
-              { handoverId: { $in: hoIds } },
-              { bookingId: { $in: hoIds } },
-            ],
-          })
+          type: "booking",
+          "booking.fromDate": null, // missing or empty
+          $or: [
+            ...(hoBookingIds.length
+              ? [{ bookingId: { $in: hoBookingIds } }]
+              : []),
+            { handoverId: { $in: hoIds } },
+            { bookingId: { $in: hoIds } },
+          ],
+        })
         : [];
 
       // Sources 2 and 3 apply only when the Booking itself has no From date
@@ -3217,13 +3252,13 @@ export const getBookingPayments = async (req, res) => {
 
       const haveOwnFromDate = candidates.length
         ? new Set(
-            (
-              await Booking.distinct("_id", {
-                _id: { $in: candidates.map(toObjectId) },
-                fromDate: { $ne: null },
-              })
-            ).map(String),
-          )
+          (
+            await Booking.distinct("_id", {
+              _id: { $in: candidates.map(toObjectId) },
+              fromDate: { $ne: null },
+            })
+          ).map(String),
+        )
         : new Set();
 
       const fallbackIds = candidates
@@ -3288,17 +3323,17 @@ export const getBookingPayments = async (req, res) => {
     // the same order (the sort ends with _id, so the order is exact).
     const query = exportAll
       ? parallelFind(PaymentHistory, filter, {
-          select: "-collectionHistory -__v",
-          populate: { path: "createdBy", select: "name" },
-          sort,
-        })
+        select: "-collectionHistory -__v",
+        populate: { path: "createdBy", select: "name" },
+        sort,
+      })
       : PaymentHistory.find(filter)
-          .select("-collectionHistory -__v")
-          .populate("createdBy", "name")
-          .sort(sort)
-          .skip((pageNum - 1) * limitNum)
-          .limit(limitNum)
-          .lean();
+        .select("-collectionHistory -__v")
+        .populate("createdBy", "name")
+        .sort(sort)
+        .skip((pageNum - 1) * limitNum)
+        .limit(limitNum)
+        .lean();
 
     const [payments, total, summaryAgg, filteredBookingIds] = await Promise.all(
       [
@@ -3419,11 +3454,11 @@ export const getBookingPayments = async (req, res) => {
       pagination: exportAll
         ? { total, page: 1, limit: total, totalPages: 1 }
         : {
-            total,
-            page: pageNum,
-            limit: limitNum,
-            totalPages: Math.ceil(total / limitNum),
-          },
+          total,
+          page: pageNum,
+          limit: limitNum,
+          totalPages: Math.ceil(total / limitNum),
+        },
     });
   } catch (error) {
     console.error("getBookingPayments error:", error);
