@@ -1183,17 +1183,10 @@ export const getDashboardStats = async (req, res) => {
       vehicles.map((v) => [String(v._id), resolveCategory(v)]),
     );
 
-    const isServiceStatus = (status) => {
-      const s = String(status || "").trim().toLowerCase();
-      return (
-        s === "service" ||
-        s === "in_service" ||
-        s === "in service" ||
-        s === "maintenance" ||
-        s === "under_maintenance" ||
-        s === "under maintenance"
+    const isServiceStatus = (status) =>
+      /^(service|in[\s_-]*service|((in|under)[\s_-]*)?maintenance)$/i.test(
+        String(status || "").trim(),
       );
-    };
 
     const serviceSet = new Set(
       vehicles.filter((v) => isServiceStatus(v.status)).map((v) => String(v._id)),

@@ -961,14 +961,63 @@ const VEHICLE_SERVICE_STATUSES = [
   "service",
   "in_service",
   "in service",
+  "in-service",
   "maintenance",
+  "in_maintenance",
+  "in maintenance",
+  "in-maintenance",
   "under_maintenance",
   "under maintenance",
+  "under-maintenance",
   "Service",
   "In Service",
+  "In Maintenance",
   "Under Maintenance",
-  /^(service|in[\s_-]*service|(under[\s_-]*)?maintenance)$/i,
+  /^(service|in[\s_-]*service|((in|under)[\s_-]*)?maintenance)$/i,
 ];
+
+function isMaintenanceCurrentlyBlocking(doc, now = new Date()) {
+  if (!doc) return false;
+  if (doc.status === "In Progress") return true;
+  if (doc.status !== "Scheduled") return false;
+
+  const start = doc.startDate ? new Date(doc.startDate) : null;
+  const end = doc.endDate ? new Date(doc.endDate) : null;
+  const expected = doc.expectedCompletionDate
+    ? new Date(doc.expectedCompletionDate)
+    : null;
+
+  if (start && !Number.isNaN(start.getTime()) && start > now) {
+    return false;
+  }
+
+  if (expected && !Number.isNaN(expected.getTime()) && expected <= now) {
+    return false;
+  }
+
+  if (
+    end &&
+    start &&
+    !Number.isNaN(end.getTime()) &&
+    !Number.isNaN(start.getTime()) &&
+    end > start &&
+    end <= now
+  ) {
+    return false;
+  }
+
+  if (
+    start &&
+    end &&
+    !Number.isNaN(start.getTime()) &&
+    end.getTime() === start.getTime() &&
+    (!expected || Number.isNaN(expected.getTime()))
+  ) {
+    return now.getTime() - start.getTime() < 24 * 60 * 60 * 1000;
+  }
+
+  return true;
+}
 
 async function markVehicleInServiceForMaintenance(
   vehicleId,
@@ -1002,15 +1051,20 @@ async function markVehicleInServiceForMaintenance(
 }
 
 async function releaseVehicleFromMaintenance(maintenance) {
-  const otherOpenBlocking = await Maintenance.find({
+  const now = new Date();
+  const openCandidates = await Maintenance.find({
     _id: { $ne: maintenance._id },
     vehicle: maintenance.vehicle,
     status: { $in: ["Scheduled", "In Progress"] },
-    isDeleted: false,
+    isDeleted: { $ne: true },
   })
-    .select("_id title expectedCompletionDate")
-    .limit(1)
+    .select("_id title status startDate endDate expectedCompletionDate createdAt")
+    .sort({ createdAt: -1 })
     .lean();
+
+  const otherOpenBlocking = openCandidates.filter((doc) =>
+    isMaintenanceCurrentlyBlocking(doc, now),
+  );
 
   if (otherOpenBlocking.length > 0) {
     const nextJob = otherOpenBlocking[0];
