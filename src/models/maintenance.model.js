@@ -166,6 +166,18 @@ const maintenanceSchema = new Schema(
       ref: "User",
     },
 
+    createdByName: {
+      type: String,
+      trim: true,
+      default: "",
+    },
+
+    createdFrom: {
+      type: String,
+      enum: ["operation", "dashboard"],
+      default: "operation",
+    },
+
     isDeleted: {
       type: Boolean,
       default: false,

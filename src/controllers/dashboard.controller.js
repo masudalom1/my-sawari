@@ -874,7 +874,10 @@ export const createMaintenance = async (req, res, next) => {
     // ---------------------------------------
     // Check vehicle exists
     // ---------------------------------------
-    const existingVehicle = await Vehicle.findById(vehicle);
+    const existingVehicle = await Vehicle.findOne({
+      _id: vehicle,
+      isDeleted: { $ne: true },
+    });
 
     if (!existingVehicle) {
       return res.status(404).json({
@@ -924,16 +927,35 @@ export const createMaintenance = async (req, res, next) => {
       startDate: maintenanceStart,
       endDate: maintenanceEnd,
       status: "Scheduled",
+      createdBy: req.user?._id || null,
+      createdByName: req.user?.fullName || req.user?.name || "",
+      createdFrom: "dashboard",
+      statusHistory: [
+        {
+          status: "Scheduled",
+          changedBy: req.user?._id || null,
+          note: "Maintenance created from Dashboard",
+        },
+      ],
     });
 
     // ---------------------------------------
     // Update vehicle status
     // ---------------------------------------
-    await Vehicle.findByIdAndUpdate(
-      vehicle,
+    const updatedVehicle = await Vehicle.findOneAndUpdate(
+      { _id: vehicle, isDeleted: { $ne: true } },
       {
         $set: {
           status: "service",
+          "maintenance.required": true,
+          "maintenance.currentMaintenance": maintenance._id,
+          "maintenance.reason": maintenance.title || "Scheduled Maintenance",
+          "maintenance.estimatedCompletionDate": maintenanceEnd,
+          "maintenance.markedBy": req.user?._id || null,
+          "maintenance.markedAt": new Date(),
+        },
+        $addToSet: {
+          "maintenance.maintenanceHistory": maintenance._id,
         },
       },
       {
@@ -942,11 +964,20 @@ export const createMaintenance = async (req, res, next) => {
       },
     );
 
+    if (!updatedVehicle) {
+      await Maintenance.findByIdAndDelete(maintenance._id);
+      return res.status(500).json({
+        success: false,
+        message: "Failed to update vehicle status to service",
+      });
+    }
+
     // ---------------------------------------
     // Get populated maintenance
     // ---------------------------------------
     const populatedMaintenance = await Maintenance.findById(maintenance._id)
       .populate("vehicle")
+      .populate("createdBy", "name fullName email role")
       .lean();
 
     // ---------------------------------------
@@ -955,6 +986,7 @@ export const createMaintenance = async (req, res, next) => {
     return res.status(201).json({
       success: true,
       message: "Maintenance created successfully",
+      vehicleStatus: updatedVehicle.status,
       data: populatedMaintenance,
     });
   } catch (error) {
@@ -999,7 +1031,7 @@ export const getMaintenances = async (req, res, next) => {
 
     const maintenances = await Maintenance.find(filter)
       .populate("vehicle")
-      .populate("createdBy", "name email")
+      .populate("createdBy", "name fullName email role")
       .sort({ startDate: 1 })
       .lean();
 
@@ -1151,14 +1183,26 @@ export const getDashboardStats = async (req, res) => {
       vehicles.map((v) => [String(v._id), resolveCategory(v)]),
     );
 
+    const isServiceStatus = (status) => {
+      const s = String(status || "").trim().toLowerCase();
+      return (
+        s === "service" ||
+        s === "in_service" ||
+        s === "in service" ||
+        s === "maintenance" ||
+        s === "under_maintenance" ||
+        s === "under maintenance"
+      );
+    };
+
     const serviceSet = new Set(
-      vehicles.filter((v) => v.status === "service").map((v) => String(v._id)),
+      vehicles.filter((v) => isServiceStatus(v.status)).map((v) => String(v._id)),
     );
 
     // Extra info shown in the "In Maintenance" hover list
     const serviceDetails = {};
     for (const v of vehicles) {
-      if (v.status !== "service") continue;
+      if (!isServiceStatus(v.status)) continue;
       serviceDetails[String(v._id)] = {
         reason: v.maintenance?.reason || "",
         estimatedCompletionDate: v.maintenance?.estimatedCompletionDate || null,
