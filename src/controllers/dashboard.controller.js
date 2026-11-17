@@ -427,14 +427,30 @@ export const getTimelineBookings = async (req, res) => {
 export const getTimelineMaintenances = async (req, res) => {
   try {
     const maintenances = await Maintenance.find({ isDeleted: false })
-      .select("_id vehicle startDate endDate status")
+      .select("_id vehicle startDate endDate status completedDate")
       .sort({ startDate: 1 })
       .lean();
 
+    const now = new Date();
+    const normalized = maintenances.map((m) => {
+      let endDate = m.endDate;
+      if (m.status === "Completed") {
+        if (m.completedDate) {
+          endDate = m.completedDate;
+        } else if (endDate && new Date(endDate) > now) {
+          endDate = now;
+        }
+      }
+      return {
+        ...m,
+        endDate,
+      };
+    });
+
     return res.status(200).json({
       success: true,
-      count: maintenances.length,
-      data: maintenances,
+      count: normalized.length,
+      data: normalized,
     });
   } catch (error) {
     console.error("Get timeline maintenances error:", error);
@@ -1035,11 +1051,27 @@ export const getMaintenances = async (req, res, next) => {
       .sort({ startDate: 1 })
       .lean();
 
+    const now = new Date();
+    const normalized = maintenances.map((m) => {
+      let endDate = m.endDate;
+      if (m.status === "Completed") {
+        if (m.completedDate) {
+          endDate = m.completedDate;
+        } else if (endDate && new Date(endDate) > now) {
+          endDate = now;
+        }
+      }
+      return {
+        ...m,
+        endDate,
+      };
+    });
+
     return res.status(200).json({
       success: true,
       message: "Maintenance records fetched successfully",
-      count: maintenances.length,
-      data: maintenances,
+      count: normalized.length,
+      data: normalized,
     });
   } catch (error) {
     next(error);

@@ -3,6 +3,8 @@ import fs from "fs/promises";
 import cloudinary from "../config/cloudinary.js";
 import Vehicle from "../models/vehicle.model.js";
 import Maintenance from "../models/maintenance.model.js";
+import Booking from "../models/booking.model.js";
+import { bookingTimestamp } from "../../shared/bookingDuration.mjs";
 
 // add vehicle screen
 export const createVehicle = async (req, res, next) => {
@@ -261,10 +263,44 @@ export const getAllVehicles = async (req, res, next) => {
 
 export const getAvailableVehicles = async (req, res, next) => {
   try {
-    const vehicles = await Vehicle.find({
-      status: "available",
+    const { fromDate, toDate, pickupTime, dropTime } = req.query;
+
+    let conflictingVehicleIds = new Set();
+    if (fromDate && toDate) {
+      const requestedStart = bookingTimestamp(fromDate, pickupTime || "08:00 AM");
+      const requestedEnd = bookingTimestamp(toDate, dropTime || "08:00 AM");
+
+      if (!isNaN(requestedStart) && !isNaN(requestedEnd) && requestedEnd > requestedStart) {
+        const overlappingBookings = await Booking.find({
+          isDeleted: false,
+          status: { $nin: ["cancelled", "completed", "returned"] },
+        })
+          .select("vehicleId fromDate toDate pickupTime dropTime")
+          .lean();
+
+        for (const b of overlappingBookings) {
+          if (!b.vehicleId) continue;
+          const bStart = bookingTimestamp(b.fromDate, b.pickupTime || "08:00 AM");
+          const bEnd = bookingTimestamp(b.toDate, b.dropTime || "08:00 AM");
+          if (!isNaN(bStart) && !isNaN(bEnd) && bStart < requestedEnd && bEnd > requestedStart) {
+            conflictingVehicleIds.add(String(b.vehicleId));
+          }
+        }
+      }
+    }
+
+    const query = {
       isDeleted: false,
-    })
+      status: { $nin: ["service", "maintenance"] },
+    };
+
+    if (conflictingVehicleIds.size > 0) {
+      query._id = { $nin: Array.from(conflictingVehicleIds).map((id) => new mongoose.Types.ObjectId(id)) };
+    } else if (!fromDate || !toDate) {
+      query.status = "available";
+    }
+
+    const vehicles = await Vehicle.find(query)
       .select(
         `
         _id
@@ -509,6 +545,36 @@ export const updateVehicle = async (req, res, next) => {
       }
  
       vehicle.status = req.body.status;
+      if (req.body.status === "available") {
+        if (vehicle.maintenance) {
+          vehicle.maintenance.required = false;
+          vehicle.maintenance.currentMaintenance = null;
+        }
+        const now = new Date();
+        const activeMaintenances = await Maintenance.find({
+          vehicle: vehicle._id,
+          status: { $in: ["Scheduled", "In Progress"] },
+          isDeleted: false,
+        });
+        for (const m of activeMaintenances) {
+          m.status = "Completed";
+          m.completedDate = now;
+          m.endDate = now > m.startDate ? now : new Date(m.startDate.getTime() + 60_000);
+          if (!m.completionProof?.note) {
+            m.completionProof = {
+              ...(m.completionProof || {}),
+              note: "Vehicle marked as Available",
+            };
+          }
+          m.statusHistory.push({
+            status: "Completed",
+            changedBy: req.user?._id,
+            note: "Vehicle marked as Available",
+            changedAt: now,
+          });
+          await m.save();
+        }
+      }
     }
  
     // -----------------------------------------
@@ -612,6 +678,36 @@ export const updateVehicleStatus = async (req, res, next) => {
     }
 
     vehicle.status = normalizedStatus;
+    if (normalizedStatus === "available") {
+      if (vehicle.maintenance) {
+        vehicle.maintenance.required = false;
+        vehicle.maintenance.currentMaintenance = null;
+      }
+      const now = new Date();
+      const activeMaintenances = await Maintenance.find({
+        vehicle: vehicle._id,
+        status: { $in: ["Scheduled", "In Progress"] },
+        isDeleted: false,
+      });
+      for (const m of activeMaintenances) {
+        m.status = "Completed";
+        m.completedDate = now;
+        m.endDate = now > m.startDate ? now : new Date(m.startDate.getTime() + 60_000);
+        if (!m.completionProof?.note) {
+          m.completionProof = {
+            ...(m.completionProof || {}),
+            note: "Vehicle marked as Available",
+          };
+        }
+        m.statusHistory.push({
+          status: "Completed",
+          changedBy: req.user?._id,
+          note: "Vehicle marked as Available",
+          changedAt: now,
+        });
+        await m.save();
+      }
+    }
     await vehicle.save();
 
     return res.status(200).json({
@@ -1174,16 +1270,24 @@ export const updateMaintenance = async (req, res, next) => {
         (!maintenance.completionProof?.billImage || !maintenance.completionProof?.cardImage)) {
       return res.status(400).json({ success: false, message: "Bill photo and card photo are required to mark maintenance as completed" });
     }
+    const changedAt = new Date();
     if (maintenance.status !== previousStatus && VALID_STATUSES.includes(maintenance.status)) {
-      const changedAt = new Date();
       maintenance.completedDate = maintenance.status === "Completed" ? changedAt : null;
-      if (maintenance.status === "Completed" && changedAt > maintenance.startDate) {
-        maintenance.endDate = changedAt;
-      }
       maintenance.statusHistory.push({
         status: maintenance.status, changedBy: req.user?._id,
         note: req.body.statusNote || "", changedAt,
       });
+    }
+    if (maintenance.status === "Completed") {
+      if (!maintenance.completedDate) {
+        maintenance.completedDate = changedAt;
+      }
+      if (maintenance.endDate > maintenance.completedDate || maintenance.endDate > changedAt) {
+        maintenance.endDate = maintenance.completedDate;
+      }
+      if (maintenance.endDate <= maintenance.startDate) {
+        maintenance.endDate = new Date(maintenance.startDate.getTime() + 60_000);
+      }
     }
     await maintenance.save();
     const vehicleChanged = String(previousVehicle) !== String(maintenance.vehicle);

@@ -25,6 +25,13 @@ const bookingSchema = new mongoose.Schema(
       required: true,
     },
 
+    bookingSource: {
+      type: String,
+      enum: ["customer_app", "operation_app", "dashboard", "other"],
+      default: "dashboard",
+      index: true,
+    },
+
     // =========================
     // BOOKING ID
     // =========================
