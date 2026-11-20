@@ -1268,11 +1268,105 @@ export const getDashboardStats = async (req, res) => {
     }
 
     // -----------------------------------
-    // 3. Unbooked = not booked and not in service
+    // 3. Available today = free for the REST of today's business day.
+    //
+    //    FIX: this used to be "not booked today", but "booked today" also
+    //    counts rentals that were already RETURNED today, so a vehicle that
+    //    came back this morning never showed as available. Booking.status
+    //    alone was also not enough — a returned handover is what marks the
+    //    rental done (same rule as the timeline, resolveStatus()).
+    //
+    //    A vehicle is NOT available when:
+    //      - it is in service, or
+    //      - it is out on an unreturned handover (booking or walk-in) —
+    //        after an exchange only the CURRENT vehicle is out, or
+    //      - an old-style booking is marked handed over with no handover
+    //        record (same 24h grace as "On Rent Now"), or
+    //      - a not-yet-handed-over booking occupies [now, end of today's
+    //        business day).
+    //    Returned / completed rentals never block.
     // -----------------------------------
-    const unbookedIds = allIds.filter(
-      (id) => !bookedSet.has(id) && !serviceSet.has(id),
+    const notAvailableSet = new Set(serviceSet);
+
+    const [latestHandovers, openHandovers] = await Promise.all([
+      latestHandoverByBooking(bookings.map((b) => b._id)),
+      Handover.find({
+        isDeleted: false,
+        handoverStatus: { $nin: ["returned", "cancelled"] },
+        "returnDetails.returnedAt": null,
+      })
+        .select(
+          "_id bookingId vehicle.vehicleId vehicleHistory.newVehicle vehicleHistory.changedAt",
+        )
+        .lean(),
+    ]);
+
+    // Unreturned handovers whose booking was cancelled / deleted don't count
+    const linkedBookingIds = openHandovers
+      .filter((h) => h.bookingId)
+      .map((h) => h.bookingId);
+    const deadBookingIds = new Set(
+      linkedBookingIds.length
+        ? (
+            await Booking.find({
+              _id: { $in: linkedBookingIds },
+              $or: [{ isDeleted: true }, { status: { $in: ["cancelled", "completed"] } }],
+            })
+              .select("_id")
+              .lean()
+          ).map((b) => String(b._id))
+        : [],
     );
+
+    for (const h of openHandovers) {
+      if (h.bookingId && deadBookingIds.has(String(h.bookingId))) continue;
+
+      // Current vehicle = last exchange's new vehicle, else the original
+      const exchanges = (h.vehicleHistory || [])
+        .filter((x) => x?.newVehicle?.vehicleId && x?.changedAt)
+        .sort((a, b) => new Date(a.changedAt) - new Date(b.changedAt));
+      const currentVehicleId = exchanges.length
+        ? exchanges[exchanges.length - 1].newVehicle.vehicleId
+        : h.vehicle?.vehicleId;
+
+      const vid = currentVehicleId ? String(currentVehicleId) : "";
+      if (vehicleIdSet.has(vid)) notAvailableSet.add(vid);
+    }
+
+    for (const booking of bookings) {
+      const vid = String(booking.vehicleId);
+      if (!vehicleIdSet.has(vid) || notAvailableSet.has(vid)) continue;
+
+      const handover = latestHandovers.get(String(booking._id)) || null;
+      const status = resolveStatus(booking.status, handover);
+
+      // Returned / completed -> vehicle is free again
+      if (status === "completed") continue;
+
+      // Has an unreturned handover -> already handled above (with exchanges)
+      if (handover) continue;
+
+      const start = combineISTDateAndTime(booking.fromDate, booking.pickupTime, {
+        hour: 0,
+        minute: 0,
+      });
+      const end = combineISTDateAndTime(booking.toDate, booking.dropTime, {
+        hour: 23,
+        minute: 59,
+      });
+      if (!start || !end || end <= start) continue;
+
+      if (HANDED_OVER_STATUSES.includes(booking.status)) {
+        // Marked handed over but no handover record (old data)
+        if (start < dayEnd && end > overdueCutoff) notAvailableSet.add(vid);
+        continue;
+      }
+
+      // Not handed over yet: blocks if it touches the rest of today
+      if (start < dayEnd && end > now) notAvailableSet.add(vid);
+    }
+
+    const unbookedIds = allIds.filter((id) => !notAvailableSet.has(id));
 
     // -----------------------------------
     // 4. Diagnostics: bookings still marked handed over whose drop date is
