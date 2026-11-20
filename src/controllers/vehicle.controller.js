@@ -3,6 +3,8 @@ import fs from "fs/promises";
 import cloudinary from "../config/cloudinary.js";
 import Vehicle from "../models/vehicle.model.js";
 import Maintenance from "../models/maintenance.model.js";
+import Booking from "../models/booking.model.js";
+import { bookingTimestamp } from "../../shared/bookingDuration.mjs";
 
 // add vehicle screen
 export const createVehicle = async (req, res, next) => {
@@ -261,10 +263,44 @@ export const getAllVehicles = async (req, res, next) => {
 
 export const getAvailableVehicles = async (req, res, next) => {
   try {
-    const vehicles = await Vehicle.find({
-      status: "available",
+    const { fromDate, toDate, pickupTime, dropTime } = req.query;
+
+    let conflictingVehicleIds = new Set();
+    if (fromDate && toDate) {
+      const requestedStart = bookingTimestamp(fromDate, pickupTime || "08:00 AM");
+      const requestedEnd = bookingTimestamp(toDate, dropTime || "08:00 AM");
+
+      if (!isNaN(requestedStart) && !isNaN(requestedEnd) && requestedEnd > requestedStart) {
+        const overlappingBookings = await Booking.find({
+          isDeleted: false,
+          status: { $nin: ["cancelled", "completed", "returned"] },
+        })
+          .select("vehicleId fromDate toDate pickupTime dropTime")
+          .lean();
+
+        for (const b of overlappingBookings) {
+          if (!b.vehicleId) continue;
+          const bStart = bookingTimestamp(b.fromDate, b.pickupTime || "08:00 AM");
+          const bEnd = bookingTimestamp(b.toDate, b.dropTime || "08:00 AM");
+          if (!isNaN(bStart) && !isNaN(bEnd) && bStart < requestedEnd && bEnd > requestedStart) {
+            conflictingVehicleIds.add(String(b.vehicleId));
+          }
+        }
+      }
+    }
+
+    const query = {
       isDeleted: false,
-    })
+      status: { $nin: ["service", "maintenance"] },
+    };
+
+    if (conflictingVehicleIds.size > 0) {
+      query._id = { $nin: Array.from(conflictingVehicleIds).map((id) => new mongoose.Types.ObjectId(id)) };
+    } else if (!fromDate || !toDate) {
+      query.status = "available";
+    }
+
+    const vehicles = await Vehicle.find(query)
       .select(
         `
         _id
@@ -509,6 +545,36 @@ export const updateVehicle = async (req, res, next) => {
       }
  
       vehicle.status = req.body.status;
+      if (req.body.status === "available") {
+        if (vehicle.maintenance) {
+          vehicle.maintenance.required = false;
+          vehicle.maintenance.currentMaintenance = null;
+        }
+        const now = new Date();
+        const activeMaintenances = await Maintenance.find({
+          vehicle: vehicle._id,
+          status: { $in: ["Scheduled", "In Progress"] },
+          isDeleted: false,
+        });
+        for (const m of activeMaintenances) {
+          m.status = "Completed";
+          m.completedDate = now;
+          m.endDate = now > m.startDate ? now : new Date(m.startDate.getTime() + 60_000);
+          if (!m.completionProof?.note) {
+            m.completionProof = {
+              ...(m.completionProof || {}),
+              note: "Vehicle marked as Available",
+            };
+          }
+          m.statusHistory.push({
+            status: "Completed",
+            changedBy: req.user?._id,
+            note: "Vehicle marked as Available",
+            changedAt: now,
+          });
+          await m.save();
+        }
+      }
     }
  
     // -----------------------------------------
@@ -571,9 +637,33 @@ export const deleteVehicle = async (req, res, next) => {
   }
 };
 
+const normalizeVehicleStatusInput = (status) => {
+  const value = String(status || "").trim().toLowerCase();
+  if (
+    value === "service" ||
+    value === "in_service" ||
+    value === "in service" ||
+    value === "maintenance" ||
+    value === "under_maintenance" ||
+    value === "under maintenance" ||
+    value === "in maintenance"
+  ) {
+    return "service";
+  }
+  if (value === "available" || value === "rent") return value;
+  return null;
+};
+
 export const updateVehicleStatus = async (req, res, next) => {
   try {
-    const { status } = req.body;
+    const normalizedStatus = normalizeVehicleStatusInput(req.body?.status);
+
+    if (!normalizedStatus) {
+      return res.status(400).json({
+        success: false,
+        message: "Status must be available, rent, or service",
+      });
+    }
 
     const vehicle = await Vehicle.findOne({
       _id: req.params.id,
@@ -587,7 +677,37 @@ export const updateVehicleStatus = async (req, res, next) => {
       });
     }
 
-    vehicle.status = status;
+    vehicle.status = normalizedStatus;
+    if (normalizedStatus === "available") {
+      if (vehicle.maintenance) {
+        vehicle.maintenance.required = false;
+        vehicle.maintenance.currentMaintenance = null;
+      }
+      const now = new Date();
+      const activeMaintenances = await Maintenance.find({
+        vehicle: vehicle._id,
+        status: { $in: ["Scheduled", "In Progress"] },
+        isDeleted: false,
+      });
+      for (const m of activeMaintenances) {
+        m.status = "Completed";
+        m.completedDate = now;
+        m.endDate = now > m.startDate ? now : new Date(m.startDate.getTime() + 60_000);
+        if (!m.completionProof?.note) {
+          m.completionProof = {
+            ...(m.completionProof || {}),
+            note: "Vehicle marked as Available",
+          };
+        }
+        m.statusHistory.push({
+          status: "Completed",
+          changedBy: req.user?._id,
+          note: "Vehicle marked as Available",
+          changedAt: now,
+        });
+        await m.save();
+      }
+    }
     await vehicle.save();
 
     return res.status(200).json({
@@ -746,51 +866,68 @@ export const createMaintenance = async (req, res, next) => {
       additionalNotes: additionalNotes?.trim() || "",
 
       createdBy: req.user._id,
+      createdByName: req.user?.fullName || req.user?.name || "",
+      createdFrom: "operation",
+      statusHistory: [
+        {
+          status: "Scheduled",
+          changedBy: req.user._id,
+          note: "Maintenance created",
+        },
+      ],
     });
 
-    /* ===============================
-       VEHICLE STATUS UPDATE - TEMPORARILY DISABLED
-    =============================== */
+    const parseValidDate = (value) => {
+      if (!value) return null;
+      const d = new Date(value);
+      return Number.isNaN(d.getTime()) ? null : d;
+    };
 
-    // try {
-    //   const updatedVehicle = await Vehicle.findByIdAndUpdate(
-    //     existingVehicle._id,
-    //     {
-    //       $set: {
-    //         status: "service",
-    //         "maintenance.required": true,
-    //         "maintenance.currentMaintenance": maintenance._id,
-    //         "maintenance.reason": title.trim(),
-    //         "maintenance.estimatedDays": Number(estimatedDays) || 0,
-    //         "maintenance.estimatedCompletionDate":
-    //           expectedCompletionDate || null,
-    //         "maintenance.markedBy": req.user._id,
-    //         "maintenance.markedAt": new Date(),
-    //       },
-    //       $push: {
-    //         "maintenance.maintenanceHistory": maintenance._id,
-    //       },
-    //     },
-    //     { new: true },
-    //   );
+    let updatedVehicle;
+    try {
+      updatedVehicle = await Vehicle.findOneAndUpdate(
+        { _id: existingVehicle._id, isDeleted: false },
+        {
+          $set: {
+            status: "service",
+            "maintenance.required": true,
+            "maintenance.currentMaintenance": maintenance._id,
+            "maintenance.reason": maintenance.title || title.trim(),
+            "maintenance.estimatedDays": Number(estimatedDays) || 0,
+            "maintenance.estimatedCompletionDate": parseValidDate(
+              expectedCompletionDate,
+            ),
+            "maintenance.markedBy": req.user?._id || null,
+            "maintenance.markedAt": new Date(),
+          },
+          $addToSet: {
+            "maintenance.maintenanceHistory": maintenance._id,
+          },
+        },
+        { new: true },
+      );
 
-    //   if (!updatedVehicle) {
-    //     // Rollback maintenance record if vehicle update somehow failed
-    //     await Maintenance.findByIdAndDelete(maintenance._id);
-    //     return res.status(500).json({
-    //       success: false,
-    //       message: "Failed to update vehicle status",
-    //     });
-    //   }
-    // } catch (vehicleUpdateError) {
-    //   // Rollback maintenance record on error
-    //   await Maintenance.findByIdAndDelete(maintenance._id);
-    //   throw vehicleUpdateError;
-    // }
+      if (!updatedVehicle) {
+        await Maintenance.findByIdAndDelete(maintenance._id);
+        return res.status(500).json({
+          success: false,
+          message: "Failed to update vehicle status",
+        });
+      }
+    } catch (vehicleUpdateError) {
+      await Maintenance.findByIdAndDelete(maintenance._id);
+      throw vehicleUpdateError;
+    }
+
+    await maintenance.populate([
+      { path: "createdBy", select: "name fullName email role" },
+      { path: "statusHistory.changedBy", select: "name fullName role" },
+    ]);
 
     return res.status(201).json({
       success: true,
       message: "Maintenance created successfully",
+      vehicleStatus: updatedVehicle.status,
       data: maintenance,
     });
   } catch (error) {
@@ -844,7 +981,7 @@ export const getMaintenances = async (req, res, next) => {
       })
       .populate({
         path: "createdBy",
-        select: "name fullName email",
+        select: "name fullName email role",
       })
       .sort({
         createdAt: -1,
@@ -895,7 +1032,8 @@ export const getMaintenanceById = async (req, res, next) => {
       isDeleted: false,
     })
       .populate({ path: "vehicle", select: "vehicleName vehicleNumber images" })
-      .populate({ path: "createdBy", select: "name fullName email" })
+      .populate({ path: "createdBy", select: "name fullName email role" })
+      .populate({ path: "statusHistory.changedBy", select: "name fullName role" })
       .lean();
 
     // Unified fleet: any maintenance on a Fleet Dashboard (non-deleted)
@@ -914,6 +1052,179 @@ export const getMaintenanceById = async (req, res, next) => {
 };
 
 const VALID_STATUSES = ["Scheduled", "In Progress", "Completed", "Cancelled"];
+const TERMINAL_MAINTENANCE_STATUSES = ["Completed", "Cancelled"];
+const VEHICLE_SERVICE_STATUSES = [
+  "service",
+  "in_service",
+  "in service",
+  "in-service",
+  "maintenance",
+  "in_maintenance",
+  "in maintenance",
+  "in-maintenance",
+  "under_maintenance",
+  "under maintenance",
+  "under-maintenance",
+  "Service",
+  "In Service",
+  "In Maintenance",
+  "Under Maintenance",
+  /^(service|in[\s_-]*service|((in|under)[\s_-]*)?maintenance)$/i,
+];
+
+function isMaintenanceCurrentlyBlocking(doc, now = new Date()) {
+  if (!doc) return false;
+  if (doc.status === "In Progress") return true;
+  if (doc.status !== "Scheduled") return false;
+
+  const start = doc.startDate ? new Date(doc.startDate) : null;
+  const end = doc.endDate ? new Date(doc.endDate) : null;
+  const expected = doc.expectedCompletionDate
+    ? new Date(doc.expectedCompletionDate)
+    : null;
+
+  if (start && !Number.isNaN(start.getTime()) && start > now) {
+    return false;
+  }
+
+  if (expected && !Number.isNaN(expected.getTime()) && expected <= now) {
+    return false;
+  }
+
+  if (
+    end &&
+    start &&
+    !Number.isNaN(end.getTime()) &&
+    !Number.isNaN(start.getTime()) &&
+    end > start &&
+    end <= now
+  ) {
+    return false;
+  }
+
+  if (
+    start &&
+    end &&
+    !Number.isNaN(start.getTime()) &&
+    end.getTime() === start.getTime() &&
+    (!expected || Number.isNaN(expected.getTime()))
+  ) {
+    return now.getTime() - start.getTime() < 24 * 60 * 60 * 1000;
+  }
+
+  return true;
+}
+
+async function markVehicleInServiceForMaintenance(
+  vehicleId,
+  maintenance,
+  userId,
+) {
+  const parsedExpected = maintenance?.expectedCompletionDate
+    ? new Date(maintenance.expectedCompletionDate)
+    : null;
+  const estimatedCompletionDate =
+    parsedExpected && !Number.isNaN(parsedExpected.getTime())
+      ? parsedExpected
+      : null;
+
+  return Vehicle.findOneAndUpdate(
+    { _id: vehicleId, isDeleted: false },
+    {
+      $set: {
+        status: "service",
+        "maintenance.required": true,
+        "maintenance.currentMaintenance": maintenance._id,
+        "maintenance.reason": maintenance.title || "",
+        "maintenance.estimatedCompletionDate": estimatedCompletionDate,
+        "maintenance.markedBy": userId || null,
+        "maintenance.markedAt": new Date(),
+      },
+      $addToSet: { "maintenance.maintenanceHistory": maintenance._id },
+    },
+    { new: true },
+  ).lean();
+}
+
+async function releaseVehicleFromMaintenance(maintenance) {
+  const now = new Date();
+  const openCandidates = await Maintenance.find({
+    _id: { $ne: maintenance._id },
+    vehicle: maintenance.vehicle,
+    status: { $in: ["Scheduled", "In Progress"] },
+    isDeleted: { $ne: true },
+  })
+    .select("_id title status startDate endDate expectedCompletionDate createdAt")
+    .sort({ createdAt: -1 })
+    .lean();
+
+  const otherOpenBlocking = openCandidates.filter((doc) =>
+    isMaintenanceCurrentlyBlocking(doc, now),
+  );
+
+  if (otherOpenBlocking.length > 0) {
+    const nextJob = otherOpenBlocking[0];
+    const parsedExpected = nextJob.expectedCompletionDate
+      ? new Date(nextJob.expectedCompletionDate)
+      : null;
+    await Vehicle.findOneAndUpdate(
+      { _id: maintenance.vehicle, status: { $ne: "rent" } },
+      {
+        $set: {
+          status: "service",
+          "maintenance.required": true,
+          "maintenance.currentMaintenance": nextJob._id,
+          "maintenance.reason": nextJob.title || "",
+          "maintenance.estimatedCompletionDate":
+            parsedExpected && !Number.isNaN(parsedExpected.getTime())
+              ? parsedExpected
+              : null,
+        },
+      },
+      { new: true },
+    );
+    return;
+  }
+
+  const clearMaintenanceUpdate = {
+    $set: {
+      "maintenance.required": false,
+      "maintenance.currentMaintenance": null,
+      "maintenance.reason": "",
+      "maintenance.estimatedDays": 0,
+      "maintenance.estimatedCompletionDate": null,
+      "maintenance.markedBy": null,
+      "maintenance.markedAt": null,
+    },
+    $addToSet: { "maintenance.maintenanceHistory": maintenance._id },
+  };
+
+  const released = await Vehicle.findOneAndUpdate(
+    {
+      _id: maintenance.vehicle,
+      status: { $in: VEHICLE_SERVICE_STATUSES },
+    },
+    {
+      ...clearMaintenanceUpdate,
+      $set: {
+        ...clearMaintenanceUpdate.$set,
+        status: "available",
+      },
+    },
+    { new: true },
+  ).lean();
+
+  if (!released) {
+    await Vehicle.updateOne(
+      {
+        _id: maintenance.vehicle,
+        "maintenance.currentMaintenance": maintenance._id,
+      },
+      clearMaintenanceUpdate,
+    );
+  }
+}
+
 export const updateMaintenance = async (req, res, next) => {
   try {
     if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
@@ -931,6 +1242,7 @@ export const updateMaintenance = async (req, res, next) => {
       return res.status(404).json({ success: false, message: "Vehicle not found" });
     }
     const previousStatus = maintenance.status;
+    const previousVehicle = maintenance.vehicle;
     const fields = [
       "vehicle", "startDate", "endDate", "maintenanceType", "title", "description",
       "garage", "costs", "odometer", "expectedCompletionDate", "images",
@@ -941,6 +1253,16 @@ export const updateMaintenance = async (req, res, next) => {
         maintenance.set(field, field === "maintenanceType" && req.body[field] === "" ? undefined : req.body[field]);
       }
     }
+    if (
+      maintenance.status === "Completed" &&
+      maintenance.startDate &&
+      maintenance.endDate &&
+      maintenance.endDate.getTime() === maintenance.startDate.getTime()
+    ) {
+      maintenance.endDate = new Date(
+        Math.max(Date.now(), maintenance.startDate.getTime() + 1000),
+      );
+    }
     if (!maintenance.startDate || !maintenance.endDate || maintenance.endDate <= maintenance.startDate) {
       return res.status(400).json({ success: false, message: "Maintenance end date must be after the start date" });
     }
@@ -948,18 +1270,63 @@ export const updateMaintenance = async (req, res, next) => {
         (!maintenance.completionProof?.billImage || !maintenance.completionProof?.cardImage)) {
       return res.status(400).json({ success: false, message: "Bill photo and card photo are required to mark maintenance as completed" });
     }
+    const changedAt = new Date();
     if (maintenance.status !== previousStatus && VALID_STATUSES.includes(maintenance.status)) {
-      const changedAt = new Date();
       maintenance.completedDate = maintenance.status === "Completed" ? changedAt : null;
-      if (maintenance.status === "Completed") maintenance.endDate = changedAt;
       maintenance.statusHistory.push({
         status: maintenance.status, changedBy: req.user?._id,
         note: req.body.statusNote || "", changedAt,
       });
     }
+    if (maintenance.status === "Completed") {
+      if (!maintenance.completedDate) {
+        maintenance.completedDate = changedAt;
+      }
+      if (maintenance.endDate > maintenance.completedDate || maintenance.endDate > changedAt) {
+        maintenance.endDate = maintenance.completedDate;
+      }
+      if (maintenance.endDate <= maintenance.startDate) {
+        maintenance.endDate = new Date(maintenance.startDate.getTime() + 60_000);
+      }
+    }
     await maintenance.save();
-    await maintenance.populate({ path: "vehicle", select: "vehicleName vehicleNumber images" });
-    return res.status(200).json({ success: true, message: "Maintenance updated successfully", data: maintenance });
+    const vehicleChanged = String(previousVehicle) !== String(maintenance.vehicle);
+    if (vehicleChanged) {
+      await releaseVehicleFromMaintenance({
+        _id: maintenance._id,
+        vehicle: previousVehicle,
+      });
+    }
+    if (TERMINAL_MAINTENANCE_STATUSES.includes(maintenance.status)) {
+      if (
+        maintenance.status !== previousStatus ||
+        vehicleChanged ||
+        mongoose.connection?.readyState === 1
+      ) {
+        await releaseVehicleFromMaintenance(maintenance);
+      }
+    } else if (
+      TERMINAL_MAINTENANCE_STATUSES.includes(previousStatus) ||
+      vehicleChanged ||
+      mongoose.connection?.readyState === 1
+    ) {
+      await markVehicleInServiceForMaintenance(
+        maintenance.vehicle,
+        maintenance,
+        req.user?._id,
+      );
+    }
+    const populated = (await maintenance.populate([
+      { path: "vehicle", select: "vehicleName vehicleNumber images status" },
+      { path: "createdBy", select: "name fullName email role" },
+      { path: "statusHistory.changedBy", select: "name fullName role" },
+    ])) || maintenance;
+    return res.status(200).json({
+      success: true,
+      message: "Maintenance updated successfully",
+      vehicleStatus: populated.vehicle?.status || null,
+      data: populated,
+    });
   } catch (error) {
     next(error);
   }
@@ -1007,12 +1374,19 @@ export const updateMaintenanceStatus = async (req, res, next) => {
       });
     }
 
-    // No-op if status hasn't actually changed
+    // No-op if status hasn't actually changed (still ensure terminal status releases vehicle)
     if (maintenance.status === status) {
+      if (TERMINAL_MAINTENANCE_STATUSES.includes(status)) {
+        await releaseVehicleFromMaintenance(maintenance);
+      }
+      const populatedUnchanged = (await maintenance.populate([
+        { path: "vehicle", select: "vehicleName vehicleNumber images status" },
+      ])) || maintenance;
       return res.status(200).json({
         success: true,
         message: "Status unchanged",
-        data: maintenance,
+        vehicleStatus: populatedUnchanged?.vehicle?.status || null,
+        data: populatedUnchanged,
       });
     }
 
@@ -1047,54 +1421,15 @@ export const updateMaintenanceStatus = async (req, res, next) => {
 
     await maintenance.save();
 
-    /* ===============================
-       COMPLETED -> RESET VEHICLE TO "available" - TEMPORARILY DISABLED
-    =============================== */
-
-    // if (status === "Completed") {
-    //   try {
-    //     const updatedVehicle = await Vehicle.findByIdAndUpdate(
-    //       maintenance.vehicle,
-    //       {
-    //         $set: {
-    //           status: "available",
-    //           "maintenance.required": false,
-    //           "maintenance.currentMaintenance": null,
-    //           "maintenance.reason": "",
-    //           "maintenance.estimatedDays": 0,
-    //           "maintenance.estimatedCompletionDate": null,
-    //           "maintenance.markedBy": null,
-    //           "maintenance.markedAt": null,
-    //         },
-    //       },
-    //       { new: true },
-    //     );
-
-    //     if (!updatedVehicle) {
-    //       // Roll back the status change if the vehicle couldn't be updated,
-    //       // so the maintenance record and vehicle stay in sync.
-    //       maintenance.status = previousStatus;
-    //       maintenance.completedDate = null;
-    //       maintenance.completionProof = undefined;
-    //       maintenance.statusHistory.pop();
-    //       await maintenance.save();
-
-    //       return res.status(500).json({
-    //         success: false,
-    //         message:
-    //           "Maintenance was updated but the linked vehicle could not be found to reset its status",
-    //       });
-    //     }
-    //   } catch (vehicleUpdateError) {
-    //     // Roll back the status change on error too
-    //     maintenance.status = previousStatus;
-    //     maintenance.completedDate = null;
-    //     maintenance.completionProof = undefined;
-    //     maintenance.statusHistory.pop();
-    //     await maintenance.save();
-    //     throw vehicleUpdateError;
-    //   }
-    // }
+    if (TERMINAL_MAINTENANCE_STATUSES.includes(status)) {
+      await releaseVehicleFromMaintenance(maintenance);
+    } else if (TERMINAL_MAINTENANCE_STATUSES.includes(previousStatus)) {
+      await markVehicleInServiceForMaintenance(
+        maintenance.vehicle,
+        maintenance,
+        req.user?._id,
+      );
+    }
 
     const populated = await Maintenance.findById(maintenance._id)
       .populate({
@@ -1102,13 +1437,14 @@ export const updateMaintenanceStatus = async (req, res, next) => {
         select:
           "vehicleName vehicleNumber manufacturer model variant vehicleType fuelType transmission seatingCapacity images status",
       })
-      .populate({ path: "createdBy", select: "name fullName email" })
-      .populate({ path: "statusHistory.changedBy", select: "name fullName" })
+      .populate({ path: "createdBy", select: "name fullName email role" })
+      .populate({ path: "statusHistory.changedBy", select: "name fullName role" })
       .lean();
 
     return res.status(200).json({
       success: true,
       message: "Status updated successfully",
+      vehicleStatus: populated?.vehicle?.status || null,
       data: populated,
     });
   } catch (error) {
