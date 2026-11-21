@@ -2685,6 +2685,7 @@ export const createLeadBooking = async (req, res, next) => {
       lead: lead._id,
       company: companyId,
       createdBy: req.user._id,
+      bookingSource: "dashboard",
 
       customerName: customerName?.trim() || lead.customerName,
       mobileNumber: mobileNumber?.trim() || lead.mobileNumber,
@@ -3642,6 +3643,7 @@ export const createBookings = async (req, res, next) => {
           company: companyId,
 
           createdBy: req.user._id,
+          bookingSource: "dashboard",
 
           customerName: customerName.trim(),
 

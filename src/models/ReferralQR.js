@@ -11,6 +11,29 @@ const claimDetailsSchema = new mongoose.Schema(
   { _id: false }
 );
 
+// Who assigned it: copied from the logged-in team member / admin
+const assignerSchema = new mongoose.Schema(
+  {
+    userId: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+    name: { type: String, trim: true },
+    mobile: { type: String, trim: true },
+    email: { type: String, trim: true },
+    role: { type: String, trim: true },
+  },
+  { _id: false }
+);
+
+const historySchema = new mongoose.Schema(
+  {
+    action: { type: String, enum: ["assigned", "unassigned", "revoked"], required: true },
+    customerId: { type: mongoose.Schema.Types.ObjectId, ref: "Customer", default: null },
+    customerName: { type: String, trim: true },
+    by: { type: assignerSchema },
+    at: { type: Date, default: Date.now },
+  },
+  { _id: false }
+);
+
 const referralQRSchema = new mongoose.Schema(
   {
     token: {
@@ -35,8 +58,9 @@ const referralQRSchema = new mongoose.Schema(
     },
     partnerId: {
       type: mongoose.Schema.Types.ObjectId,
-      ref: "Partner",
+      ref: "Customer",
       default: null,
+      index: true,
     },
 
     // Filled when someone registers the QR from the pop-up form
@@ -49,11 +73,19 @@ const referralQRSchema = new mongoose.Schema(
       default: null,
     },
 
-    // Filled when an admin approves it
+    // Filled when assigned
     assignedAt: {
       type: Date,
       default: null,
     },
+
+    // Team member / Admin who assigned it
+    executiveId: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null, index: true },
+    executiveName: { type: String, trim: true, default: null },
+    assignedBy: { type: assignerSchema, default: null },
+
+    // Audit trail of assignment history
+    history: { type: [historySchema], default: [] },
   },
   { timestamps: true }
 );

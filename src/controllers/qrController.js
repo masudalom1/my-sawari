@@ -1,8 +1,22 @@
+import mongoose from "mongoose";
 import ReferralQR from "../models/ReferralQR.js";
+import Customer from "../models/customer.model.js";
 
 const CODE_REGEX = /^[A-HJKMNP-Z2-9]{6}$/;
 const MAX_BULK = Number(process.env.QR_MAX_BULK || 1000);
 const escapeRegex = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const maskMobile = (m) => {
+  const s = String(m || "").replace(/\D/g, "").slice(-10);
+  return s.length === 10 ? `${s.slice(0, 2)}••••${s.slice(-4)}` : s;
+};
+
+const assignerFrom = (user) => ({
+  userId: user?._id,
+  name: user?.fullName || user?.name || "Admin",
+  mobile: user?.mobileNumber || "",
+  email: user?.email || "",
+  role: user?.role || "ADMIN",
+});
 
 const STATUS_FILTER = {
   assigned: "assigned",
@@ -170,6 +184,255 @@ export const listCodes = async (req, res, next) => {
       batches,
       pagination: { page, limit, total, totalPages: Math.ceil(total / limit) },
     });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// ============================================================
+// GET /api/v1/qr/customers/search?q=
+// ============================================================
+export const searchCustomers = async (req, res, next) => {
+  try {
+    const q = String(req.query.q ?? "").trim().slice(0, 60);
+    const digits = q.replace(/\D/g, "");
+    const isNumber = /^[+\d\s-]+$/.test(q);
+
+    if (isNumber ? digits.length < 4 : q.length < 3) {
+      return res.status(400).json({ success: false, message: "Type at least 4 digits or 3 letters" });
+    }
+
+    const match = isNumber
+      ? { mobileNumber: new RegExp(escapeRegex(digits.slice(-10))) }
+      : { customerName: new RegExp(escapeRegex(q), "i") };
+
+    const users = await Customer.find({ status: "active", ...match })
+      .select("customerName mobileNumber")
+      .limit(10)
+      .lean();
+
+    const customers = users.map((u) => ({
+      _id: u._id,
+      name: u.customerName || "(no name)",
+      mobile: maskMobile(u.mobileNumber),
+    }));
+
+    return res.json({ success: true, customers });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// ============================================================
+// POST /api/v1/qr/qr-codes/:code/assign
+// Accepts existing customerId OR on-the-spot partner details:
+// { customerId } OR { newCustomer: { name, mobile, businessName, location } }
+// ============================================================
+export const assignCode = async (req, res, next) => {
+  try {
+    const code = normalizeCode(req.params.code);
+    if (!CODE_REGEX.test(code)) {
+      return res.status(404).json({ success: false, message: "QR code not found" });
+    }
+
+    let customer = null;
+    let businessName = "";
+    let ownerName = "";
+    let location = "";
+
+    const customerId = String(req.body?.customerId ?? "").trim();
+    if (customerId && mongoose.isValidObjectId(customerId)) {
+      customer = await Customer.findOne({ _id: customerId, status: "active" })
+        .select("customerName mobileNumber")
+        .lean();
+      if (!customer) {
+        return res.status(404).json({ success: false, message: "Customer not found" });
+      }
+      ownerName = String(customer.customerName || "");
+      businessName = String(req.body?.businessName || ownerName);
+      location = String(req.body?.location || "");
+    } else {
+      const newCust = req.body?.newCustomer || req.body || {};
+      const rawMobile = String(newCust.mobile || newCust.mobileNumber || "").replace(/\D/g, "").slice(-10);
+      if (!/^[6-9]\d{9}$/.test(rawMobile)) {
+        return res.status(400).json({ success: false, message: "Choose a customer or enter a valid 10-digit mobile number" });
+      }
+
+      ownerName = String(newCust.name || newCust.ownerName || newCust.businessName || "Partner").trim();
+      businessName = String(newCust.businessName || newCust.name || ownerName).trim();
+      location = String(newCust.location || "").trim();
+
+      customer = await Customer.findOne({ mobileNumber: rawMobile, status: "active" })
+        .select("customerName mobileNumber")
+        .lean();
+
+      if (!customer) {
+        const uniqueReferralCode = () => {
+          const chars = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
+          let s = "";
+          for (let i = 0; i < 8; i++) s += chars.charAt(Math.floor(Math.random() * chars.length));
+          return s;
+        };
+
+        const created = await Customer.create({
+          customerName: ownerName,
+          mobileNumber: rawMobile,
+          referralCode: uniqueReferralCode(),
+          status: "active",
+          walletBalance: 0,
+        });
+        customer = {
+          _id: created._id,
+          customerName: created.customerName,
+          mobileNumber: created.mobileNumber,
+        };
+      }
+    }
+
+    const now = new Date();
+    const by = assignerFrom(req.user);
+
+    // Atomic: only an "available" QR can be assigned, so never twice
+    const qr = await ReferralQR.findOneAndUpdate(
+      { token: code, status: "available" },
+      {
+        $set: {
+          status: "assigned",
+          partnerId: customer._id,
+          claimedAt: now,
+          assignedAt: now,
+          executiveId: by.userId,
+          executiveName: by.name,
+          assignedBy: by,
+          claimDetails: {
+            businessName: businessName || ownerName,
+            ownerName: ownerName,
+            mobile: String(customer.mobileNumber || ""),
+            location: location || "",
+          },
+        },
+        $push: {
+          history: {
+            action: "assigned",
+            customerId: customer._id,
+            customerName: businessName || ownerName,
+            by,
+            at: now,
+          },
+        },
+      },
+      { new: true }
+    )
+      .select(PUBLIC_FIELDS)
+      .lean();
+
+    if (!qr) {
+      const existing = await ReferralQR.findOne({ token: code }).select("status").lean();
+      if (!existing) return res.status(404).json({ success: false, message: "QR code not found" });
+      if (existing.status === "revoked") {
+        return res.status(409).json({ success: false, message: "This QR code is disabled." });
+      }
+      return res.status(409).json({ success: false, message: "This QR code is already assigned." });
+    }
+
+    return res.status(201).json({ success: true, qr });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// ============================================================
+// POST /api/v1/qr/qr-codes/:code/unassign
+// ============================================================
+export const unassignCode = async (req, res, next) => {
+  try {
+    const code = normalizeCode(req.params.code);
+    if (!CODE_REGEX.test(code)) {
+      return res.status(404).json({ success: false, message: "QR code not found" });
+    }
+
+    const existing = await ReferralQR.findOne({ token: code }).lean();
+    if (!existing) {
+      return res.status(404).json({ success: false, message: "QR code not found" });
+    }
+    if (existing.status !== "assigned") {
+      return res.status(400).json({ success: false, message: "QR code is not currently assigned" });
+    }
+
+    const now = new Date();
+    const by = assignerFrom(req.user);
+
+    const qr = await ReferralQR.findOneAndUpdate(
+      { token: code, status: "assigned" },
+      {
+        $set: {
+          status: "available",
+          partnerId: null,
+          claimedAt: null,
+          assignedAt: null,
+          claimDetails: null,
+          executiveId: null,
+          executiveName: null,
+          assignedBy: null,
+        },
+        $push: {
+          history: {
+            action: "unassigned",
+            customerId: existing.partnerId,
+            customerName: existing.claimDetails?.businessName || existing.claimDetails?.ownerName || "",
+            by,
+            at: now,
+          },
+        },
+      },
+      { new: true }
+    )
+      .select(PUBLIC_FIELDS)
+      .lean();
+
+    return res.json({ success: true, qr, message: "QR code unassigned successfully" });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// ============================================================
+// POST /api/v1/qr/qr-codes/:code/revoke
+// ============================================================
+export const revokeCode = async (req, res, next) => {
+  try {
+    const code = normalizeCode(req.params.code);
+    if (!CODE_REGEX.test(code)) {
+      return res.status(404).json({ success: false, message: "QR code not found" });
+    }
+
+    const now = new Date();
+    const by = assignerFrom(req.user);
+
+    const qr = await ReferralQR.findOneAndUpdate(
+      { token: code },
+      {
+        $set: {
+          status: "revoked",
+        },
+        $push: {
+          history: {
+            action: "revoked",
+            by,
+            at: now,
+          },
+        },
+      },
+      { new: true }
+    )
+      .select(PUBLIC_FIELDS)
+      .lean();
+
+    if (!qr) {
+      return res.status(404).json({ success: false, message: "QR code not found" });
+    }
+
+    return res.json({ success: true, qr, message: "QR code revoked successfully" });
   } catch (err) {
     next(err);
   }
