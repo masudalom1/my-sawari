@@ -23,6 +23,7 @@ import membershipRoutes from "./routes/membership.routes.js";
 import { trackWriteRequests } from "./realtime/changeFeed.js";
 import PaymentsHistory from "./routes/paymentHistory.js"
 import qrRoutes from "../src/routes/qrRoutes.js"
+import apiActivityLogRoutes from "./routes/apiActivityLog.routes.js";
 
 dotenv.config();
 
@@ -181,6 +182,7 @@ app.use("/api/v1/bookings", bookingRoutes);
 app.use("/api/v1/dashboard", dashboardRoutes);
 app.use("/api/v1/dashboard/payments-history", PaymentsHistory);
 app.use("/api/v1/qr", qrRoutes);
+app.use("/api/v1/activity-logs", apiActivityLogRoutes);
 // 404
 app.use(notFound);
 
