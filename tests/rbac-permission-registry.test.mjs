@@ -95,7 +95,7 @@ test("Coming Soon modules have no route or configurable permissions", () => {
   );
   assert.deepEqual(
     comingSoon.map(({ key }) => key),
-    ["customers", "maintenance", "reports", "invoices", "notifications"],
+    ["customers", "maintenance", "invoices", "notifications"],
   );
   assert.ok(
     comingSoon.every(({ href, actions }) => href === null && actions.length === 0),

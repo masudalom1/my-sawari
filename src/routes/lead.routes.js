@@ -23,6 +23,13 @@ import {
   updateLead,
 } from "../controllers/lead.controller.js";
 import { createLeadActivity, getLeadActivities } from "../controllers/leadActivity.controller.js";
+import { getUserInterestAnalytics } from "../controllers/userInterestAnalytics.controller.js";
+import {
+  getCustomerInterestLeadHistory,
+  getInterestLeadTeam,
+  getSmartLeadInsights,
+  updateCustomerInterestLead,
+} from "../controllers/smartLeads.controller.js";
 
 const router = express.Router();
 
@@ -30,7 +37,36 @@ router.get("/dashboard", protect, requirePermission(PERMISSIONS.bookings.view), 
 router.get("/booking", protect, requirePermission(PERMISSIONS.bookings.view), getBookingsDashboard);
 router.get("/", protect, requirePermission(PERMISSIONS.bookings.view), getLeads);
 router.post("/", protect, requirePermission(PERMISSIONS.bookings.create), createLead);
+router.get("/app-installs/analytics", protect, requirePermission(PERMISSIONS.appUsers.view), getUserInterestAnalytics);
+router.get(
+  "/app-installs/smart-insights",
+  protect,
+  requirePermission(PERMISSIONS.appUsers.view),
+  requirePermission(PERMISSIONS.bookings.view),
+  getSmartLeadInsights,
+);
+router.get(
+  "/app-installs/interest-leads/team",
+  protect,
+  requirePermission(PERMISSIONS.appUsers.view),
+  requirePermission(PERMISSIONS.bookings.edit),
+  getInterestLeadTeam,
+);
 router.get("/app-installs", protect, requirePermission(PERMISSIONS.appUsers.view), getAppInstalls);
+router.get(
+  "/app-installs/:id/interest-lead",
+  protect,
+  requirePermission(PERMISSIONS.appUsers.view),
+  requirePermission(PERMISSIONS.bookings.view),
+  getCustomerInterestLeadHistory,
+);
+router.patch(
+  "/app-installs/:id/interest-lead",
+  protect,
+  requirePermission(PERMISSIONS.appUsers.view),
+  requirePermission(PERMISSIONS.bookings.edit),
+  updateCustomerInterestLead,
+);
 router.get("/app-installs/:id", protect, requirePermission(PERMISSIONS.appUsers.view), getAppUserDetail);
 router.get("/:id", protect, requirePermission(PERMISSIONS.bookings.view), getLeadById);
 router.put("/:id", protect, requirePermission(PERMISSIONS.bookings.edit), updateLead);

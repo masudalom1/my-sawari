@@ -82,15 +82,6 @@ export const PERMISSION_MODULES = Object.freeze([
     status: "coming-soon",
   },
   {
-    key: "reports",
-    label: "Reports & Analytics",
-    href: null,
-    group: "Operations",
-    navigation: true,
-    actions: [],
-    status: "coming-soon",
-  },
-  {
     key: "invoices",
     label: "Invoices",
     href: null,

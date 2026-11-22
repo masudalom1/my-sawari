@@ -603,4 +603,18 @@ bookingSchema.index({
   createdAt: -1,
 });
 
+bookingSchema.index({
+  company: 1,
+  bookingSource: 1,
+  createdAt: -1,
+});
+
+bookingSchema.index({
+  company: 1,
+  vehicleId: 1,
+  status: 1,
+  fromDate: 1,
+  toDate: 1,
+});
+
 export default mongoose.model("Booking", bookingSchema);

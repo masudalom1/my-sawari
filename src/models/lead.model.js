@@ -58,6 +58,42 @@ const leadSchema = new mongoose.Schema(
       index: true,
     },
 
+    customerId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Customer",
+      default: null,
+    },
+
+    isCustomerInterestLead: {
+      type: Boolean,
+      default: false,
+      index: true,
+    },
+
+    interestStatus: {
+      type: String,
+      enum: [
+        "New",
+        "Contacted",
+        "Interested",
+        "Follow-up Scheduled",
+        "Converted",
+        "Not Interested",
+      ],
+      default: undefined,
+    },
+
+    interestAssignedTo: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      default: null,
+    },
+
+    interestNextFollowupDate: {
+      type: Date,
+      default: null,
+    },
+
     vehicleType: {
       type: String,
       enum: ["car", "bike"],
@@ -132,6 +168,7 @@ const leadSchema = new mongoose.Schema(
         "instagram",
         "google",
         "reference",
+        "customer_app",
         "other",
       ],
       default: "other",
@@ -461,6 +498,18 @@ leadSchema.index({ company: 1, longBookingLead: 1 });
 leadSchema.index({ company: 1, bookingConfirmedAt: -1 });
 leadSchema.index({ company: 1, fromDate: 1, toDate: 1 });
 leadSchema.index({ company: 1, updatedAt: -1 });
+leadSchema.index(
+  { company: 1, customerId: 1 },
+  {
+    unique: true,
+    partialFilterExpression: {
+      isCustomerInterestLead: true,
+      customerId: { $type: "objectId" },
+      isDeleted: false,
+    },
+    name: "unique_customer_interest_lead",
+  },
+);
 
 // ================================
 // EXPORT
