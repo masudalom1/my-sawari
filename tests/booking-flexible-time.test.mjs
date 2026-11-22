@@ -22,7 +22,9 @@ function body(extra = {}) {
   sequence += 1;
   return { customerName: "Isolated time customer", mobileNumber: `920000${String(sequence).padStart(4, "0")}`,
     vehicleId, paymentMethod: "cash", fromDate: dayFromToday(sequence * 5), toDate: dayFromToday(sequence * 5 + 2),
-    pickupTime: "08:00 AM", dropTime: "08:00 AM", ...extra };
+    pickupTime: "08:00 AM", dropTime: "08:00 AM",
+    paymentDate: new Date(Date.now() - 86400000).toISOString().slice(0, 10),
+    paymentTime: "10:00", ...extra };
 }
 
 test("standard mode adds one billing day without moving the saved return date", async () => {
@@ -100,6 +102,9 @@ test("invalid times, invalid modes and reversed time ranges are rejected without
   const input = body({ pickupTime: "10:00 AM", dropTime: "09:00 AM", flexibleTime: true });
   input.toDate = input.fromDate;
   assert.equal((await api("POST", "/leads/create", input)).status, 400);
+  const zeroLength = body({ pickupTime: "10:00 AM", dropTime: "10:00 AM", flexibleTime: true });
+  zeroLength.toDate = zeroLength.fromDate;
+  assert.equal((await api("POST", "/leads/create", zeroLength)).status, 400);
   assert.equal(await Booking.countDocuments(), count);
 });
 
@@ -122,6 +127,334 @@ test("actual intervals enforce conflicts and allow use after return despite an e
   assert.match(blocked.json.message, /maintenance/);
   await Maintenance.updateOne({ _id: maintenance._id }, { status: "Completed" });
   assert.equal((await api("POST", "/leads/create", maintenanceInput)).status, 201);
+});
+
+test("exact half-open gaps save between reservations, while same-vehicle concurrent requests serialize", async () => {
+  const pickupDate = dayFromToday(500);
+  const returnDate = dayFromToday(501);
+  const before = await api("POST", "/leads/create", body({
+    fromDate: dayFromToday(499),
+    toDate: pickupDate,
+    pickupTime: "08:00 AM",
+    dropTime: "03:00 PM",
+  }));
+  assert.equal(before.status, 201, before.json.message);
+  const fullAvailabilityImport = await api("GET", "/dashboard/bookings/import");
+  assert.equal(fullAvailabilityImport.status, 200);
+  assert.ok(
+    fullAvailabilityImport.json.bookings.some(
+      (booking) =>
+        booking._id === before.json.booking._id &&
+        booking.fromDate.slice(0, 10) === dayFromToday(499),
+    ),
+    "availability import retains a reservation that began before the requested day",
+  );
+  const after = await api("POST", "/leads/create", body({
+    fromDate: returnDate,
+    toDate: dayFromToday(502),
+    pickupTime: "11:00 AM",
+    dropTime: "08:00 AM",
+  }));
+  assert.equal(after.status, 201, after.json.message);
+
+  const early = await api("POST", "/leads/create", body({
+    fromDate: pickupDate,
+    toDate: returnDate,
+    pickupTime: "02:59 PM",
+    dropTime: "11:00 AM",
+    flexibleTime: true,
+  }));
+  assert.equal(early.status, 409);
+  assert.equal(early.json.code, "BOOKING_AVAILABILITY_CONFLICT");
+  const late = await api("POST", "/leads/create", body({
+    fromDate: pickupDate,
+    toDate: returnDate,
+    pickupTime: "03:00 PM",
+    dropTime: "11:01 AM",
+    flexibleTime: true,
+  }));
+  assert.equal(late.status, 409);
+
+  const exact = await api("POST", "/leads/create", body({
+    fromDate: pickupDate,
+    toDate: returnDate,
+    pickupTime: "03:00 PM",
+    dropTime: "11:00 AM",
+    flexibleTime: true,
+  }));
+  assert.equal(exact.status, 201, exact.json.message);
+  const timeline = await api("GET", "/dashboard/bookings/import");
+  const inTimeline = timeline.json.bookings.find(
+    (booking) => booking._id === exact.json.booking._id,
+  );
+  assert.ok(inTimeline, "new booking is visible in the fleet timeline");
+  assert.equal(inTimeline.fromDate.slice(0, 10), pickupDate);
+  assert.equal(inTimeline.toDate.slice(0, 10), returnDate);
+  assert.equal(inTimeline.pickupTime, "03:00 PM");
+  assert.equal(inTimeline.dropTime, "11:00 AM");
+
+  const otherVehicle = await api("POST", "/vehicles/create", {
+    vehicleName: "Independent availability fixture",
+    vehicleNumber: "KA01IF0500",
+    manufacturer: "Test",
+    fuelType: "Petrol",
+    transmission: "Manual",
+    seatingCapacity: 5,
+  });
+  assert.equal(otherVehicle.status, 201, otherVehicle.json.message);
+  const otherVehicleBooking = await api("POST", "/leads/create", body({
+    vehicleId: otherVehicle.json.data._id,
+    fromDate: pickupDate,
+    toDate: returnDate,
+    pickupTime: "03:00 PM",
+    dropTime: "11:00 AM",
+    flexibleTime: true,
+  }));
+  assert.equal(otherVehicleBooking.status, 201, otherVehicleBooking.json.message);
+
+  const concurrentDate = dayFromToday(900);
+  const concurrentPayload = () => body({
+    fromDate: concurrentDate,
+    toDate: dayFromToday(901),
+    pickupTime: "10:00 AM",
+    dropTime: "10:00 AM",
+    flexibleTime: true,
+  });
+  const concurrent = await Promise.all([
+    api("POST", "/leads/create", concurrentPayload()),
+    api("POST", "/leads/create", concurrentPayload()),
+  ]);
+  assert.deepEqual(concurrent.map(({ status }) => status).sort(), [201, 409]);
+  assert.equal(
+    concurrent.find(({ status }) => status === 409).json.code,
+    "BOOKING_AVAILABILITY_CONFLICT",
+  );
+});
+
+test("same-day one-hour and next-day exact-boundary bookings pass availability query and save", async () => {
+  const sameDay = dayFromToday(1200);
+  const previousDay = dayFromToday(1199);
+  const before = await api("POST", "/leads/create", body({
+    fromDate: previousDay,
+    toDate: sameDay,
+    pickupTime: "08:00 AM",
+    dropTime: "08:00 AM",
+    flexibleTime: true,
+  }));
+  assert.equal(before.status, 201, before.json.message);
+  const after = await api("POST", "/leads/create", body({
+    fromDate: sameDay,
+    toDate: sameDay,
+    pickupTime: "09:00 AM",
+    dropTime: "11:00 AM",
+    flexibleTime: true,
+  }));
+  assert.equal(after.status, 201, after.json.message);
+
+  const availableVehicles = async (pickupTime, dropTime) => api(
+    "GET",
+    `/vehicles/available?${new URLSearchParams({
+      fromDate: sameDay,
+      toDate: sameDay,
+      pickupTime,
+      dropTime,
+    })}`,
+  );
+  const vehicleIds = async (pickupTime, dropTime) => (
+    await availableVehicles(pickupTime, dropTime)
+  ).json.data.map((vehicle) => String(vehicle._id));
+  assert.ok((await vehicleIds("08:00 AM", "09:00 AM")).includes(String(vehicleId)));
+  assert.ok(!(await vehicleIds("07:59 AM", "09:00 AM")).includes(String(vehicleId)));
+  assert.ok(!(await vehicleIds("08:00 AM", "09:01 AM")).includes(String(vehicleId)));
+
+  const early = await api("POST", "/leads/create", body({
+    fromDate: sameDay,
+    toDate: sameDay,
+    pickupTime: "07:59 AM",
+    dropTime: "09:00 AM",
+    flexibleTime: true,
+  }));
+  assert.equal(early.status, 409);
+  const late = await api("POST", "/leads/create", body({
+    fromDate: sameDay,
+    toDate: sameDay,
+    pickupTime: "08:00 AM",
+    dropTime: "09:01 AM",
+    flexibleTime: true,
+  }));
+  assert.equal(late.status, 409);
+  const zeroLength = await api("POST", "/leads/create", body({
+    fromDate: sameDay,
+    toDate: sameDay,
+    pickupTime: "08:00 AM",
+    dropTime: "08:00 AM",
+    flexibleTime: true,
+  }));
+  assert.equal(zeroLength.status, 400);
+
+  const exact = await api("POST", "/leads/create", body({
+    fromDate: sameDay,
+    toDate: sameDay,
+    pickupTime: "08:00 AM",
+    dropTime: "09:00 AM",
+    flexibleTime: true,
+  }));
+  assert.equal(exact.status, 201, exact.json.message);
+  assert.equal(exact.json.booking.fromDate.slice(0, 10), sameDay);
+  assert.equal(exact.json.booking.toDate.slice(0, 10), sameDay);
+  assert.equal(exact.json.booking.pickupTime, "08:00 AM");
+  assert.equal(exact.json.booking.dropTime, "09:00 AM");
+  const sameDayTimeline = await api("GET", "/dashboard/bookings/import");
+  const savedSameDay = sameDayTimeline.json.bookings.find(
+    (booking) => booking._id === exact.json.booking._id,
+  );
+  assert.ok(savedSameDay, "same-day booking appears in the fleet timeline");
+  assert.equal(savedSameDay.fromDate.slice(0, 10), sameDay);
+  assert.equal(savedSameDay.toDate.slice(0, 10), sameDay);
+  assert.equal(savedSameDay.pickupTime, "08:00 AM");
+  assert.equal(savedSameDay.dropTime, "09:00 AM");
+
+  const crossingDate = dayFromToday(1210);
+  const middleBlock = await api("POST", "/leads/create", body({
+    fromDate: crossingDate,
+    toDate: crossingDate,
+    pickupTime: "12:00 PM",
+    dropTime: "01:00 PM",
+    flexibleTime: true,
+  }));
+  assert.equal(middleBlock.status, 201, middleBlock.json.message);
+  const crossing = await api("POST", "/leads/create", body({
+    fromDate: crossingDate,
+    toDate: crossingDate,
+    pickupTime: "10:00 AM",
+    dropTime: "02:00 PM",
+    flexibleTime: true,
+  }));
+  assert.equal(crossing.status, 409);
+
+  const overnightDate = dayFromToday(1220);
+  const nextDay = dayFromToday(1221);
+  const priorToOvernight = await api("POST", "/leads/create", body({
+    fromDate: dayFromToday(1219),
+    toDate: overnightDate,
+    pickupTime: "08:00 AM",
+    dropTime: "08:00 AM",
+    flexibleTime: true,
+  }));
+  assert.equal(priorToOvernight.status, 201, priorToOvernight.json.message);
+  const afterOvernight = await api("POST", "/leads/create", body({
+    fromDate: nextDay,
+    toDate: dayFromToday(1222),
+    pickupTime: "08:00 AM",
+    dropTime: "08:00 AM",
+    flexibleTime: true,
+  }));
+  assert.equal(afterOvernight.status, 201, afterOvernight.json.message);
+  const overnight = await api("POST", "/leads/create", body({
+    fromDate: overnightDate,
+    toDate: nextDay,
+    pickupTime: "08:00 AM",
+    dropTime: "08:00 AM",
+    flexibleTime: true,
+  }));
+  assert.equal(overnight.status, 201, overnight.json.message);
+
+  const secondVehicle = await api("POST", "/vehicles/create", {
+    vehicleName: "Independent one-hour fixture",
+    vehicleNumber: "KA01OH0801",
+    manufacturer: "Test",
+    fuelType: "Petrol",
+    transmission: "Manual",
+    seatingCapacity: 5,
+  });
+  assert.equal(secondVehicle.status, 201, secondVehicle.json.message);
+  const secondVehicleId = secondVehicle.json.data._id;
+  const secondBefore = await api("POST", "/leads/create", body({
+    vehicleId: secondVehicleId,
+    fromDate: previousDay,
+    toDate: sameDay,
+    pickupTime: "08:00 AM",
+    dropTime: "08:00 AM",
+    flexibleTime: true,
+  }));
+  assert.equal(secondBefore.status, 201, secondBefore.json.message);
+  const secondAfter = await api("POST", "/leads/create", body({
+    vehicleId: secondVehicleId,
+    fromDate: sameDay,
+    toDate: sameDay,
+    pickupTime: "09:00 AM",
+    dropTime: "11:00 AM",
+    flexibleTime: true,
+  }));
+  assert.equal(secondAfter.status, 201, secondAfter.json.message);
+  assert.ok(
+    (await vehicleIds("08:00 AM", "09:00 AM")).includes(String(secondVehicleId)),
+    "a vehicle with its own exact gap remains available even when another vehicle has booked that slot",
+  );
+  const secondExact = await api("POST", "/leads/create", body({
+    vehicleId: secondVehicleId,
+    fromDate: sameDay,
+    toDate: sameDay,
+    pickupTime: "08:00 AM",
+    dropTime: "09:00 AM",
+    flexibleTime: true,
+  }));
+  assert.equal(secondExact.status, 201, secondExact.json.message);
+  assert.equal(
+    (await vehicleIds("08:00 AM", "09:00 AM")).includes(String(secondVehicleId)),
+    false,
+    "both vehicles are occupied once their exact one-hour gaps are booked",
+  );
+  assert.equal(
+    (await api("POST", "/leads/create", body({
+      vehicleId: secondVehicleId,
+      fromDate: sameDay,
+      toDate: sameDay,
+      pickupTime: "07:59 AM",
+      dropTime: "09:00 AM",
+      flexibleTime: true,
+    }))).status,
+    409,
+  );
+  assert.equal(
+    (await api("POST", "/leads/create", body({
+      vehicleId: secondVehicleId,
+      fromDate: sameDay,
+      toDate: sameDay,
+      pickupTime: "08:00 AM",
+      dropTime: "09:01 AM",
+      flexibleTime: true,
+    }))).status,
+    409,
+  );
+
+  const secondOvernightBefore = await api("POST", "/leads/create", body({
+    vehicleId: secondVehicleId,
+    fromDate: dayFromToday(1219),
+    toDate: overnightDate,
+    pickupTime: "08:00 AM",
+    dropTime: "08:00 AM",
+    flexibleTime: true,
+  }));
+  assert.equal(secondOvernightBefore.status, 201, secondOvernightBefore.json.message);
+  const secondOvernightAfter = await api("POST", "/leads/create", body({
+    vehicleId: secondVehicleId,
+    fromDate: nextDay,
+    toDate: dayFromToday(1222),
+    pickupTime: "08:00 AM",
+    dropTime: "08:00 AM",
+    flexibleTime: true,
+  }));
+  assert.equal(secondOvernightAfter.status, 201, secondOvernightAfter.json.message);
+  const secondOvernight = await api("POST", "/leads/create", body({
+    vehicleId: secondVehicleId,
+    fromDate: overnightDate,
+    toDate: nextDay,
+    pickupTime: "08:00 AM",
+    dropTime: "08:00 AM",
+    flexibleTime: true,
+  }));
+  assert.equal(secondOvernight.status, 201, secondOvernight.json.message);
 });
 
 test("historical bookings keep their absent mode, saved times and fare on reopen and edit", async () => {

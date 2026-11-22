@@ -3245,9 +3245,13 @@ export const createBookings = async (req, res, next) => {
 
     const now = new Date();
 
-    const todayUTC = new Date(
-      Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()),
-    );
+    const todayKey = new Intl.DateTimeFormat("en-CA", {
+      timeZone: "Asia/Kolkata",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).format(now);
+    const todayUTC = new Date(`${todayKey}T00:00:00.000Z`);
 
     if (finalFromDate < todayUTC) {
       return res.status(400).json({
@@ -3438,6 +3442,19 @@ export const createBookings = async (req, res, next) => {
     // CHECK BOOKING CONFLICT
     // ============================================================
 
+    const availabilityLock = await Vehicle.updateOne(
+      { _id: vehicle._id, isDeleted: false },
+      { $inc: { bookingAvailabilityVersion: 1 } },
+      { session },
+    );
+    if (availabilityLock.matchedCount !== 1) {
+      await session.abortTransaction();
+      return res.status(404).json({
+        success: false,
+        message: "Vehicle not found.",
+      });
+    }
+
     const newStart = new Date(bookingTimestamp(finalFromDate, finalPickupTime));
     const newEnd = new Date(bookingTimestamp(finalToDate, finalDropTime));
 
@@ -3471,7 +3488,8 @@ export const createBookings = async (req, res, next) => {
 
       return res.status(409).json({
         success: false,
-        message: "This vehicle is already booked during the selected dates.",
+        code: "BOOKING_AVAILABILITY_CONFLICT",
+        message: "This vehicle is already booked during the selected date and time range. Refresh availability and choose another slot.",
         conflict: {
           bookingId: existingBooking._id,
           bookingCode: existingBooking.bookingCode || null,
@@ -3502,6 +3520,7 @@ export const createBookings = async (req, res, next) => {
 
       return res.status(409).json({
         success: false,
+        code: "MAINTENANCE_AVAILABILITY_CONFLICT",
         message: "This vehicle has maintenance during the selected dates.",
         conflict: {
           maintenanceId: existingMaintenance._id,
@@ -3939,11 +3958,12 @@ export const createBookings = async (req, res, next) => {
     ) {
       return res.status(409).json({
         success: false,
+        code: "BOOKING_AVAILABILITY_CONFLICT",
 
         message:
           membershipSavingsAttempted
             ? "Vehicle availability or membership savings changed. Refresh and try again."
-            : "This vehicle was just booked by someone else for overlapping dates. Please refresh and try again.",
+            : "Vehicle availability changed while saving. Refresh availability and review the selected time range.",
       });
     }
 

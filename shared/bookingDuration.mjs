@@ -45,7 +45,7 @@ export function bookingDuration({ fromDate, toDate, flexibleTime = false, pickup
   const from = calendarDay(fromDate), to = calendarDay(toDate);
   const pickupMinutes = bookingTimeMinutes(pickupTime), dropMinutes = bookingTimeMinutes(dropTime);
   if (typeof flexibleTime !== "boolean" || from === null || to === null || to < from || pickupMinutes === null || dropMinutes === null) return null;
-  if (to + dropMinutes * 60000 < from + pickupMinutes * 60000) return null;
+  if (to + dropMinutes * 60000 <= from + pickupMinutes * 60000) return null;
   const baseDays = Math.max(1, Math.round((to - from) / 86400000));
   const extraDays = hasExtraRentalDay({ flexibleTime, dropTime }) ? 1 : 0;
   return { baseDays, extraDays, days: baseDays + extraDays, pickupMinutes, dropMinutes };

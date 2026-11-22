@@ -75,6 +75,11 @@ const vehicleSchema = new mongoose.Schema(
       default: 0,
       min: 0,
     },
+    bookingAvailabilityVersion: {
+      type: Number,
+      default: 0,
+      select: false,
+    },
     category: {
       type: String,
       enum: ["bike", "car"],
