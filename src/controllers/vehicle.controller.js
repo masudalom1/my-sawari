@@ -625,7 +625,7 @@ export const deleteVehicle = async (req, res, next) => {
 
     await Vehicle.updateOne(
       { _id: vehicle._id },
-      { $set: { isDeleted: true } }
+      { $set: { isDeleted: true, deletedAt: new Date() } }
     );
 
     return res.status(200).json({

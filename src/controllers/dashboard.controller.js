@@ -84,9 +84,7 @@ function exchangeHistory(handover) {
 
 export const getVehiclesForImport = async (req, res) => {
   try {
-    const vehicles = await Vehicle.find({
-      isDeleted: false,
-    })
+    const vehicles = await Vehicle.find({})
       .select({
         vehicleName: 1,
         vehicleNumber: 1,
@@ -94,6 +92,9 @@ export const getVehiclesForImport = async (req, res) => {
         category: 1,
         status: 1,
         pricePerDay: 1,
+        createdAt: 1,
+        deletedAt: 1,
+        isDeleted: 1,
         images: { $slice: 1 }, // only the first image is returned below
       })
       .sort({ pricePerDay: 1 })
@@ -111,6 +112,9 @@ export const getVehiclesForImport = async (req, res) => {
       image: vehicle.images?.[0]?.url || null,
       status: vehicle.status,
       pricePerDay: vehicle.pricePerDay || 0,
+      createdAt: vehicle.createdAt || null,
+      deletedAt: vehicle.deletedAt || null,
+      isDeleted: vehicle.isDeleted === true,
     }));
 
     return res.status(200).json({
