@@ -155,7 +155,6 @@ const paymentHistorySchema = new mongoose.Schema(
 
     paymentMethod: {
       type: String,
-      enum: ["cash", "phonepe", "gpay", "razorpay", "mixed"],
       default: "cash",
     },
 

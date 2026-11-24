@@ -207,7 +207,6 @@ const bookingSchema = new mongoose.Schema(
     fastagBalance: { type: Number, min: 0 },
     paymentMethod: {
       type: String,
-      enum: ["cash", "phonepe", "gpay", "razorpay", "mixed"],
     },
     payment: {
       paymentDate: {
@@ -303,7 +302,6 @@ const bookingSchema = new mongoose.Schema(
 
       paymentMethod: {
         type: String,
-        enum: ["cash", "phonepe", "gpay", "razorpay", "mixed"],
         default: "cash",
       },
 
