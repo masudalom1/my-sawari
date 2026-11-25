@@ -459,6 +459,18 @@ const bookingSchema = new mongoose.Schema(
       index: true,
     },
 
+    cancellationReason: {
+      type: String,
+      default: "",
+      trim: true,
+      maxlength: 500,
+    },
+    cancelledAt: Date,
+    cancelledBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+    },
+
     // =========================
     // HANDOVER
     // =========================

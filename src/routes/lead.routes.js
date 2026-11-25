@@ -13,6 +13,7 @@ import {
   getBookingsDashboard,
   getAppInstalls,
   getAppUserDetail,
+  getBookingCancellationDetails,
   getLeadBookingDetails,
   getLeadBookings,
   getLeadById,
@@ -69,6 +70,12 @@ router.patch(
 );
 router.get("/app-installs/:id", protect, requirePermission(PERMISSIONS.appUsers.view), getAppUserDetail);
 router.get("/:id", protect, requirePermission(PERMISSIONS.bookings.view), getLeadById);
+router.get(
+  "/:id/cancellation-details",
+  protect,
+  requirePermission(PERMISSIONS.bookings.edit),
+  getBookingCancellationDetails,
+);
 router.put("/:id", protect, requirePermission(PERMISSIONS.bookings.edit), updateLead);
 
 router.get("/:id/history", protect, requirePermission(PERMISSIONS.bookings.view), getLeadHistory);
