@@ -5,6 +5,9 @@ import Handover from "../models/handover.model.js";
 import PaymentHistory from "../models/paymentHistory.model.js";
 import RefundRequest from "../models/refundRequest.model.js";
 import { createRefundRequest } from "../services/createRefundRequest.js";
+import { refundRequestView as requestView } from "../services/refundRequestView.js";
+import axios from "axios";
+import cloudinary from "../config/cloudinary.js";
 import { getCurrentRefundableBalance } from "../services/refundBalance.js";
 import {
   addDayKeys,
@@ -82,37 +85,31 @@ function summaryExpressions(today, monthStart, nextMonthStart) {
     };
 }
 
-function requestView(request) {
-  const booking =
-    request.bookingId && typeof request.bookingId === "object" &&
-      !mongoose.isObjectIdOrHexString(request.bookingId)
-      ? request.bookingId
-      : null;
-  return {
-    ...request,
-    status: request.status?.charAt(0).toUpperCase() + request.status?.slice(1).toLowerCase(),
-    bookingId: booking?._id || request.bookingId || null,
-    booking: booking
-      ? {
-          _id: booking._id,
-          bookingCode: booking.bookingCode || "",
-          status: booking.status || "",
-          fromDate: booking.fromDate || null,
-          toDate: booking.toDate || null,
-        }
-      : null,
-    customerName: request.customerName || booking?.customerName || "",
-    customerMobile: request.customerMobile || booking?.mobileNumber || "",
-    vehicleName: request.vehicleName || booking?.vehicleName || "",
-    vehicleNumber: request.vehicleNumber || booking?.vehicleNumber || "",
-    bookingAmount: request.bookingAmount || booking?.bookingAmount || 0,
-    requestedAt: request.requestedAt || request.createdAt,
-  };
+function populatedRequests(query, company) {
+  const actorScope = { $or: [{ _id: company }, { createdBy: company }] };
+  return query.populate({
+    path: "bookingId",
+    match: { company, isDeleted: { $ne: true } },
+    select: "bookingCode customerName mobileNumber vehicleName vehicleNumber bookingAmount status fromDate toDate",
+    transform: (booking, id) => booking || id,
+  }).populate(["requestedBy", "approvedBy", "rejectedBy", "refundedBy"].map((path) => ({
+    path, match: actorScope, select: "fullName",
+  })));
+}
+
+function parseRequestFilters(query) {
+  const { q = "", status = "All" } = query;
+  if (typeof q !== "string" || q.length > 120 || typeof status !== "string" ||
+    !["all", "pending", "approved", "refunded", "rejected"].includes(status.toLowerCase())) {
+    throw new ApiError(400, "Invalid refund request filters.");
+  }
+  return { search: q.trim().toLowerCase(), status: status.toLowerCase() };
 }
 
 export const getRefundRequests = async (req, res, next) => {
   try {
     const company = companyFor(req.user);
+    const filters = parseRequestFilters(req.query);
     const today = toDayKey(new Date());
     const [year, month] = today.slice(0, 7).split("-").map(Number);
     const monthStart = `${today.slice(0, 7)}-01`;
@@ -121,20 +118,16 @@ export const getRefundRequests = async (req, res, next) => {
       .slice(0, 10);
 
     const [requests, summaryResult] = await Promise.all([
-      RefundRequest.find({ company })
-        .sort({ createdAt: -1, _id: -1 })
-        .populate({
-          path: "bookingId",
-          select:
-            "bookingCode customerName mobileNumber vehicleName vehicleNumber bookingAmount status fromDate toDate",
-        })
-        .populate("requestedBy", "fullName mobileNumber")
-        .populate("approvedBy", "fullName")
-        .populate("rejectedBy", "fullName")
-        .populate("refundedBy", "fullName")
+      // Unattributed legacy rows (company null/missing) are deliberately excluded.
+      populatedRequests(RefundRequest.find({ company }).sort({ createdAt: -1, _id: -1 }), company)
         .lean(),
       RefundRequest.aggregate([
         { $match: { company: new mongoose.Types.ObjectId(String(company)) } },
+        { $set: { refundedAt: { $ifNull: ["$refundedAt", { $max: { $map: {
+          input: { $filter: { input: { $ifNull: ["$statusHistory", []] }, as: "event",
+            cond: { $eq: [{ $toLower: "$$event.status" }, "refunded"] } } },
+          as: "event", in: "$$event.at",
+        } } }] } } },
         summaryExpressions(today, monthStart, nextMonthStart),
       ]),
     ]);
@@ -142,7 +135,14 @@ export const getRefundRequests = async (req, res, next) => {
     const summary = summaryResult[0] || {};
     return res.status(200).json({
       success: true,
-      data: requests.map(requestView),
+      data: requests.map(requestView).filter((request) => {
+        if (filters.status !== "all" && request.status.toLowerCase() !== filters.status) return false;
+        return !filters.search || [request.customerName, request.customerMobile, request.upiId,
+          request.transactionReference, request.requestedBy.fullName, request.reason,
+          request.vehicleName, request.vehicleNumber, request.booking?.bookingCode,
+          ...request.statusHistory.map((entry) => entry.byName),
+        ].filter(Boolean).join(" ").toLowerCase().includes(filters.search);
+      }),
       summary: {
         refundedToday: {
           amount: summary.refundedTodayAmount || 0,
@@ -161,6 +161,64 @@ export const getRefundRequests = async (req, res, next) => {
   } catch (error) {
     next(error);
   }
+};
+
+export const getRefundRequest = async (req, res, next) => {
+  try {
+    requireObjectId(req.params.id, "refund request id");
+    const company = companyFor(req.user);
+    const request = await populatedRequests(RefundRequest.findOne({ _id: req.params.id, company }), company).lean();
+    if (!request) throw new ApiError(404, "Refund request not found.");
+    return res.status(200).json({ success: true, data: requestView(request) });
+  } catch (error) { next(error); }
+};
+
+export const getRefundAttachment = async (req, res, next) => {
+  try {
+    requireObjectId(req.params.id, "refund request id");
+    const fields = { customer: "proofImageUrl", completion: "completionProofImageUrl" };
+    const field = fields[req.params.kind];
+    if (!field) throw new ApiError(404, "Attachment not found.");
+    const request = await RefundRequest.findOne({ _id: req.params.id, company: companyFor(req.user) })
+      .select("proofImageUrl completionProofImageUrl").lean();
+    if (!request?.[field]) throw new ApiError(404, "Attachment not found.");
+    const url = new URL(request[field]);
+    const cloudName = cloudinary.config().cloud_name;
+    const prefix = `/${cloudName}/image/`;
+    if (url.protocol !== "https:" || url.hostname !== "res.cloudinary.com" ||
+      url.port || url.username || url.password || !url.pathname.startsWith(prefix)) {
+      throw new ApiError(422, "This legacy attachment needs to be moved to the approved file store.");
+    }
+    const [delivery, ...segments] = url.pathname.slice(prefix.length).split("/");
+    if (!["upload", "authenticated"].includes(delivery)) {
+      throw new ApiError(422, "Unsupported attachment storage type.");
+    }
+    let downloadUrl = url.href;
+    if (delivery === "authenticated") {
+      if (segments[0]?.startsWith("s--")) segments.shift();
+      if (/^v\d+$/.test(segments[0])) segments.shift();
+      const publicId = segments.join("/");
+      if (!publicId.startsWith("my-sawari/refunds/") || !/\.(png|jpe?g|webp)$/i.test(publicId)) {
+        throw new ApiError(422, "Invalid attachment reference.");
+      }
+      downloadUrl = cloudinary.url(publicId, { secure: true, sign_url: true, type: "authenticated", resource_type: "image" });
+    }
+    const image = await axios.get(downloadUrl, {
+      responseType: "arraybuffer", timeout: 15000, maxContentLength: 10 * 1024 * 1024,
+      maxRedirects: 0,
+    });
+    const contentType = String(image.headers["content-type"] || "").split(";")[0];
+    if (!["image/png", "image/jpeg", "image/webp"].includes(contentType)) {
+      throw new ApiError(422, "The attachment is not a supported image.");
+    }
+    res.set({ "Content-Type": contentType, "X-Content-Type-Options": "nosniff", "Cache-Control": "private, no-store" });
+    return res.status(200).send(Buffer.from(image.data));
+  } catch (error) { next(error); }
+};
+
+export const uploadRefundAttachment = (req, res, next) => {
+  if (!req.file?.path) return next(new ApiError(400, "An image is required."));
+  return res.status(201).json({ success: true, url: req.file.path });
 };
 
 export const getRefundRequestOptions = async (req, res, next) => {

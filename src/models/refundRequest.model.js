@@ -13,7 +13,7 @@ const refundSchema = new mongoose.Schema(
     },
     refundType: {
       type: String,
-      enum: ["cash", "upi", "razorpay"],
+      enum: ["cash", "upi", "razorpay", "bank_transfer"],
     },
     upiId: { type: String, default: "", trim: true, maxlength: 256 },
     accountDetails: {
@@ -25,7 +25,7 @@ const refundSchema = new mongoose.Schema(
     transactionReference: { type: String, default: "", trim: true, maxlength: 120 },
     statusHistory: [{
       status: { type: String, required: true },
-      by: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
+      by: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
       byName: { type: String, default: "", trim: true },
       note: { type: String, default: "", trim: true },
       at: { type: Date, default: Date.now },
@@ -88,8 +88,7 @@ const refundSchema = new mongoose.Schema(
     },
     method: {
       type: String,
-      enum: ["cash", "phonepe", "razorpay", "gpay"],
-      required: true,
+      enum: ["cash", "phonepe", "razorpay", "gpay", "upi", "bank_transfer"],
     },
     customerUpiId: {
       type: String,
@@ -130,7 +129,7 @@ const refundSchema = new mongoose.Schema(
     requestedBy: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
-      required: true,
+      default: null,
     },
     approvedBy: {
       type: mongoose.Schema.Types.ObjectId,

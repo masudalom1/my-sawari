@@ -357,8 +357,8 @@ const handoverSchema = new mongoose.Schema(
 
       paymentMethod: {
         type: String,
-        enum: ["cash", "phonepe", "razorpay", "mixed"],
         required: true,
+        default: "cash",
       },
 
       paymentBreakdown: {
