@@ -22,7 +22,7 @@ export function refundRequestView(request) {
     })),
   ];
   const eventFor = (status) => history.findLast((entry) => String(entry.status).toLowerCase() === status);
-  const requested = history.find((entry) => String(entry.status).toLowerCase() === "pending") || history[0];
+  const requested = history.find((entry) => ["pending", "requested"].includes(String(entry.status).toLowerCase()));
   const source = request.refundSource === "cancellation" ? "Booking Cancellation" :
     request.refundSource === "manual" ? "Manual" : request.source || "";
   const method = String(request.method || request.refundType || "").toLowerCase();

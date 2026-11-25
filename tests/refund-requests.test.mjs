@@ -549,3 +549,157 @@ test("legacy refund documents remain readable without new contract fields or rew
     _id: { $in: Object.values(inserted.insertedIds) },
   }).sort({ _id: 1 }).toArray(), before);
 });
+
+test("canonical legacy rows use saved history names, generic UPI, and history dates", async () => {
+  const booking = await createBooking();
+  const savedBooking = await models.Booking.findById(booking._id).lean();
+  const at = new Date();
+  const inserted = await models.RefundRequest.collection.insertOne({
+    company: savedBooking.company, bookingId: savedBooking._id,
+    amount: 35, bookingAmount: 0, refundSource: "cancellation", refundType: "upi",
+    upiId: "historical@bank", transactionReference: "LEGACY-REF-35", status: "pending",
+    accountDetails: { accountNumber: "123456789", ifscCode: "TEST0001234", accountHolderName: "Saved Customer", bankName: "Test Bank" },
+    statusHistory: [{ status: "pending", by: null, byName: "Saved requester", note: "Old cancellation", at }],
+    createdAt: at, updatedAt: at,
+  });
+  const id = inserted.insertedId;
+  const before = await models.RefundRequest.collection.findOne({ _id: id });
+  const response = await api("GET", `/refund-requests/${id}`);
+  assert.equal(response.status, 200, response.json.message);
+  const view = response.json.data;
+  assert.equal(view.requestedBy._id, null);
+  assert.equal(view.requestedBy.fullName, "Saved requester");
+  assert.equal(view.requestedAt, at.toISOString());
+  assert.equal(view.method, "upi");
+  assert.equal(view.customerUpiId, "historical@bank");
+  assert.equal(view.utr, "LEGACY-REF-35");
+  assert.equal(view.source, "Booking Cancellation");
+  assert.equal(view.bookingAmount, 0);
+  assert.equal(view.booking.bookingCode, savedBooking.bookingCode || "");
+  assert.equal(view.booking._id, booking._id);
+  assert.equal(view.customerName, booking.customerName);
+  assert.equal(view.accountDetails.bankName, "Test Bank");
+  const search = await api("GET", "/refund-requests?q=Saved%20requester&status=pending");
+  assert.equal(search.status, 200);
+  assert.equal(search.json.data.filter((row) => row._id === String(id)).length, 1);
+  assert.deepEqual(await models.RefundRequest.collection.findOne({ _id: id }), before);
+  const approved = await api("PATCH", `/refund-requests/${id}/approve`);
+  assert.equal(approved.status, 200, approved.json.message);
+  assert.equal(approved.json.data.statusHistory[0].by, null);
+  assert.equal(approved.json.data.statusHistory[1].byName.startsWith("Test User"), true);
+
+  const summaryBefore = await api("GET", "/refund-requests");
+  await models.RefundRequest.collection.insertOne({
+    company: savedBooking.company, amount: 7, refundType: "upi", status: "refunded",
+    statusHistory: [{ status: "refunded", by: null, byName: "Historical operator", at }],
+    createdAt: at, updatedAt: at,
+  });
+  const summaryAfter = await api("GET", "/refund-requests");
+  assert.equal(summaryAfter.json.summary.refundedToday.amount - summaryBefore.json.summary.refundedToday.amount, 7);
+  assert.equal((await api("GET", "/refund-requests?q=first&q=second")).status, 400);
+});
+
+test("null-company refunds and foreign booking references never leak through reads or actions", async () => {
+  const booking = await createBooking();
+  const saved = await models.Booking.findById(booking._id).lean();
+  const other = await createUserAndLogin(ctx.base, { businessName: "Other Refund Tenant" });
+  const otherApi = client(ctx.base, other.token);
+  const baseline = await api("GET", "/refund-requests");
+  const inserted = await models.RefundRequest.collection.insertOne({
+    company: null, bookingId: saved._id, customerName: "Unattributed private customer",
+    amount: 99999, status: "pending", refundType: "upi", upiId: "secret@bank",
+    proofImageUrl: "https://res.cloudinary.com/test-cloud/image/upload/private-legacy.png",
+  });
+  const id = inserted.insertedId;
+  const list = await api("GET", "/refund-requests?q=Unattributed");
+  assert.equal(list.json.data.length, 0);
+  assert.deepEqual(list.json.summary, baseline.json.summary);
+  assert.equal((await api("GET", `/refund-requests/${id}`)).status, 404);
+  assert.equal((await api("GET", `/refund-requests/${id}/attachments/customer`)).status, 404);
+  for (const action of ["approve", "reject", "refunded"]) {
+    const result = await api("PATCH", `/refund-requests/${id}/${action}`, {
+      reason: "Not allowed", completionProofImageUrl: "https://images.example.test/proof.png",
+    });
+    assert.equal(result.status, 404, result.json.message);
+  }
+  const otherUser = await ctx.mongoose.model("User").findOne({ email: other.email });
+  const foreign = await models.RefundRequest.collection.insertOne({
+    company: otherUser._id, bookingId: saved._id,
+    amount: 10, status: "pending", refundType: "upi",
+  });
+  const detail = await otherApi("GET", `/refund-requests/${foreign.insertedId}`);
+  assert.equal(detail.status, 200, detail.json.message);
+  assert.equal(detail.json.data.booking, null);
+  assert.equal(detail.json.data.customerName, "");
+  assert.equal((await api("GET", `/refund-requests/${foreign.insertedId}`)).status, 404);
+  const otherList = await otherApi("GET", "/refund-requests?q=Unattributed");
+  assert.equal(otherList.json.data.length, 0);
+});
+
+test("proof downloads and uploads enforce view, action, and tenant permissions", async () => {
+  const booking = await createBooking();
+  const saved = await models.Booking.findById(booking._id).lean();
+  const request = await models.RefundRequest.create({
+    company: saved.company, bookingId: saved._id, amount: 10, method: "cash",
+    proofImageUrl: "https://res.cloudinary.com/test-cloud/image/upload/legacy-proof.png",
+    requestedBy: saved.createdBy,
+  });
+  const employee = await createUserAndLogin(ctx.base, { role: "BOOKING_EXECUTIVE", businessName: "Refund Access Tests" });
+  const User = (await import("../src/models/user.model.js")).default;
+  const RolePermission = (await import("../src/models/rolePermission.model.js")).default;
+  await User.updateOne({ email: employee.email }, { $set: { createdBy: saved.company } });
+  const policy = await RolePermission.create({
+    businessName: "Refund Access Tests", role: "BOOKING_EXECUTIVE", updatedBy: saved.createdBy,
+    permissions: { "page.paymentsHistory.view": false, "page.bookings.edit": true, "page.dashboard.edit": true },
+  });
+  const restricted = client(ctx.base, employee.token);
+  const path = `/refund-requests/${request._id}`;
+  for (const endpoint of ["/refund-requests", "/refund-requests?q=legacy", path, `${path}/attachments/customer`]) {
+    assert.equal((await restricted("GET", endpoint)).status, 403);
+    assert.equal((await client(ctx.base)("GET", endpoint)).status, 401);
+  }
+  assert.equal((await restricted("PATCH", `${path}/approve`)).status, 403);
+  assert.equal((await restricted("POST", "/refund-requests/attachments", new FormData())).status, 403);
+  const axios = (await import("axios")).default;
+  const originalGet = axios.get;
+  let downloads = 0;
+  let downloadUrl;
+  axios.get = async (url) => { downloads += 1; downloadUrl = url; return { data: Buffer.from([137, 80, 78, 71]), headers: { "content-type": "image/png" } }; };
+  try {
+    const proof = await api("GET", `${path}/attachments/customer`);
+    assert.equal(proof.status, 200);
+    assert.match(proof.headers.get("cache-control"), /no-store/);
+    assert.equal(proof.headers.get("content-type"), "image/png");
+    assert.equal(downloads, 1);
+    const other = await createUserAndLogin(ctx.base, { businessName: "Other Proof Tenant" });
+    assert.equal((await client(ctx.base, other.token)("GET", `${path}/attachments/customer`)).status, 404);
+    assert.equal(downloads, 1);
+    await models.RefundRequest.updateOne({ _id: request._id }, { $set: {
+      proofImageUrl: `https://res.cloudinary.com/test-cloud/image/authenticated/v1/my-sawari/refunds/${saved.company}/proof.jpg`,
+    } });
+    assert.equal((await api("GET", `${path}/attachments/customer`)).status, 200);
+    assert.match(downloadUrl, /\/image\/authenticated\/s--/);
+    assert.equal(downloads, 2);
+    for (const url of ["https://127.0.0.1/private.png", "https://res.cloudinary.com/test-cloud/image/authenticated/v1/my-sawari/refunds/another-tenant/proof.jpg", `https://res.cloudinary.com/test-cloud/image/authenticated/v1/my-sawari/refunds/${saved.company}/%2e%2e%2fother.jpg`]) {
+      await models.RefundRequest.updateOne({ _id: request._id }, { $set: { proofImageUrl: url } });
+      assert.equal((await api("GET", `${path}/attachments/customer`)).status, 422);
+    }
+    assert.equal(downloads, 2);
+  } finally { axios.get = originalGet; }
+  const view = await api("GET", path);
+  assert.equal(view.json.data.proofImageUrl, `${path}/attachments/customer`);
+  assert.equal(JSON.stringify(view.json).includes("res.cloudinary.com"), false);
+  await RolePermission.updateOne({ _id: policy._id }, { $set: { permissions: {
+    "page.paymentsHistory.view": true, "page.bookings.edit": false, "page.dashboard.edit": false,
+  } } });
+  assert.equal((await restricted("GET", path)).status, 200);
+  assert.equal((await restricted("PATCH", `${path}/approve`)).status, 403);
+  assert.equal((await restricted("POST", "/refund-requests/attachments", new FormData())).status, 403);
+  const body = new FormData();
+  body.append("image", new Blob([Buffer.from([255, 216, 255])], { type: "image/jpeg" }), "proof.jpg");
+  const uploaded = await api("POST", "/refund-requests/attachments", body);
+  assert.equal(uploaded.status, 201, uploaded.json.message);
+  const options = ctx.cloudinary.uploadOptions.at(-1);
+  assert.equal(options.type, "authenticated");
+  assert.equal(options.folder, `my-sawari/refunds/${saved.company}`);
+});

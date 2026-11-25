@@ -92,8 +92,8 @@ function populatedRequests(query, company) {
     match: { company, isDeleted: { $ne: true } },
     select: "bookingCode customerName mobileNumber vehicleName vehicleNumber bookingAmount status fromDate toDate",
     transform: (booking, id) => booking || id,
-  }).populate(["requestedBy", "approvedBy", "rejectedBy", "refundedBy"].map((path) => ({
-    path, match: actorScope, select: "fullName",
+  }).populate(["requestedBy", "approvedBy", "rejectedBy", "refundedBy", "statusHistory.by"].map((path) => ({
+    path, match: actorScope, select: "fullName", transform: (actor, id) => actor || id,
   })));
 }
 
@@ -182,7 +182,9 @@ export const getRefundAttachment = async (req, res, next) => {
     const request = await RefundRequest.findOne({ _id: req.params.id, company: companyFor(req.user) })
       .select("proofImageUrl completionProofImageUrl").lean();
     if (!request?.[field]) throw new ApiError(404, "Attachment not found.");
-    const url = new URL(request[field]);
+    let url;
+    try { url = new URL(request[field]); }
+    catch { throw new ApiError(422, "Invalid legacy attachment reference."); }
     const cloudName = cloudinary.config().cloud_name;
     const prefix = `/${cloudName}/image/`;
     if (url.protocol !== "https:" || url.hostname !== "res.cloudinary.com" ||
@@ -198,7 +200,8 @@ export const getRefundAttachment = async (req, res, next) => {
       if (segments[0]?.startsWith("s--")) segments.shift();
       if (/^v\d+$/.test(segments[0])) segments.shift();
       const publicId = segments.join("/");
-      if (!publicId.startsWith("my-sawari/refunds/") || !/\.(png|jpe?g|webp)$/i.test(publicId)) {
+      const tenantFolder = `my-sawari/refunds/${companyFor(req.user)}/`;
+      if (!publicId.startsWith(tenantFolder) || !/^[A-Za-z0-9_-]+\.(png|jpe?g|webp)$/i.test(publicId.slice(tenantFolder.length))) {
         throw new ApiError(422, "Invalid attachment reference.");
       }
       downloadUrl = cloudinary.url(publicId, { secure: true, sign_url: true, type: "authenticated", resource_type: "image" });
@@ -678,7 +681,7 @@ async function updateRequest(req, res, next, action) {
                   bookingAmount: request.bookingAmount || booking.bookingAmount || 0,
                 },
                 amount: request.amount,
-                paymentMethod: request.method,
+                paymentMethod: request.method || request.refundType || "unknown",
                 transactionId: utr,
                 type: "refund",
                 note: `Refund request ${request._id} completed`,

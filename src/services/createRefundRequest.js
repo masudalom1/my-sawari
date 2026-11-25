@@ -40,7 +40,7 @@ export async function createRefundRequest({ booking, actor, details, session }) 
     customerName: booking?.customerName || customer?.customerName || details.customerName || "",
     customerMobile: booking?.mobileNumber || customer?.mobileNumber || details.customerMobile || "",
     vehicleName: booking?.vehicleName || vehicle?.vehicleName || details.vehicleName || "",
-    bookingAmount: booking ? Number(booking.bookingAmount) || 0 : details.bookingAmount || 0,
+    bookingAmount: booking ? Number(booking.bookingAmount ?? booking.payment?.bookingAmountPaid) || 0 : details.bookingAmount || 0,
     refundSource: details.source === "Manual" ? "manual" : "cancellation",
     refundType: ["phonepe", "gpay"].includes(details.method) ? "upi" : details.method,
     upiId: details.customerUpiId || "",

@@ -4338,10 +4338,22 @@ export const updateBooking = async (req, res, next) => {
   }
 };
 
+// The calendar and Edit Booking use the unified fleet, including operations-app
+// bookings stamped with their creator's company. Both cancellation routes require
+// bookings.edit. Resolve the same saved _id, then scope financial queries/writes
+// to its saved company, never the caller's company or a client-supplied value.
+async function findCancellationBooking(id, session = null) {
+  const booking = await Booking.findOne({ _id: id, isDeleted: false }).session(session);
+  if (!booking) throw new ApiError(404, "Booking not found.");
+  if (!mongoose.isObjectIdOrHexString(booking.company)) {
+    throw new ApiError(409, "This booking has no valid saved company. Correct its company before cancelling.");
+  }
+  return booking;
+}
+
 export const cancelBooking = async (req, res, next) => {
   let session;
   let input;
-  let companyId;
   try {
     const { id } = req.params;
     if (!mongoose.Types.ObjectId.isValid(id)) {
@@ -4350,20 +4362,12 @@ export const cancelBooking = async (req, res, next) => {
 
     input = normalizeCancellationInput(req.body || {});
     const { reason, refund } = input;
-    companyId = req.user.company || req.user.createdBy || req.user._id;
     let result;
     session = await mongoose.startSession();
 
     await session.withTransaction(async () => {
-      const booking = await Booking.findOne({
-        _id: id,
-        company: companyId,
-        isDeleted: false,
-      }).session(session);
-
-      if (!booking) {
-        throw new ApiError(404, "Booking not found.");
-      }
+      const booking = await findCancellationBooking(id, session);
+      const companyId = booking.company;
 
       if (booking.status === "cancelled") {
         const replay = await cancellationReplay(booking, refund, reason, session);
@@ -4437,11 +4441,7 @@ export const cancelBooking = async (req, res, next) => {
     if (error?.code === 11000) {
       // The unique cancellation key can win a race independently of transaction retries.
       try {
-        const booking = await Booking.findOne({
-          _id: req.params.id,
-          company: companyId,
-          isDeleted: false,
-        });
+        const booking = await findCancellationBooking(req.params.id);
         const replay = booking && await cancellationReplay(booking, input.refund, input.reason);
         if (replay) {
           invalidateBookingsCache();
@@ -4472,22 +4472,17 @@ export const getBookingCancellationDetails = async (req, res, next) => {
       throw new ApiError(400, "Invalid booking id.");
     }
 
-    const companyId = req.user.company || req.user.createdBy || req.user._id;
-    const booking = await Booking.findOne({
-      _id: id,
-      company: companyId,
-      isDeleted: false,
-    });
-    if (!booking) throw new ApiError(404, "Booking not found.");
+    const booking = await findCancellationBooking(id);
     assertBookingCanBeCancelled(booking);
 
     const refundBalance = await getCurrentRefundableBalance(
       booking,
-      companyId,
+      booking.company,
     );
     return res.status(200).json({
       success: true,
       bookingId: String(booking._id),
+      bookingAmount: booking.bookingAmount ?? booking.payment?.bookingAmountPaid ?? null,
       ...refundBalance,
       hasActiveRefundRequest: refundBalance.reservedAmount > 0,
     });

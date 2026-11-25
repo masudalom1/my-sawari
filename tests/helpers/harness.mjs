@@ -23,7 +23,7 @@ const FAKE_ENV = {
 };
 
 export async function startTestApp(envOverrides = {}) {
-  const replSet = await MongoMemoryReplSet.create({ replSet: { count: 1 } });
+  const replSet = await MongoMemoryReplSet.create({ replSet: { count: 1 }, instanceOpts: [{ launchTimeout: 60000 }] });
 
   Object.assign(process.env, FAKE_ENV, envOverrides, {
     MONGO_URI: replSet.getUri("mysawari_test"),
@@ -81,7 +81,7 @@ export async function mockWati() {
 // Cloudinary: multer-storage-cloudinary pipes each file into upload_stream().
 export async function mockCloudinary() {
   const { default: cloudinary } = await import("../../src/config/cloudinary.js");
-  const state = { fail: false, uploads: 0 };
+  const state = { fail: false, uploads: 0, uploadOptions: [] };
 
   cloudinary.uploader.upload_stream = (opts, callback) =>
     new Writable({
@@ -92,6 +92,7 @@ export async function mockCloudinary() {
         next();
         if (state.fail) return callback(new Error("Cloudinary upload failed (mock)"));
         state.uploads += 1;
+        state.uploadOptions.push(opts);
         const id = opts.public_id || `mock-${state.uploads}`;
         callback(undefined, {
           secure_url: `https://res.cloudinary.com/test-cloud/image/upload/${id}.jpg`,

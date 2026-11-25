@@ -67,6 +67,40 @@ async function createBooking(options = {}) {
   return response.json.booking;
 }
 
+test("calendar booking with a legacy employee company stamp resolves inside its owner's tenant", async () => {
+  const booking = await createBooking({ startOffset: 900 });
+  const employee = await createUserAndLogin(ctx.base, { role: "BOOKING_EXECUTIVE" });
+  const User = (await import("../src/models/user.model.js")).default;
+  const member = await User.findOneAndUpdate({ email: employee.email }, {
+    $set: { createdBy: booking.company },
+  }, { returnDocument: "after" });
+  await models.Booking.updateOne({ _id: booking._id }, { $set: { company: member._id }, $unset: { bookingAmount: "" } });
+  await models.PaymentHistory.updateMany({ bookingId: booking._id }, { $set: { company: member._id } });
+  const timeline = await api("GET", "/dashboard/bookings/timeline?scope=live");
+  assert.equal(timeline.status, 200);
+  const bar = timeline.json.bookings.find(row => row._id === booking._id);
+  assert.ok(bar, "saved booking appears in calendar data");
+  assert.equal(bar.bookingAmount, undefined, "calendar deliberately omits payment fields");
+  const edit = await api("GET", `/bookings/${bar._id}`);
+  assert.equal(edit.status, 200);
+  const balance = await api("GET", `/leads/${bar._id}/cancellation-details`);
+  assert.equal(balance.status, 200, balance.json.message);
+  assert.equal(balance.json.bookingId, bar._id);
+  assert.equal(balance.json.bookingAmount, 500);
+  assert.equal(balance.json.refundableAmount, 500);
+  const payload = { reason: "Legacy calendar cancellation", refund: { amount: 500, method: "gpay", customerUpiId: "customer@bank" } };
+  const first = await api("PUT", `/leads/${bar._id}/cancel`, payload);
+  assert.equal(first.status, 200, first.json.message);
+  const retry = await api("PUT", `/leads/${bar._id}/cancel`, payload);
+  assert.equal(retry.status, 200, retry.json.message);
+  assert.equal(retry.json.refundRequest._id, first.json.refundRequest._id);
+  assert.equal(first.json.refundRequest.company, String(member._id));
+  assert.equal(first.json.refundRequest.bookingAmount, 500);
+  assert.equal(first.json.refundRequest.status, "pending");
+  assert.equal(first.json.refundRequest.method, "gpay");
+  assert.equal(await models.RefundRequest.countDocuments({ bookingId: booking._id }), 1);
+});
+
 test("refundable balance includes recorded booking advances and reserves active requests", async () => {
   const booking = await createBooking({ bookingAmount: 10, startOffset: 40 });
   const advance = await models.PaymentHistory.findOne({
@@ -117,6 +151,65 @@ test("refundable balance includes recorded booking advances and reserves active 
   assert.equal(rejected.json.hasActiveRefundRequest, false);
 });
 
+test("shared calendar resolves every booking source and keeps the saved company's financial scope", async () => {
+  const root = await createUserAndLogin(ctx.base, { businessName: "Shared Fleet Operations" });
+  const operator = await createUserAndLogin(ctx.base, { role: "SALES_EXECUTIVE", businessName: "Shared Fleet Operations" });
+  const User = (await import("../src/models/user.model.js")).default;
+  const rootUser = await User.findOne({ email: root.email });
+  const operatorUser = await User.findOneAndUpdate({ email: operator.email }, {
+    $set: { createdBy: rootUser._id },
+  }, { returnDocument: "after" });
+  for (const source of ["dashboard", "operation_app", "customer_app", "other"]) {
+    const booking = await createBooking({ startOffset: 1000 + bookingSequence * 4 });
+    await models.Booking.updateOne({ _id: booking._id }, {
+      $set: { company: operatorUser._id, createdBy: operatorUser._id, bookingSource: source },
+      $unset: { bookingAmount: "" },
+    });
+    await models.PaymentHistory.updateMany({ bookingId: booking._id }, { $set: { company: operatorUser._id } });
+    const receipt = await models.PaymentHistory.findOne({ bookingId: booking._id }).lean();
+    // A row linked to the same booking with a different company must not count.
+    const { _id, ...foreignReceipt } = receipt;
+    await models.PaymentHistory.collection.insertOne({ ...foreignReceipt, company: new ctx.mongoose.Types.ObjectId(booking.company), amount: 9999 });
+    const edit = await api("GET", `/bookings/${booking._id}`);
+    assert.equal(edit.status, 200, source);
+    const details = await api("GET", `/leads/${booking._id}/cancellation-details`);
+    assert.equal(details.status, 200, details.json.message);
+    assert.equal(details.json.bookingId, edit.json.booking._id);
+    assert.equal(details.json.bookingAmount, 500);
+    assert.equal(details.json.refundableAmount, 500);
+    const payload = { reason: `Cancel ${source}`, company: booking.company, refund: { amount: 500, method: "gpay" } };
+    const [cancelled, retry] = await Promise.all([
+      api("PUT", `/leads/${booking._id}/cancel`, payload),
+      api("PUT", `/leads/${booking._id}/cancel`, payload),
+    ]);
+    assert.equal(cancelled.status, 200, cancelled.json.message);
+    assert.equal(retry.status, 200, retry.json.message);
+    assert.equal(cancelled.json.refundRequest._id, retry.json.refundRequest._id);
+    const refund = await models.RefundRequest.findById(cancelled.json.refundRequest._id).lean();
+    assert.equal(String(refund.company), String(operatorUser._id));
+    assert.equal(refund.bookingAmount, 500);
+    assert.equal(refund.amount, 500);
+    assert.equal(refund.method, "gpay");
+    assert.equal(refund.status, "pending");
+    assert.equal(String(refund.requestedBy), String(booking.createdBy));
+    assert.equal(await models.RefundRequest.countDocuments({ bookingId: booking._id }), 1);
+    assert.equal((await models.Booking.findById(booking._id)).status, "cancelled");
+  }
+});
+
+test("a missing saved company is an explicit lookup error, never a caller-company fallback", async () => {
+  const booking = await createBooking({ startOffset: 1100 });
+  await models.Booking.collection.updateOne({ _id: new ctx.mongoose.Types.ObjectId(booking._id) }, { $unset: { company: "" } });
+  const before = await models.Booking.collection.findOne({ _id: new ctx.mongoose.Types.ObjectId(booking._id) });
+  const details = await api("GET", `/leads/${booking._id}/cancellation-details`);
+  assert.equal(details.status, 409);
+  assert.match(details.json.message, /no valid saved company/);
+  const cancelled = await api("PUT", `/leads/${booking._id}/cancel`, { refund: { amount: 100, method: "gpay" } });
+  assert.equal(cancelled.status, 409);
+  assert.deepEqual(await models.Booking.collection.findOne({ _id: before._id }), before);
+  assert.equal(await models.RefundRequest.countDocuments({ bookingId: booking._id }), 0);
+});
+
 test("booking amount alone does not create refundable balance without a receipt record", async () => {
   const booking = await createBooking({ bookingAmount: 10 });
   await models.PaymentHistory.deleteMany({ bookingId: booking._id });
@@ -128,6 +221,11 @@ test("booking amount alone does not create refundable balance without a receipt 
   assert.equal(response.status, 200);
   assert.equal(response.json.collectedAmount, 0);
   assert.equal(response.json.refundableAmount, 0);
+  assert.equal(response.json.bookingAmount, 10);
+  const rejected = await api("PUT", `/leads/${booking._id}/cancel`, { refund: { amount: 1, method: "gpay" } });
+  assert.equal(rejected.status, 400);
+  assert.equal((await models.Booking.findById(booking._id)).status, "confirmed");
+  assert.equal(await models.RefundRequest.countDocuments({ bookingId: booking._id }), 0);
 });
 
 test("Not Applicable cancels the booking, stores its reason, and creates no refund request", async () => {
@@ -377,7 +475,7 @@ test("Give Refund checks prior refunds, writes one pending request, and replays 
   assert.equal(String(lateRetry.json.refundRequest._id), String(requests[0]._id));
 });
 
-test("failed refund-request writes roll back the booking cancellation", async () => {
+test("failed booking or refund-request writes preserve the booking and create no request", async () => {
   const booking = await createBooking();
   await models.PaymentHistory.updateOne(
     { bookingId: booking._id, type: "booking" },
@@ -411,6 +509,16 @@ test("failed refund-request writes roll back the booking cancellation", async ()
     await models.RefundRequest.countDocuments({ bookingId: booking._id }),
     0,
   );
+  const originalSave = models.Booking.prototype.save;
+  models.Booking.prototype.save = async () => { throw new Error("Booking write failed"); };
+  try {
+    const failedBooking = await api("PUT", `/leads/${booking._id}/cancel`, {
+      refund: { amount: 500, method: "gpay" },
+    });
+    assert.equal(failedBooking.status, 500);
+  } finally { models.Booking.prototype.save = originalSave; }
+  assert.deepEqual(await models.Booking.findById(booking._id).lean(), beforeFailure);
+  assert.equal(await models.RefundRequest.countDocuments({ bookingId: booking._id }), 0);
 });
 
 test("ineligible bookings cannot be cancelled", async () => {
@@ -547,7 +655,7 @@ test("cancellation reloads eligibility after the dialog was opened", async () =>
   assert.equal(await models.RefundRequest.countDocuments({ bookingId: booking._id }), 0);
 });
 
-test("cancellation rechecks permissions and rejects other tenants", async () => {
+test("cancellation rechecks edit permissions for shared fleet records", async () => {
   const booking = await phase2Booking();
   const employee = await createUserAndLogin(ctx.base, { role: "BOOKING_EXECUTIVE" });
   const User = (await import("../src/models/user.model.js")).default;
@@ -569,8 +677,15 @@ test("cancellation rechecks permissions and rejects other tenants", async () => 
   } });
   const payload = { refund: { amount: 50, method: "cash" } };
   assert.equal((await employeeApi("PUT", `/leads/${booking._id}/cancel`, payload)).status, 403);
-  const otherTenant = await createUserAndLogin(ctx.base, { businessName: "Other Cancellation Tenant" });
-  assert.equal((await client(ctx.base, otherTenant.token)("PUT", `/leads/${booking._id}/cancel`, payload)).status, 404);
+  const deniedAccount = await createUserAndLogin(ctx.base, { role: "BOOKING_EXECUTIVE", businessName: "Other Cancellation Tenant" });
+  const deniedApi = client(ctx.base, deniedAccount.token);
+  assert.equal((await deniedApi("GET", `/leads/${booking._id}/cancellation-details`)).status, 403);
+  const missingId = new ctx.mongoose.Types.ObjectId();
+  for (const [id, status] of [[missingId, 404], ["calendar-event-id", 400]]) {
+    assert.equal((await api("GET", `/leads/${id}/cancellation-details`)).status, status);
+    assert.equal((await api("PUT", `/leads/${id}/cancel`, payload)).status, status);
+  }
+  assert.equal((await deniedApi("PUT", `/leads/${booking._id}/cancel`, payload)).status, 403);
   assert.equal((await client(ctx.base)("PUT", `/leads/${booking._id}/cancel`, payload)).status, 401);
   assert.equal((await models.Booking.findById(booking._id)).status, "confirmed");
   assert.equal(await models.RefundRequest.countDocuments({ bookingId: booking._id }), 0);
