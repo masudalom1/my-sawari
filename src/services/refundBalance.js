@@ -38,12 +38,16 @@ export function refundableBalanceFromPayments(payments, refundRequests = []) {
   const collectedAmount = roundMoney(received);
   const completedRefundAmount = roundMoney(refunded);
   const reservedAmount = roundMoney(reserved);
+  const refundDueAmount = roundMoney(
+    Math.max(0, collectedAmount - completedRefundAmount),
+  );
   return {
     collectedAmount,
     completedRefundAmount,
     reservedAmount,
+    refundDueAmount,
     refundableAmount: roundMoney(
-      Math.max(0, collectedAmount - completedRefundAmount - reservedAmount),
+      Math.max(0, refundDueAmount - reservedAmount),
     ),
   };
 }

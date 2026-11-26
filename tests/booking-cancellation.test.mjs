@@ -264,6 +264,7 @@ test("Not Applicable cancels the booking, stores its reason, and creates no refu
 });
 
 test("Give Refund checks prior refunds, writes one pending request, and replays retries", async () => {
+  const baseline = (await api("GET", "/refund-requests")).json.summary;
   const booking = await createBooking();
   const Customer = (await import("../src/models/customer.model.js")).default;
   const Lead = (await import("../src/models/lead.model.js")).default;
@@ -463,11 +464,11 @@ test("Give Refund checks prior refunds, writes one pending request, and replays 
   assert.ok(completedItem.refundedAt);
   assert.equal(
     completedList.json.summary.refundedToday.amount,
-    75,
+    baseline.refundedToday.amount + 75,
   );
-  assert.equal(completedList.json.summary.refundedToday.count, 1);
-  assert.equal(completedList.json.summary.thisMonth.amount, 75);
-  assert.equal(completedList.json.summary.toBePaid.amount, 0);
+  assert.equal(completedList.json.summary.refundedToday.count, baseline.refundedToday.count + 1);
+  assert.equal(completedList.json.summary.thisMonth.amount, baseline.thisMonth.amount + 75);
+  assert.equal(completedList.json.summary.toBePaid.amount, baseline.toBePaid.amount);
   const lateRetry = await api("PUT", `/leads/${booking._id}/cancel`, payload);
   assert.equal(lateRetry.status, 200, lateRetry.json.message);
   assert.equal(lateRetry.json.replayed, true);
@@ -522,7 +523,7 @@ test("failed booking or refund-request writes preserve the booking and create no
 });
 
 test("ineligible bookings cannot be cancelled", async () => {
-  const booking = await createBooking();
+  const booking = await createBooking({ startOffset: 1200 });
   await models.Booking.updateOne(
     { _id: booking._id },
     { $set: { status: "active" } },
@@ -655,7 +656,7 @@ test("cancellation reloads eligibility after the dialog was opened", async () =>
   assert.equal(await models.RefundRequest.countDocuments({ bookingId: booking._id }), 0);
 });
 
-test("cancellation rechecks edit permissions for shared fleet records", async () => {
+test("cancellation uses its dedicated permission for shared fleet records", async () => {
   const booking = await phase2Booking();
   const employee = await createUserAndLogin(ctx.base, { role: "BOOKING_EXECUTIVE" });
   const User = (await import("../src/models/user.model.js")).default;
@@ -663,17 +664,17 @@ test("cancellation rechecks edit permissions for shared fleet records", async ()
   await RolePermission.create({
     businessName: "Test Rentals",
     role: "BOOKING_EXECUTIVE",
-    permissions: { "page.bookings.edit": true },
+    permissions: { "page.bookings.cancel": true },
     updatedBy: booking.createdBy,
   });
   await User.updateOne({ email: employee.email }, { $set: {
     createdBy: booking.company,
-    permissionOverrides: { "page.bookings.edit": "allow" },
+    permissionOverrides: { "page.bookings.cancel": "allow" },
   } });
   const employeeApi = client(ctx.base, employee.token);
   assert.equal((await employeeApi("GET", `/leads/${booking._id}/cancellation-details`)).status, 200);
   await User.updateOne({ email: employee.email }, { $set: {
-    permissionOverrides: { "page.bookings.edit": "deny" },
+    permissionOverrides: { "page.bookings.cancel": "deny" },
   } });
   const payload = { refund: { amount: 50, method: "cash" } };
   assert.equal((await employeeApi("PUT", `/leads/${booking._id}/cancel`, payload)).status, 403);
@@ -689,4 +690,30 @@ test("cancellation rechecks edit permissions for shared fleet records", async ()
   assert.equal((await client(ctx.base)("PUT", `/leads/${booking._id}/cancel`, payload)).status, 401);
   assert.equal((await models.Booking.findById(booking._id)).status, "confirmed");
   assert.equal(await models.RefundRequest.countDocuments({ bookingId: booking._id }), 0);
+});
+
+test("booking cancellation is granted by default without a role cancel setting", async () => {
+  const booking = await phase2Booking();
+  const employee = await createUserAndLogin(ctx.base, { role: "BOOKING_EXECUTIVE" });
+  const User = (await import("../src/models/user.model.js")).default;
+  const RolePermission = (await import("../src/models/rolePermission.model.js")).default;
+  await RolePermission.create({
+    businessName: "Test Rentals",
+    role: "BOOKING_EXECUTIVE",
+    permissions: { "page.bookings.view": true },
+    updatedBy: booking.createdBy,
+  });
+  await User.updateOne({ email: employee.email }, { $set: { createdBy: booking.company } });
+  const employeeApi = client(ctx.base, employee.token);
+
+  const details = await employeeApi(
+    "GET",
+    `/leads/${booking._id}/cancellation-details`,
+  );
+  assert.equal(details.status, 200, details.json.message);
+  const cancelled = await employeeApi("PUT", `/leads/${booking._id}/cancel`, {
+    refund: { amount: 50, method: "cash" },
+  });
+  assert.equal(cancelled.status, 200, cancelled.json.message);
+  assert.equal((await models.Booking.findById(booking._id)).status, "cancelled");
 });

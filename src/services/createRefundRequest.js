@@ -1,4 +1,7 @@
 import Customer from "../models/customer.model.js";
+import mongoose from "mongoose";
+import Booking from "../models/booking.model.js";
+import ApiError from "../utils/ApiError.js";
 import Lead from "../models/lead.model.js";
 import Vehicle from "../models/vehicle.model.js";
 import RefundRequest from "../models/refundRequest.model.js";
@@ -6,6 +9,16 @@ import { normalizeMobileNumber } from "./membershipLookup.js";
 
 // Both cancellation and Payments use the Refund model and the same write path.
 export async function createRefundRequest({ booking, actor, details, session }) {
+  const cancellation = details.source !== "Manual";
+  if (cancellation) {
+    // The same transaction must contain the saved canonical booking. Never
+    // create an unlinked cancellation or accept an event/lead ID as its link.
+    const valid = mongoose.isObjectIdOrHexString(booking?._id) && mongoose.isObjectIdOrHexString(booking?.company);
+    const saved = valid && await Booking.exists({
+      _id: booking._id, company: booking.company,
+    }).session(session || null);
+    if (!saved) throw new ApiError(409, "A cancellation refund requires the original saved booking and its verified company.");
+  }
   let customer = null;
   let customerId = booking?.customerId || null;
   if (!customerId && booking?.lead) {
@@ -34,6 +47,7 @@ export async function createRefundRequest({ booking, actor, details, session }) 
     : null;
   const [request] = await RefundRequest.create([{
     ...details,
+    ...(cancellation && { requestKey: `booking-cancellation:${booking._id}` }),
     company: booking?.company || details.company,
     bookingId: booking?._id || null,
     customerId,
@@ -44,6 +58,12 @@ export async function createRefundRequest({ booking, actor, details, session }) 
     refundSource: details.source === "Manual" ? "manual" : "cancellation",
     refundType: ["phonepe", "gpay"].includes(details.method) ? "upi" : details.method,
     upiId: details.customerUpiId || "",
+    accountDetails: details.accountDetails || {
+      accountNumber: "",
+      ifscCode: "",
+      accountHolderName: "",
+      bankName: "",
+    },
     status: "pending",
     requestedBy: actor._id,
     statusHistory: [{

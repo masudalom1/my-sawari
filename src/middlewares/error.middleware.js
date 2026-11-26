@@ -30,6 +30,7 @@ const errorHandler = (err, req, res, next) => {
 
   res.status(statusCode).json({
     success: false,
+    ...(err.balance && { balance: err.balance }),
     // Server-side failures can carry driver/internal details; keep those out of production responses.
     message:
       statusCode >= 500 && isProduction

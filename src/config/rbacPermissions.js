@@ -2,12 +2,18 @@ import { USER_ROLES } from "../models/user.model.js";
 import {
   isRegisteredPermissionMap,
   isRegisteredUserOverrideMap,
+  DEFAULT_ROLE_PERMISSION_VALUES,
   PERMISSIONS,
   PROTECTED_USER_OVERRIDE_KEY_SET,
   RBAC_PERMISSION_KEYS,
 } from "../../shared/rbacPermissionRegistry.mjs";
 
-export { PERMISSIONS, PROTECTED_USER_OVERRIDE_KEY_SET, RBAC_PERMISSION_KEYS };
+export {
+  DEFAULT_ROLE_PERMISSION_VALUES,
+  PERMISSIONS,
+  PROTECTED_USER_OVERRIDE_KEY_SET,
+  RBAC_PERMISSION_KEYS,
+};
 
 export const RBAC_PERMISSION_KEY_SET = new Set(RBAC_PERMISSION_KEYS);
 export const RBAC_ASSIGNABLE_ROLES = Object.freeze(
@@ -36,6 +42,19 @@ export function normalizeUserPermissionOverrideMap(value) {
 export function toPlainPermissionMap(value) {
   if (!value) return {};
   return value instanceof Map ? Object.fromEntries(value) : { ...value };
+}
+
+export function normalizeStoredRolePermissionMap(value) {
+  const stored = toPlainPermissionMap(value);
+  const normalized = Object.fromEntries(
+    RBAC_PERMISSION_KEYS
+      .filter((key) => typeof stored[key] === "boolean")
+      .map((key) => [key, stored[key]]),
+  );
+  for (const [key, allowed] of Object.entries(DEFAULT_ROLE_PERMISSION_VALUES)) {
+    if (typeof normalized[key] !== "boolean") normalized[key] = allowed;
+  }
+  return normalized;
 }
 
 export function resolvePermissionDecision(

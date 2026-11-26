@@ -13,7 +13,10 @@ const actorView = (entry, fallback) => ({
 export function refundRequestView(request) {
   const booking = request.bookingId && typeof request.bookingId === "object" &&
     !mongoose.isObjectIdOrHexString(request.bookingId) ? request.bookingId : null;
-  const history = request.statusHistory?.length ? request.statusHistory : [
+  const savedHistory = Array.isArray(request.statusHistory)
+    ? request.statusHistory.filter((entry) => entry && typeof entry === "object")
+    : [];
+  const history = savedHistory.length ? savedHistory : [
     { status: "pending", by: request.requestedBy?._id || null, byName: request.requestedBy?.fullName || "", at: request.requestedAt || request.createdAt, note: request.reason || "" },
     ...["approved", "rejected", "refunded"].filter((status) => request[`${status}At`]).map((status) => ({
       status, by: request[`${status}By`]?._id || null,
@@ -24,7 +27,7 @@ export function refundRequestView(request) {
   const eventFor = (status) => history.findLast((entry) => String(entry.status).toLowerCase() === status);
   const requested = history.find((entry) => ["pending", "requested"].includes(String(entry.status).toLowerCase()));
   const source = request.refundSource === "cancellation" ? "Booking Cancellation" :
-    request.refundSource === "manual" ? "Manual" : request.source || "";
+    request.refundSource === "manual" ? "Manual" : request.source || request.refundSource || "";
   const method = String(request.method || request.refundType || "").toLowerCase();
   const upiId = request.upiId || request.customerUpiId || "";
   const reference = request.transactionReference || request.utr || "";
@@ -50,7 +53,8 @@ export function refundRequestView(request) {
     customerMobile: request.customerMobile || booking?.mobileNumber || "",
     vehicleName: request.vehicleName || booking?.vehicleName || "",
     vehicleNumber: request.vehicleNumber || booking?.vehicleNumber || "",
-    bookingAmount: request.bookingAmount ?? booking?.bookingAmount ?? 0,
+    bookingAmount: request.bookingAmount ?? booking?.bookingAmount ?? booking?.payment?.bookingAmountPaid ?? 0,
+    reason: request.reason ?? requested?.note ?? "",
     requestedBy: actorView(requested, request.requestedBy),
     requestedAt: requested?.at || request.requestedAt || request.createdAt,
     statusHistory: history,

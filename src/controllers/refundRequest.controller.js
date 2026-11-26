@@ -6,18 +6,21 @@ import PaymentHistory from "../models/paymentHistory.model.js";
 import RefundRequest from "../models/refundRequest.model.js";
 import { createRefundRequest } from "../services/createRefundRequest.js";
 import { refundRequestView as requestView } from "../services/refundRequestView.js";
+import { refundActionScope, refundActionView, refundCompanyFor as companyFor } from "../services/refundAccess.js";
+import { resolveRequestPermissions } from "../services/permissionResolver.js";
 import axios from "axios";
 import cloudinary from "../config/cloudinary.js";
 import { getCurrentRefundableBalance } from "../services/refundBalance.js";
 import {
   addDayKeys,
   dayStartIST,
+  isValidDayKey,
+  monthEndKey,
   toDayKey,
 } from "../utils/revenue.utils.js";
 
-const REFUND_METHODS = new Set(["cash", "phonepe", "razorpay", "gpay"]);
+const REFUND_METHODS = new Set(["cash", "phonepe", "razorpay", "gpay", "bank_transfer"]);
 const roundMoney = (value) => Math.round((value + Number.EPSILON) * 100) / 100;
-const companyFor = (user) => user.company || user.createdBy || user._id;
 
 function escapeRegex(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -85,30 +88,100 @@ function summaryExpressions(today, monthStart, nextMonthStart) {
     };
 }
 
-function populatedRequests(query, company) {
-  const actorScope = { $or: [{ _id: company }, { createdBy: company }] };
+function populatedRequests(query) {
   return query.populate({
     path: "bookingId",
-    match: { company, isDeleted: { $ne: true } },
-    select: "bookingCode customerName mobileNumber vehicleName vehicleNumber bookingAmount status fromDate toDate",
+    select: "bookingCode customerName mobileNumber vehicleName vehicleNumber bookingAmount payment.bookingAmountPaid status fromDate toDate",
     transform: (booking, id) => booking || id,
   }).populate(["requestedBy", "approvedBy", "rejectedBy", "refundedBy", "statusHistory.by"].map((path) => ({
-    path, match: actorScope, select: "fullName", transform: (actor, id) => actor || id,
+    path, select: "fullName", transform: (actor, id) => actor || id,
   })));
 }
 
 function parseRequestFilters(query) {
-  const { q = "", status = "All" } = query;
+  const { q = "", status = "All", page = "1", limit = "20" } = query;
+  const { period = "all", startDate, endDate } = query;
+  if (typeof period !== "string" || !["all", "today", "yesterday", "month", "custom"].includes(period)) {
+    throw new ApiError(400, "Invalid request date selection.");
+  }
+  let from;
+  let to;
+  const today = toDayKey(new Date());
+  if (period === "custom") {
+    if (!isValidDayKey(startDate) || !isValidDayKey(endDate)) {
+      throw new ApiError(400, "Select valid From and To request dates.");
+    }
+    if (startDate > endDate) throw new ApiError(400, "From date must be on or before To date.");
+    from = startDate;
+    to = endDate;
+  } else {
+    if (startDate !== undefined || endDate !== undefined) {
+      throw new ApiError(400, "From and To dates require Custom Range.");
+    }
+    if (period === "today") from = to = today;
+    if (period === "yesterday") from = to = addDayKeys(today, -1);
+    if (period === "month") { from = `${today.slice(0, 7)}-01`; to = monthEndKey(today); }
+  }
   if (typeof q !== "string" || q.length > 120 || typeof status !== "string" ||
     !["all", "pending", "approved", "refunded", "rejected"].includes(status.toLowerCase())) {
     throw new ApiError(400, "Invalid refund request filters.");
   }
-  return { search: q.trim().toLowerCase(), status: status.toLowerCase() };
+  if (typeof page !== "string" || typeof limit !== "string" ||
+    !/^[1-9]\d*$/.test(page) || !/^[1-9]\d*$/.test(limit) ||
+    !Number.isSafeInteger(Number(page) * Number(limit)) || Number(limit) > 100) {
+    throw new ApiError(400, "Invalid refund request pagination.");
+  }
+  return { search: q.trim(), status: status.toLowerCase(), page: Number(page), limit: Number(limit),
+    createdAt: from ? { $gte: dayStartIST(from), $lt: dayStartIST(addDayKeys(to, 1)) } : null };
+}
+
+function refundListPipeline(filters) {
+  const pipeline = [{ $match: { ...(filters.createdAt && { createdAt: filters.createdAt }), ...(filters.status !== "all" && {
+    status: { $in: [filters.status, filters.status[0].toUpperCase() + filters.status.slice(1)] },
+  }) } }];
+  if (filters.search) {
+    // The route grants global finance read access; joins only enrich refunds.
+    // Lookups happen before skip/limit so matches on later pages are retained.
+    const firstText = (...fields) => fields.reduceRight((fallback, field) => ({
+      $cond: [{ $ne: [{ $ifNull: [field, ""] }, ""] }, field, fallback],
+    }), "");
+    pipeline.push(
+      { $set: { _requester: { $arrayElemAt: [{ $filter: {
+        input: { $cond: [{ $isArray: "$statusHistory" }, "$statusHistory", []] }, as: "entry",
+        cond: { $in: [{ $toLower: "$$entry.status" }, ["pending", "requested"]] },
+      } }, 0] } } },
+      { $lookup: { from: Booking.collection.name, let: { bookingId: "$bookingId" }, pipeline: [
+        { $match: { $expr: { $eq: ["$_id", "$$bookingId"] } } },
+        { $project: { customerName: 1, mobileNumber: 1, vehicleName: 1, vehicleNumber: 1, bookingCode: 1 } },
+      ], as: "_booking" } },
+      { $set: { _booking: { $arrayElemAt: ["$_booking", 0] } } },
+      { $lookup: { from: "users", let: { initial: "$_requester.by", legacy: "$requestedBy" }, pipeline: [
+        { $match: { $expr: { $in: ["$_id", [{ $ifNull: ["$$initial", null] }, { $ifNull: ["$$legacy", null] }]] } } },
+        { $project: { fullName: 1 } },
+      ], as: "_actors" } },
+      { $set: {
+        _initialActor: { $arrayElemAt: [{ $filter: { input: "$_actors", as: "actor", cond: { $eq: ["$$actor._id", "$_requester.by"] } } }, 0] },
+        _legacyActor: { $arrayElemAt: [{ $filter: { input: "$_actors", as: "actor", cond: { $eq: ["$$actor._id", "$requestedBy"] } } }, 0] },
+      } },
+      { $set: { _search: [
+        firstText("$customerName", "$_booking.customerName"), firstText("$customerMobile", "$_booking.mobileNumber"),
+        "$upiId", "$customerUpiId", "$transactionReference", "$utr",
+        firstText("$_requester.byName", "$_initialActor.fullName", "$_legacyActor.fullName"),
+        { $ifNull: ["$reason", "$_requester.note"] }, firstText("$vehicleName", "$_booking.vehicleName"),
+        firstText("$vehicleNumber", "$_booking.vehicleNumber"), "$_booking.bookingCode",
+      ] } },
+      { $match: { _search: new RegExp(escapeRegex(filters.search), "i") } },
+    );
+  }
+  pipeline.push({ $sort: { createdAt: -1, _id: -1 } }, { $facet: {
+    rows: [{ $skip: (filters.page - 1) * filters.limit }, { $limit: filters.limit }, { $project: { _id: 1 } }],
+    count: [{ $count: "total" }],
+  } });
+  return pipeline;
 }
 
 export const getRefundRequests = async (req, res, next) => {
   try {
-    const company = companyFor(req.user);
     const filters = parseRequestFilters(req.query);
     const today = toDayKey(new Date());
     const [year, month] = today.slice(0, 7).split("-").map(Number);
@@ -117,14 +190,11 @@ export const getRefundRequests = async (req, res, next) => {
       .toISOString()
       .slice(0, 10);
 
-    const [requests, summaryResult] = await Promise.all([
-      // Unattributed legacy rows (company null/missing) are deliberately excluded.
-      populatedRequests(RefundRequest.find({ company }).sort({ createdAt: -1, _id: -1 }), company)
-        .lean(),
+    const [listResult, summaryResult] = await Promise.all([
+      RefundRequest.aggregate(refundListPipeline(filters)),
       RefundRequest.aggregate([
-        { $match: { company: new mongoose.Types.ObjectId(String(company)) } },
         { $set: { refundedAt: { $ifNull: ["$refundedAt", { $max: { $map: {
-          input: { $filter: { input: { $ifNull: ["$statusHistory", []] }, as: "event",
+          input: { $filter: { input: { $cond: [{ $isArray: "$statusHistory" }, "$statusHistory", []] }, as: "event",
             cond: { $eq: [{ $toLower: "$$event.status" }, "refunded"] } } },
           as: "event", in: "$$event.at",
         } } }] } } },
@@ -132,17 +202,21 @@ export const getRefundRequests = async (req, res, next) => {
       ]),
     ]);
 
+    const ids = (listResult[0]?.rows || []).map(row => row._id);
+    const total = listResult[0]?.count[0]?.total || 0;
+    const requests = await populatedRequests(RefundRequest.find({ _id: { $in: ids } })).lean();
+    const { effectivePermissions } = await resolveRequestPermissions(req);
+    const actionAccess = await refundActionScope(req.user);
+    const actionable = new Set((await RefundRequest.find({ ...actionAccess, _id: { $in: ids } }).select("_id").lean()).map(row => String(row._id)));
+    const byId = new Map(requests.map(request => [String(request._id), { ...requestView(request),
+      ...refundActionView(request, effectivePermissions, actionable.has(String(request._id))) }]));
+
     const summary = summaryResult[0] || {};
     return res.status(200).json({
       success: true,
-      data: requests.map(requestView).filter((request) => {
-        if (filters.status !== "all" && request.status.toLowerCase() !== filters.status) return false;
-        return !filters.search || [request.customerName, request.customerMobile, request.upiId,
-          request.transactionReference, request.requestedBy.fullName, request.reason,
-          request.vehicleName, request.vehicleNumber, request.booking?.bookingCode,
-          ...request.statusHistory.map((entry) => entry.byName),
-        ].filter(Boolean).join(" ").toLowerCase().includes(filters.search);
-      }),
+      data: ids.map(id => byId.get(String(id))).filter(Boolean),
+      pagination: { page: filters.page, limit: filters.limit, total, totalPages: Math.ceil(total / filters.limit),
+        hasNextPage: filters.page * filters.limit < total, hasPreviousPage: filters.page > 1 },
       summary: {
         refundedToday: {
           amount: summary.refundedTodayAmount || 0,
@@ -166,10 +240,12 @@ export const getRefundRequests = async (req, res, next) => {
 export const getRefundRequest = async (req, res, next) => {
   try {
     requireObjectId(req.params.id, "refund request id");
-    const company = companyFor(req.user);
-    const request = await populatedRequests(RefundRequest.findOne({ _id: req.params.id, company }), company).lean();
+    const request = await populatedRequests(RefundRequest.findById(req.params.id)).lean();
     if (!request) throw new ApiError(404, "Refund request not found.");
-    return res.status(200).json({ success: true, data: requestView(request) });
+    const { effectivePermissions } = await resolveRequestPermissions(req);
+    const actionAccess = await refundActionScope(req.user, { id: req.params.id });
+    const inScope = Boolean(await RefundRequest.exists({ ...actionAccess, _id: req.params.id }));
+    return res.status(200).json({ success: true, data: { ...requestView(request), ...refundActionView(request, effectivePermissions, inScope) } });
   } catch (error) { next(error); }
 };
 
@@ -179,8 +255,8 @@ export const getRefundAttachment = async (req, res, next) => {
     const fields = { customer: "proofImageUrl", completion: "completionProofImageUrl" };
     const field = fields[req.params.kind];
     if (!field) throw new ApiError(404, "Attachment not found.");
-    const request = await RefundRequest.findOne({ _id: req.params.id, company: companyFor(req.user) })
-      .select("proofImageUrl completionProofImageUrl").lean();
+    const request = await RefundRequest.findById(req.params.id)
+      .select("company proofImageUrl completionProofImageUrl").lean();
     if (!request?.[field]) throw new ApiError(404, "Attachment not found.");
     let url;
     try { url = new URL(request[field]); }
@@ -200,8 +276,9 @@ export const getRefundAttachment = async (req, res, next) => {
       if (segments[0]?.startsWith("s--")) segments.shift();
       if (/^v\d+$/.test(segments[0])) segments.shift();
       const publicId = segments.join("/");
-      const tenantFolder = `my-sawari/refunds/${companyFor(req.user)}/`;
-      if (!publicId.startsWith(tenantFolder) || !/^[A-Za-z0-9_-]+\.(png|jpe?g|webp)$/i.test(publicId.slice(tenantFolder.length))) {
+      const storedCompany = request.company || publicId.split("/")[2];
+      const tenantFolder = `my-sawari/refunds/${storedCompany}/`;
+      if (!mongoose.isObjectIdOrHexString(storedCompany) || !publicId.startsWith(tenantFolder) || !/^[A-Za-z0-9_-]+\.(png|jpe?g|webp)$/i.test(publicId.slice(tenantFolder.length))) {
         throw new ApiError(422, "Invalid attachment reference.");
       }
       downloadUrl = cloudinary.url(publicId, { secure: true, sign_url: true, type: "authenticated", resource_type: "image" });
@@ -250,6 +327,8 @@ export const getRefundRequestOptions = async (req, res, next) => {
         $or: [
           { "customer.fullName": query },
           { "customer.mobileNumber": query },
+          { "vehicle.vehicleName": query },
+          { "vehicle.vehicleNumber": query },
         ],
       }),
     };
@@ -262,11 +341,77 @@ export const getRefundRequestOptions = async (req, res, next) => {
         .limit(250)
         .lean(),
       Handover.find(handoverFilter)
-        .select("customer.fullName customer.mobileNumber createdAt")
+        .select("bookingId customer.fullName customer.mobileNumber vehicle.vehicleName vehicle.vehicleNumber trip.pickupDateTime trip.dropDateTime bookingStatus handoverStatus createdAt")
         .sort({ createdAt: -1 })
-        .limit(500)
         .lean(),
     ]);
+
+    const bookingById = new Map(bookings.map((booking) => [String(booking._id), booking]));
+    for (const bookingId of handovers.map((handover) => handover.bookingId).filter(Boolean)) {
+      if (!bookingById.has(String(bookingId))) {
+        const saved = await Booking.findOne({
+          _id: bookingId,
+          company,
+          isDeleted: { $ne: true },
+        }).select("bookingCode customerName mobileNumber vehicleName vehicleNumber bookingAmount fromDate toDate").lean();
+        if (saved) bookingById.set(String(saved._id), saved);
+      }
+    }
+    const handoversWithoutBooking = handovers
+      .filter((handover) => !handover.bookingId)
+      .map((handover) => handover._id);
+    if (handoversWithoutBooking.length) {
+      const linkedBookings = await Booking.find({
+        handover: { $in: handoversWithoutBooking },
+        company,
+        isDeleted: { $ne: true },
+      }).select("bookingCode customerName mobileNumber vehicleName vehicleNumber bookingAmount fromDate toDate handover").lean();
+      for (const booking of linkedBookings) {
+        bookingById.set(String(booking._id), booking);
+        bookingById.set(`handover:${booking.handover}`, booking);
+      }
+    }
+
+    const balanceByBooking = new Map();
+    const handoverRows = [];
+    for (const handover of handovers) {
+      const booking = handover.bookingId
+        ? bookingById.get(String(handover.bookingId))
+        : bookingById.get(`handover:${handover._id}`);
+      if (!booking) continue;
+      if (!balanceByBooking.has(String(booking._id))) {
+        const balance = await getCurrentRefundableBalance(booking, company);
+        balanceByBooking.set(String(booking._id), balance);
+      }
+      const balance = balanceByBooking.get(String(booking._id));
+      handoverRows.push({
+        _id: handover._id,
+        bookingId: booking._id,
+        bookingCode: booking.bookingCode || "",
+        customerName: handover.customer?.fullName || booking.customerName || "",
+        mobileNumber: handover.customer?.mobileNumber || booking.mobileNumber || "",
+        vehicleName: handover.vehicle?.vehicleName || booking.vehicleName || "",
+        vehicleNumber: handover.vehicle?.vehicleNumber || booking.vehicleNumber || "",
+        rentalStatus: handover.handoverStatus || handover.bookingStatus || "active",
+        bookingStatus: handover.bookingStatus || booking.status || "",
+        fromDate: handover.trip?.pickupDateTime || booking.fromDate || null,
+        toDate: handover.trip?.dropDateTime || booking.toDate || null,
+        bookingAmount: booking.bookingAmount || 0,
+        refundableAmount: Number(balance?.refundableAmount) || 0,
+        collectedAmount: Number(balance?.collectedAmount) || 0,
+        completedRefundAmount: Number(balance?.completedRefundAmount) || 0,
+        reservedAmount: Number(balance?.reservedAmount) || 0,
+        refundDueAmount: Number(balance?.refundDueAmount) ||
+          Math.max(0, Number(balance?.collectedAmount) - Number(balance?.completedRefundAmount)),
+      });
+    }
+
+    const searchedHandovers = search
+      ? handoverRows.filter((handover) =>
+          [handover.customerName, handover.mobileNumber, handover.vehicleName, handover.vehicleNumber, handover.bookingCode]
+            .some((value) => new RegExp(escapeRegex(search), "i").test(String(value || ""))),
+        )
+      : handoverRows;
 
     const customerMap = new Map();
     for (const booking of bookings) {
@@ -293,6 +438,7 @@ export const getRefundRequestOptions = async (req, res, next) => {
     return res.status(200).json({
       success: true,
       customers: [...customerMap.values()],
+      handovers: searchedHandovers,
       bookings: bookings.map((booking) => ({
         _id: booking._id,
         bookingCode: booking.bookingCode || "",
@@ -337,6 +483,9 @@ function normalizeManualRequest(body) {
     (body.bookingId !== undefined &&
       body.bookingId !== null &&
       typeof body.bookingId !== "string") ||
+    (body.handoverId !== undefined &&
+      body.handoverId !== null &&
+      typeof body.handoverId !== "string") ||
     (typeof body.amount !== "number" && typeof body.amount !== "string") ||
     typeof body.method !== "string" ||
     typeof body.reason !== "string" ||
@@ -344,6 +493,9 @@ function normalizeManualRequest(body) {
     (body.customerUpiId !== undefined &&
       body.customerUpiId !== null &&
       typeof body.customerUpiId !== "string") ||
+    (body.accountDetails !== undefined &&
+      body.accountDetails !== null &&
+      (typeof body.accountDetails !== "object" || Array.isArray(body.accountDetails))) ||
     (body.proofImageUrl !== undefined &&
       body.proofImageUrl !== null &&
       typeof body.proofImageUrl !== "string")
@@ -352,9 +504,24 @@ function normalizeManualRequest(body) {
   }
   const customerMobile = String(body.customerMobile || "").trim();
   const bookingId = body.bookingId ? String(body.bookingId).trim() : "";
+  const handoverId = body.handoverId ? String(body.handoverId).trim() : "";
   const amount = Number(body.amount);
   const method = String(body.method || "").trim().toLowerCase();
   const customerUpiId = String(body.customerUpiId || "").trim();
+  const accountDetails = body.accountDetails && typeof body.accountDetails === "object"
+    ? body.accountDetails
+    : {};
+  for (const [key, value] of Object.entries(accountDetails)) {
+    if (typeof value !== "string") {
+      throw new ApiError(400, "Bank account details must be text.");
+    }
+  }
+  const normalizedAccountDetails = {
+    accountHolderName: String(accountDetails.accountHolderName || "").trim(),
+    accountNumber: String(accountDetails.accountNumber || "").trim(),
+    ifscCode: String(accountDetails.ifscCode || "").trim(),
+    bankName: String(accountDetails.bankName || "").trim(),
+  };
   const reason = String(body.reason || "").trim();
   const idempotencyKey = String(body.idempotencyKey || "").trim();
 
@@ -362,6 +529,7 @@ function normalizeManualRequest(body) {
     throw new ApiError(400, "Select a valid customer.");
   }
   if (bookingId) requireObjectId(bookingId, "booking id");
+  if (handoverId) requireObjectId(handoverId, "handover id");
   if (!Number.isFinite(amount) || amount <= 0 || roundMoney(amount) !== amount) {
     throw new ApiError(
       400,
@@ -373,11 +541,21 @@ function normalizeManualRequest(body) {
   }
   if (
     customerUpiId &&
-    (method === "cash" ||
+    (["cash", "bank_transfer"].includes(method) ||
       customerUpiId.length > 256 ||
       !/^[A-Za-z0-9._-]+@[A-Za-z0-9.-]+$/.test(customerUpiId))
   ) {
     throw new ApiError(400, "Enter a valid UPI ID for a digital refund method.");
+  }
+  if (method === "bank_transfer") {
+    if (
+      !normalizedAccountDetails.accountHolderName ||
+      !normalizedAccountDetails.accountNumber ||
+      !normalizedAccountDetails.ifscCode ||
+      !normalizedAccountDetails.bankName
+    ) {
+      throw new ApiError(400, "Enter all required bank account details.");
+    }
   }
   if (!reason || reason.length > 500) {
     throw new ApiError(400, "Enter a refund reason (maximum 500 characters).");
@@ -389,9 +567,11 @@ function normalizeManualRequest(body) {
   return {
     customerMobile,
     bookingId,
+    handoverId,
     amount: roundMoney(amount),
     method,
     customerUpiId,
+    accountDetails: normalizedAccountDetails,
     reason,
     idempotencyKey,
     proofImageUrl: validateHttpsImage(
@@ -427,6 +607,31 @@ export const createManualRefundRequest = async (req, res, next) => {
       let bookingAmount = 0;
       let booking = null;
 
+      if (input.handoverId) {
+        const handover = await Handover.findOne({
+          _id: input.handoverId,
+          company,
+          isDeleted: { $ne: true },
+        }).session(session);
+        if (!handover) throw new ApiError(404, "Refundable handover not found.");
+        if (String(handover.customer?.mobileNumber || "") !== input.customerMobile) {
+          throw new ApiError(400, "The selected handover does not belong to this customer.");
+        }
+        const linkedBooking = handover.bookingId
+          ? await Booking.findOne({
+              _id: handover.bookingId,
+              company,
+              isDeleted: { $ne: true },
+            }).select("_id").session(session)
+          : await Booking.findOne({
+              handover: handover._id,
+              company,
+              isDeleted: { $ne: true },
+            }).select("_id").session(session);
+        if (!linkedBooking) throw new ApiError(409, "The selected handover has no linked booking.");
+        input.bookingId = String(linkedBooking._id);
+      }
+
       if (input.bookingId) {
         booking = await Booking.findOne({
           _id: input.bookingId,
@@ -454,10 +659,12 @@ export const createManualRefundRequest = async (req, res, next) => {
           session,
         );
         if (input.amount > balance.refundableAmount) {
-          throw new ApiError(
-            400,
+          const balanceError = new ApiError(
+            409,
             `Refund amount exceeds the current refundable balance of ₹${balance.refundableAmount.toLocaleString("en-IN")}.`,
           );
+          balanceError.balance = { bookingId: booking._id, ...balance };
+          throw balanceError;
         }
         customerName = booking.customerName || "";
         vehicleName = booking.vehicleName || "";
@@ -508,6 +715,7 @@ export const createManualRefundRequest = async (req, res, next) => {
           amount: input.amount,
           method: input.method,
           customerUpiId: input.customerUpiId,
+          accountDetails: input.accountDetails,
           proofImageUrl: input.proofImageUrl,
           reason: input.reason,
         },
@@ -591,11 +799,28 @@ async function updateRequest(req, res, next, action) {
     if (utr.length > 120) throw new ApiError(400, "UTR/reference is too long.");
 
     await session.withTransaction(async () => {
+      let access = {};
+      if (action !== "refund") {
+        access = await refundActionScope(req.user, { id, session });
+      } else {
+        const { effectivePermissions } = await resolveRequestPermissions(req);
+        if (
+          effectivePermissions["page.paymentsHistory.view"] !== true ||
+          effectivePermissions["page.bookings.edit"] !== true ||
+          effectivePermissions["page.dashboard.edit"] !== true
+        ) {
+          throw new ApiError(403, "You do not have permission to mark this refund as refunded.");
+        }
+      }
       const request = await RefundRequest.findOne({
         _id: id,
-        company,
+        ...access,
       }).session(session);
       if (!request) throw new ApiError(404, "Refund request not found.");
+      // Attribute only a verified legacy record, atomically with its action.
+      if (action !== "refund" && !request.company && req.user.role !== "SUPER_ADMIN") {
+        request.company = company;
+      }
 
       // Existing screens use title case; accept both historical and contract statuses.
       request.status = request.status.charAt(0).toUpperCase() + request.status.slice(1).toLowerCase();
@@ -640,6 +865,16 @@ async function updateRequest(req, res, next, action) {
             "Upload separate proof that the refund payment was completed.",
           );
         }
+        const accountingError = detail => new ApiError(409,
+          `Refund reference: ${request._id}. Linked booking: ${request.bookingId || "not saved"}. ` +
+          `Refund accounting could not be recorded: ${detail} This request remains Approved; no refund was recorded. ` +
+          "Ask an administrator to verify the original cancellation and payment records, restore the verified original booking from history or correct this refund's link, then retry.");
+        const unresolvedBooking = () => accountingError(
+          "The linked booking is unavailable. The existing refund ledger requires a saved booking and has no standalone accounting path against a refund ID.");
+        const cancellation = request.refundSource ? request.refundSource === "cancellation" : request.source === "Booking Cancellation";
+        if (!request.bookingId && cancellation) {
+          throw unresolvedBooking();
+        }
         const refundedAt = new Date();
         request.status = "Refunded";
         request.refundedBy = req.user._id;
@@ -649,21 +884,19 @@ async function updateRequest(req, res, next, action) {
         request.transactionReference = utr;
 
         if (request.bookingId) {
-          const booking = await Booking.findOne({
-            _id: request.bookingId,
-            company,
-            isDeleted: { $ne: true },
-          }).session(session);
+          // The refund's action scope was authorized above. Its saved booking
+          // reference supplies accounting details, not another ownership gate.
+          // Include cancelled and archived bookings without a company filter.
+          const booking = await Booking.findById(request.bookingId).session(session);
           if (!booking) {
-            throw new ApiError(
-              409,
-              "The linked booking is no longer available; the refund was not recorded.",
-            );
+            throw unresolvedBooking();
           }
+          const accountingCompany = request.company || booking.company;
+          if (!accountingCompany) throw accountingError("Neither the refund nor its linked booking has an accounting company.");
           await PaymentHistory.create(
             [
               {
-                company,
+                company: accountingCompany,
                 bookingId: booking._id,
                 refundRequestId: request._id,
                 customer: {
@@ -700,9 +933,11 @@ async function updateRequest(req, res, next, action) {
         by: req.user._id,
         byName: req.user.fullName || req.user.name || "",
         note: reason,
-        at: new Date(),
+        at: action === "refund" ? request.refundedAt : new Date(),
       });
-      await request.save({ session });
+      // Legacy null-company documents may receive status/audit updates without
+      // inventing ownership or requiring unrelated historical fields to change.
+      await request.save({ session, validateModifiedOnly: !request.company });
       result = { request, replayed: false };
     });
 

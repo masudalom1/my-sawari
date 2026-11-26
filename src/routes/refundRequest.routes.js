@@ -17,6 +17,8 @@ import {
 } from "../controllers/refundRequest.controller.js";
 
 const router = express.Router();
+// This internal finance permission grants refund reads across companies,
+// including unattributed historical records. Write guards remain below.
 router.use(protect, requirePermission(PERMISSIONS.paymentsHistory.view));
 router.use((_req, res, next) => { res.set("Cache-Control", "private, no-store"); next(); });
 

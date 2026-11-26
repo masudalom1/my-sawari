@@ -12,6 +12,7 @@ import Booking from "../models/booking.model.js";
 import Customer from "../models/customer.model.js";
 import Vehicle from "../models/vehicle.model.js";
 import Maintenance from "../models/maintenance.model.js";
+import User from "../models/user.model.js";
 import PaymentHistory,{toBookingMonth} from "../models/paymentHistory.model.js";
 import RefundRequest from "../models/refundRequest.model.js";
 import { createRefundRequest } from "../services/createRefundRequest.js";
@@ -4340,7 +4341,7 @@ export const updateBooking = async (req, res, next) => {
 
 // The calendar and Edit Booking use the unified fleet, including operations-app
 // bookings stamped with their creator's company. Both cancellation routes require
-// bookings.edit. Resolve the same saved _id, then scope financial queries/writes
+// bookings.cancel. Resolve the same saved _id, then scope financial queries/writes
 // to its saved company, never the caller's company or a client-supplied value.
 async function findCancellationBooking(id, session = null) {
   const booking = await Booking.findOne({ _id: id, isDeleted: false }).session(session);
@@ -4349,6 +4350,20 @@ async function findCancellationBooking(id, session = null) {
     throw new ApiError(409, "This booking has no valid saved company. Correct its company before cancelling.");
   }
   return booking;
+}
+
+async function assertCancellationCompanyAccess(user, booking) {
+  if (user.role === "SUPER_ADMIN") return;
+  const userCompany = user.company || user.createdBy || user._id;
+  if (String(userCompany?._id || userCompany) === String(booking.company)) return;
+  const bookingOwner = await User.findById(booking.company).select("businessName").lean();
+  if (
+    !bookingOwner ||
+    String(bookingOwner.businessName || "").trim().toLowerCase() !==
+      String(user.businessName || "").trim().toLowerCase()
+  ) {
+    throw new ApiError(403, "You do not have permission to cancel this booking.");
+  }
 }
 
 export const cancelBooking = async (req, res, next) => {
@@ -4367,6 +4382,7 @@ export const cancelBooking = async (req, res, next) => {
 
     await session.withTransaction(async () => {
       const booking = await findCancellationBooking(id, session);
+      await assertCancellationCompanyAccess(req.user, booking);
       const companyId = booking.company;
 
       if (booking.status === "cancelled") {
@@ -4473,6 +4489,7 @@ export const getBookingCancellationDetails = async (req, res, next) => {
     }
 
     const booking = await findCancellationBooking(id);
+    await assertCancellationCompanyAccess(req.user, booking);
     assertBookingCanBeCancelled(booking);
 
     const refundBalance = await getCurrentRefundableBalance(

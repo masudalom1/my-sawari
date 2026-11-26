@@ -73,7 +73,7 @@ router.get("/:id", protect, requirePermission(PERMISSIONS.bookings.view), getLea
 router.get(
   "/:id/cancellation-details",
   protect,
-  requirePermission(PERMISSIONS.bookings.edit),
+  requirePermission(PERMISSIONS.bookings.cancel),
   getBookingCancellationDetails,
 );
 router.put("/:id", protect, requirePermission(PERMISSIONS.bookings.edit), updateLead);
@@ -91,6 +91,6 @@ router.get("/:id/bookings",protect,requirePermission(PERMISSIONS.bookings.view),
 router.post("/create",protect,requirePermission(PERMISSIONS.bookings.create),createBookings);
 router.get("/booking-details/:id", protect, requirePermission(PERMISSIONS.bookings.view), getBookingDetails);
 router.put("/booking-update/:id", protect, requirePermission(PERMISSIONS.bookings.edit), updateBooking);
-router.put("/:id/cancel", protect, requirePermission(PERMISSIONS.bookings.edit), cancelBooking);
+router.put("/:id/cancel", protect, requirePermission(PERMISSIONS.bookings.cancel), cancelBooking);
 
 export default router;

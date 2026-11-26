@@ -26,6 +26,7 @@ test("central registry defines unique stable permission keys", () => {
     "page.bookings.view",
     "page.bookings.create",
     "page.bookings.edit",
+    "page.bookings.cancel",
     "page.bookings.delete",
     "page.paymentsHistory.view",
     "page.paymentsHistory.export",
@@ -54,6 +55,7 @@ test("central registry defines unique stable permission keys", () => {
       assert.equal(PERMISSIONS[key][action], permissionKey(key, action));
     }
   }
+  assert.equal(PERMISSIONS.bookings.cancel, "page.bookings.cancel");
 });
 
 test("backend route guards reference only keys from the central registry", async () => {
