@@ -6,6 +6,57 @@ import Maintenance from "../models/maintenance.model.js";
 import Booking from "../models/booking.model.js";
 import { bookingTimestamp } from "../../shared/bookingDuration.mjs";
 
+const parseDate = (value) => {
+  if (!value) return null;
+  const d = value instanceof Date ? value : new Date(value);
+  return Number.isNaN(d.getTime()) ? null : d;
+};
+
+/**
+ * Close any open/legacy maintenance jobs when a vehicle is marked available.
+ * Guards missing or malformed startDate so older maintenance records never throw on .getTime() or validation.
+ */
+const completeActiveMaintenancesForVehicle = async (vehicle, userId, now = new Date()) => {
+  if (vehicle.maintenance) {
+    vehicle.maintenance.required = false;
+    vehicle.maintenance.currentMaintenance = null;
+  }
+
+  const activeMaintenances = await Maintenance.find({
+    vehicle: vehicle._id,
+    status: { $in: ["Scheduled", "In Progress"] },
+    isDeleted: false,
+  });
+
+  for (const m of activeMaintenances) {
+    const existingStart = parseDate(m.startDate);
+    const validStart = existingStart || parseDate(m.createdAt) || now;
+    if (!existingStart) {
+      m.startDate = validStart;
+    }
+
+    m.status = "Completed";
+    m.completedDate = now;
+    m.endDate = now > validStart ? now : new Date(validStart.getTime() + 60_000);
+    if (!m.completionProof?.note) {
+      m.completionProof = {
+        ...(m.completionProof || {}),
+        note: "Vehicle marked as Available",
+      };
+    }
+    if (!Array.isArray(m.statusHistory)) {
+      m.statusHistory = [];
+    }
+    m.statusHistory.push({
+      status: "Completed",
+      changedBy: userId,
+      note: "Vehicle marked as Available",
+      changedAt: now,
+    });
+    await m.save();
+  }
+};
+
 // add vehicle screen
 export const createVehicle = async (req, res, next) => {
   try {
@@ -546,34 +597,7 @@ export const updateVehicle = async (req, res, next) => {
  
       vehicle.status = req.body.status;
       if (req.body.status === "available") {
-        if (vehicle.maintenance) {
-          vehicle.maintenance.required = false;
-          vehicle.maintenance.currentMaintenance = null;
-        }
-        const now = new Date();
-        const activeMaintenances = await Maintenance.find({
-          vehicle: vehicle._id,
-          status: { $in: ["Scheduled", "In Progress"] },
-          isDeleted: false,
-        });
-        for (const m of activeMaintenances) {
-          m.status = "Completed";
-          m.completedDate = now;
-          m.endDate = now > m.startDate ? now : new Date(m.startDate.getTime() + 60_000);
-          if (!m.completionProof?.note) {
-            m.completionProof = {
-              ...(m.completionProof || {}),
-              note: "Vehicle marked as Available",
-            };
-          }
-          m.statusHistory.push({
-            status: "Completed",
-            changedBy: req.user?._id,
-            note: "Vehicle marked as Available",
-            changedAt: now,
-          });
-          await m.save();
-        }
+        await completeActiveMaintenancesForVehicle(vehicle, req.user?._id);
       }
     }
  
@@ -679,34 +703,7 @@ export const updateVehicleStatus = async (req, res, next) => {
 
     vehicle.status = normalizedStatus;
     if (normalizedStatus === "available") {
-      if (vehicle.maintenance) {
-        vehicle.maintenance.required = false;
-        vehicle.maintenance.currentMaintenance = null;
-      }
-      const now = new Date();
-      const activeMaintenances = await Maintenance.find({
-        vehicle: vehicle._id,
-        status: { $in: ["Scheduled", "In Progress"] },
-        isDeleted: false,
-      });
-      for (const m of activeMaintenances) {
-        m.status = "Completed";
-        m.completedDate = now;
-        m.endDate = now > m.startDate ? now : new Date(m.startDate.getTime() + 60_000);
-        if (!m.completionProof?.note) {
-          m.completionProof = {
-            ...(m.completionProof || {}),
-            note: "Vehicle marked as Available",
-          };
-        }
-        m.statusHistory.push({
-          status: "Completed",
-          changedBy: req.user?._id,
-          note: "Vehicle marked as Available",
-          changedAt: now,
-        });
-        await m.save();
-      }
+      await completeActiveMaintenancesForVehicle(vehicle, req.user?._id);
     }
     await vehicle.save();
 

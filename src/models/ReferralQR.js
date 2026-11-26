@@ -83,6 +83,7 @@ const referralQRSchema = new mongoose.Schema(
     executiveId: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null, index: true },
     executiveName: { type: String, trim: true, default: null },
     assignedBy: { type: assignerSchema, default: null },
+    templateId: { type: mongoose.Schema.Types.ObjectId, ref: "QRTemplate", default: null },
 
     // Audit trail of assignment history
     history: { type: [historySchema], default: [] },

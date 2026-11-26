@@ -30,7 +30,7 @@ const STATUS_FILTER = {
 const PUBLIC_FIELDS =
   "token batchName status claimedAt assignedAt createdAt updatedAt " +
   "claimDetails.businessName claimDetails.category claimDetails.location " +
-  "executiveName assignedBy.name assignedBy.role";
+  "executiveName assignedBy.name assignedBy.role templateId";
 
 const normalizeCode = (v) => String(v || "").trim().toUpperCase();
 const clean = (v) => String(v ?? "").trim();
@@ -291,6 +291,8 @@ export const assignCode = async (req, res, next) => {
 
     const now = new Date();
     const by = assignerFrom(req.user);
+    const rawTplId = String(req.body?.templateId || "").trim();
+    const validTemplateId = mongoose.isValidObjectId(rawTplId) ? rawTplId : null;
 
     // Atomic: only an "available" QR can be assigned, so never twice
     const qr = await ReferralQR.findOneAndUpdate(
@@ -304,6 +306,7 @@ export const assignCode = async (req, res, next) => {
           executiveId: by.userId,
           executiveName: by.name,
           assignedBy: by,
+          ...(validTemplateId ? { templateId: validTemplateId } : {}),
           claimDetails: {
             businessName: businessName || ownerName,
             ownerName: ownerName,
