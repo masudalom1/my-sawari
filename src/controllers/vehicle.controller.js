@@ -12,11 +12,32 @@ const parseDate = (value) => {
   return Number.isNaN(d.getTime()) ? null : d;
 };
 
+const normalizeVehicleStatusInput = (status) => {
+  const value = String(status || "").trim().toLowerCase();
+  if (
+    value === "service" ||
+    value === "in_service" ||
+    value === "in service" ||
+    value === "maintenance" ||
+    value === "under_maintenance" ||
+    value === "under maintenance" ||
+    value === "in maintenance"
+  ) {
+    return "service";
+  }
+  if (value === "available" || value === "rent") return value;
+  return null;
+};
+
 /**
- * Close any open/legacy maintenance jobs when a vehicle is marked available.
- * Guards missing or malformed startDate so older maintenance records never throw on .getTime() or validation.
+ * Close ongoing maintenance jobs when a vehicle transitions out of service to available.
+ * Guards missing or malformed startDate and preserves future Scheduled maintenance blocks.
  */
 const completeActiveMaintenancesForVehicle = async (vehicle, userId, now = new Date()) => {
+  const currentMaintenanceId = vehicle.maintenance?.currentMaintenance
+    ? String(vehicle.maintenance.currentMaintenance)
+    : null;
+
   if (vehicle.maintenance) {
     vehicle.maintenance.required = false;
     vehicle.maintenance.currentMaintenance = null;
@@ -30,6 +51,15 @@ const completeActiveMaintenancesForVehicle = async (vehicle, userId, now = new D
 
   for (const m of activeMaintenances) {
     const existingStart = parseDate(m.startDate);
+    if (
+      m.status === "Scheduled" &&
+      existingStart &&
+      existingStart > now &&
+      String(m._id) !== currentMaintenanceId
+    ) {
+      continue;
+    }
+
     const validStart = existingStart || parseDate(m.createdAt) || now;
     if (!existingStart) {
       m.startDate = validStart;
@@ -586,17 +616,28 @@ export const updateVehicle = async (req, res, next) => {
     // Status
     // -----------------------------------------
     if (req.body.status !== undefined) {
-      const allowedStatuses = ["available", "rent", "service"];
- 
-      if (!allowedStatuses.includes(req.body.status)) {
+      const incomingStatus = normalizeVehicleStatusInput(req.body.status);
+
+      if (!incomingStatus) {
         return res.status(400).json({
           success: false,
           message: "Status must be available, rent, or service",
         });
       }
- 
-      vehicle.status = req.body.status;
-      if (req.body.status === "available") {
+
+      const previousStatus = normalizeVehicleStatusInput(vehicle.status);
+      const wasInMaintenance =
+        previousStatus === "service" ||
+        Boolean(vehicle.maintenance?.required || vehicle.maintenance?.currentMaintenance);
+
+      vehicle.status = incomingStatus;
+      // Only auto-complete active maintenance when status actually changes out of
+      // service/maintenance into "available".
+      if (
+        incomingStatus === "available" &&
+        previousStatus !== "available" &&
+        wasInMaintenance
+      ) {
         await completeActiveMaintenancesForVehicle(vehicle, req.user?._id);
       }
     }
@@ -661,23 +702,6 @@ export const deleteVehicle = async (req, res, next) => {
   }
 };
 
-const normalizeVehicleStatusInput = (status) => {
-  const value = String(status || "").trim().toLowerCase();
-  if (
-    value === "service" ||
-    value === "in_service" ||
-    value === "in service" ||
-    value === "maintenance" ||
-    value === "under_maintenance" ||
-    value === "under maintenance" ||
-    value === "in maintenance"
-  ) {
-    return "service";
-  }
-  if (value === "available" || value === "rent") return value;
-  return null;
-};
-
 export const updateVehicleStatus = async (req, res, next) => {
   try {
     const normalizedStatus = normalizeVehicleStatusInput(req.body?.status);
@@ -701,8 +725,13 @@ export const updateVehicleStatus = async (req, res, next) => {
       });
     }
 
+    const previousStatus = normalizeVehicleStatusInput(vehicle.status);
+    const wasInMaintenance =
+      previousStatus === "service" ||
+      Boolean(vehicle.maintenance?.required || vehicle.maintenance?.currentMaintenance);
+
     vehicle.status = normalizedStatus;
-    if (normalizedStatus === "available") {
+    if (normalizedStatus === "available" && wasInMaintenance) {
       await completeActiveMaintenancesForVehicle(vehicle, req.user?._id);
     }
     await vehicle.save();
