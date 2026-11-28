@@ -43,8 +43,12 @@ test("payment import uses the established revenue allocation without changing so
     { amount: 600, method: "phonepe", breakdown: [0, 0, 0], split: [0, 600, 0, 0] });
   add("Razorpay-only", { amount: 700, paymentMethod: "razorpay", paymentBreakdown: { razorpay: 700 } },
     { amount: 700, method: "razorpay", breakdown: [0, 0, 700], split: [0, 0, 700, 0] });
+  add("GPay-only alias", { amount: 500, paymentMethod: "Google Pay", paymentBreakdown: { "Google Pay": 500 } },
+    { amount: 500, method: "gpay", breakdown: [0, 0, 0, 500], split: [0, 0, 0, 500] });
   add("mixed valid split", { amount: 1300, paymentMethod: "mixed", paymentBreakdown: { cash: 1000, phonePe: 300, razorpay: 0 } },
     { amount: 1300, method: "mixed", breakdown: [1000, 300, 0], split: [1000, 300, 0, 0] });
+  add("mixed GPay split", { amount: 900, paymentMethod: "mixed", paymentBreakdown: { cash: 200, phonePe: 300, gpay: 400 } },
+    { amount: 900, method: "mixed", breakdown: [200, 300, 0, 400], split: [200, 300, 0, 400] });
   add("mixed without split", { amount: 900, paymentMethod: "mixed", bookingId: bookingB },
     { amount: 900, method: "mixed", breakdown: [0, 0, 0], split: [0, 0, 0, 900] });
   const legacy = add("legacy numeric strings and breakdown-only amount", { amount: undefined, paymentMethod: "mixed", paymentBreakdown: { cash: "40.25", phonePe: "59.75", razorpay: "0" } },
@@ -76,7 +80,10 @@ test("payment import uses the established revenue allocation without changing so
     assert.ok(row);
     assert.equal(row.amount, expected.amount);
     assert.equal(row.paymentMethod, expected.method);
-    assert.deepEqual([row.paymentBreakdown.cash, row.paymentBreakdown.phonePe, row.paymentBreakdown.razorpay], expected.breakdown);
+    assert.deepEqual([row.paymentBreakdown.cash, row.paymentBreakdown.phonePe, row.paymentBreakdown.razorpay, row.paymentBreakdown.gpay || 0], [
+      ...expected.breakdown.slice(0, 3),
+      expected.breakdown[3] || 0,
+    ]);
     assert.deepEqual([row.channelSplit.cash, row.channelSplit.phonepe, row.channelSplit.razorpay, row.channelSplit.unspecified], expected.split);
     assert.equal(row.bookingId, String(record.bookingId));
     assert.equal(row.type, record.type);
@@ -106,16 +113,16 @@ test("payment import uses the established revenue allocation without changing so
     assert.equal(response.json.count, sources.length);
     assert.equal(new Set(response.json.payments.map(({ _id }) => _id)).size, sources.length);
     assert.equal(new Set(response.json.payments.map(({ bookingId }) => bookingId)).size, 2);
-    assert.equal(response.json.payments.reduce((sum, payment) => sum + payment.amount, 0), 5775);
+    assert.equal(response.json.payments.reduce((sum, payment) => sum + payment.amount, 0), 7175);
     const gross = response.json.payments
       .filter((payment) => payment.type !== "refund")
       .reduce((sum, payment) => sum + payment.amount, 0);
     const refunds = response.json.payments
       .filter((payment) => payment.type === "refund")
       .reduce((sum, payment) => sum + payment.amount, 0);
-    assert.equal(gross, 5725);
+    assert.equal(gross, 7125);
     assert.equal(refunds, 50);
-    assert.equal(gross - refunds, 5675);
+    assert.equal(gross - refunds, 7075);
     assert.equal(response.json.payments.find(({ _id }) => _id === String(refund._id)).amount, 50);
   });
 

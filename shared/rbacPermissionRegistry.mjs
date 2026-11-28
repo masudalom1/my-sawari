@@ -29,7 +29,7 @@ export const PERMISSION_MODULES = Object.freeze([
     href: "/AllBookings",
     group: "Bookings",
     navigation: true,
-    actions: ["view", "create", "edit", "delete"],
+    actions: ["view", "create", "edit", "cancel", "delete"],
   },
   {
     key: "paymentsHistory",
@@ -127,6 +127,11 @@ export const PERMISSION_ACTIONS = Object.freeze({
   view: { key: "view", label: "View", description: "Page and sidebar visibility" },
   create: { key: "create", label: "Create", description: "Create records or users" },
   edit: { key: "edit", label: "Edit", description: "Edit existing records" },
+  cancel: {
+    key: "cancel",
+    label: "Cancel booking",
+    description: "Cancel a booking before handover",
+  },
   delete: { key: "delete", label: "Delete", description: "Delete records" },
   export: { key: "export", label: "Export", description: "Export payment history" },
   collect: { key: "collect", label: "Collect", description: "Record a cash collection" },
@@ -160,6 +165,10 @@ export const RBAC_PERMISSION_KEYS = Object.freeze(
     actions.map((action) => permissionKey(key, action)),
   ),
 );
+
+export const DEFAULT_ROLE_PERMISSION_VALUES = Object.freeze({
+  [PERMISSIONS.bookings.cancel]: true,
+});
 
 const RBAC_PERMISSION_KEY_SET = new Set(RBAC_PERMISSION_KEYS);
 export const PROTECTED_USER_OVERRIDE_KEYS = Object.freeze(

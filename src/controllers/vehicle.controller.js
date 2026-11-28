@@ -6,6 +6,87 @@ import Maintenance from "../models/maintenance.model.js";
 import Booking from "../models/booking.model.js";
 import { bookingTimestamp } from "../../shared/bookingDuration.mjs";
 
+const parseDate = (value) => {
+  if (!value) return null;
+  const d = value instanceof Date ? value : new Date(value);
+  return Number.isNaN(d.getTime()) ? null : d;
+};
+
+const normalizeVehicleStatusInput = (status) => {
+  const value = String(status || "").trim().toLowerCase();
+  if (
+    value === "service" ||
+    value === "in_service" ||
+    value === "in service" ||
+    value === "maintenance" ||
+    value === "under_maintenance" ||
+    value === "under maintenance" ||
+    value === "in maintenance"
+  ) {
+    return "service";
+  }
+  if (value === "available" || value === "rent") return value;
+  return null;
+};
+
+/**
+ * Close ongoing maintenance jobs when a vehicle transitions out of service to available.
+ * Guards missing or malformed startDate and preserves future Scheduled maintenance blocks.
+ */
+const completeActiveMaintenancesForVehicle = async (vehicle, userId, now = new Date()) => {
+  const currentMaintenanceId = vehicle.maintenance?.currentMaintenance
+    ? String(vehicle.maintenance.currentMaintenance)
+    : null;
+
+  if (vehicle.maintenance) {
+    vehicle.maintenance.required = false;
+    vehicle.maintenance.currentMaintenance = null;
+  }
+
+  const activeMaintenances = await Maintenance.find({
+    vehicle: vehicle._id,
+    status: { $in: ["Scheduled", "In Progress"] },
+    isDeleted: false,
+  });
+
+  for (const m of activeMaintenances) {
+    const existingStart = parseDate(m.startDate);
+    if (
+      m.status === "Scheduled" &&
+      existingStart &&
+      existingStart > now &&
+      String(m._id) !== currentMaintenanceId
+    ) {
+      continue;
+    }
+
+    const validStart = existingStart || parseDate(m.createdAt) || now;
+    if (!existingStart) {
+      m.startDate = validStart;
+    }
+
+    m.status = "Completed";
+    m.completedDate = now;
+    m.endDate = now > validStart ? now : new Date(validStart.getTime() + 60_000);
+    if (!m.completionProof?.note) {
+      m.completionProof = {
+        ...(m.completionProof || {}),
+        note: "Vehicle marked as Available",
+      };
+    }
+    if (!Array.isArray(m.statusHistory)) {
+      m.statusHistory = [];
+    }
+    m.statusHistory.push({
+      status: "Completed",
+      changedBy: userId,
+      note: "Vehicle marked as Available",
+      changedAt: now,
+    });
+    await m.save();
+  }
+};
+
 // add vehicle screen
 export const createVehicle = async (req, res, next) => {
   try {
@@ -535,45 +616,29 @@ export const updateVehicle = async (req, res, next) => {
     // Status
     // -----------------------------------------
     if (req.body.status !== undefined) {
-      const allowedStatuses = ["available", "rent", "service"];
- 
-      if (!allowedStatuses.includes(req.body.status)) {
+      const incomingStatus = normalizeVehicleStatusInput(req.body.status);
+
+      if (!incomingStatus) {
         return res.status(400).json({
           success: false,
           message: "Status must be available, rent, or service",
         });
       }
- 
-      vehicle.status = req.body.status;
-      if (req.body.status === "available") {
-        if (vehicle.maintenance) {
-          vehicle.maintenance.required = false;
-          vehicle.maintenance.currentMaintenance = null;
-        }
-        const now = new Date();
-        const activeMaintenances = await Maintenance.find({
-          vehicle: vehicle._id,
-          status: { $in: ["Scheduled", "In Progress"] },
-          isDeleted: false,
-        });
-        for (const m of activeMaintenances) {
-          m.status = "Completed";
-          m.completedDate = now;
-          m.endDate = now > m.startDate ? now : new Date(m.startDate.getTime() + 60_000);
-          if (!m.completionProof?.note) {
-            m.completionProof = {
-              ...(m.completionProof || {}),
-              note: "Vehicle marked as Available",
-            };
-          }
-          m.statusHistory.push({
-            status: "Completed",
-            changedBy: req.user?._id,
-            note: "Vehicle marked as Available",
-            changedAt: now,
-          });
-          await m.save();
-        }
+
+      const previousStatus = normalizeVehicleStatusInput(vehicle.status);
+      const wasInMaintenance =
+        previousStatus === "service" ||
+        Boolean(vehicle.maintenance?.required || vehicle.maintenance?.currentMaintenance);
+
+      vehicle.status = incomingStatus;
+      // Only auto-complete active maintenance when status actually changes out of
+      // service/maintenance into "available".
+      if (
+        incomingStatus === "available" &&
+        previousStatus !== "available" &&
+        wasInMaintenance
+      ) {
+        await completeActiveMaintenancesForVehicle(vehicle, req.user?._id);
       }
     }
  
@@ -625,7 +690,7 @@ export const deleteVehicle = async (req, res, next) => {
 
     await Vehicle.updateOne(
       { _id: vehicle._id },
-      { $set: { isDeleted: true } }
+      { $set: { isDeleted: true, deletedAt: new Date() } }
     );
 
     return res.status(200).json({
@@ -635,23 +700,6 @@ export const deleteVehicle = async (req, res, next) => {
   } catch (error) {
     next(error);
   }
-};
-
-const normalizeVehicleStatusInput = (status) => {
-  const value = String(status || "").trim().toLowerCase();
-  if (
-    value === "service" ||
-    value === "in_service" ||
-    value === "in service" ||
-    value === "maintenance" ||
-    value === "under_maintenance" ||
-    value === "under maintenance" ||
-    value === "in maintenance"
-  ) {
-    return "service";
-  }
-  if (value === "available" || value === "rent") return value;
-  return null;
 };
 
 export const updateVehicleStatus = async (req, res, next) => {
@@ -677,36 +725,14 @@ export const updateVehicleStatus = async (req, res, next) => {
       });
     }
 
+    const previousStatus = normalizeVehicleStatusInput(vehicle.status);
+    const wasInMaintenance =
+      previousStatus === "service" ||
+      Boolean(vehicle.maintenance?.required || vehicle.maintenance?.currentMaintenance);
+
     vehicle.status = normalizedStatus;
-    if (normalizedStatus === "available") {
-      if (vehicle.maintenance) {
-        vehicle.maintenance.required = false;
-        vehicle.maintenance.currentMaintenance = null;
-      }
-      const now = new Date();
-      const activeMaintenances = await Maintenance.find({
-        vehicle: vehicle._id,
-        status: { $in: ["Scheduled", "In Progress"] },
-        isDeleted: false,
-      });
-      for (const m of activeMaintenances) {
-        m.status = "Completed";
-        m.completedDate = now;
-        m.endDate = now > m.startDate ? now : new Date(m.startDate.getTime() + 60_000);
-        if (!m.completionProof?.note) {
-          m.completionProof = {
-            ...(m.completionProof || {}),
-            note: "Vehicle marked as Available",
-          };
-        }
-        m.statusHistory.push({
-          status: "Completed",
-          changedBy: req.user?._id,
-          note: "Vehicle marked as Available",
-          changedAt: now,
-        });
-        await m.save();
-      }
+    if (normalizedStatus === "available" && wasInMaintenance) {
+      await completeActiveMaintenancesForVehicle(vehicle, req.user?._id);
     }
     await vehicle.save();
 

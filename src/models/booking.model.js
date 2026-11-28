@@ -207,7 +207,6 @@ const bookingSchema = new mongoose.Schema(
     fastagBalance: { type: Number, min: 0 },
     paymentMethod: {
       type: String,
-      enum: ["cash", "phonepe", "gpay", "razorpay", "mixed"],
     },
     payment: {
       paymentDate: {
@@ -303,7 +302,6 @@ const bookingSchema = new mongoose.Schema(
 
       paymentMethod: {
         type: String,
-        enum: ["cash", "phonepe", "gpay", "razorpay", "mixed"],
         default: "cash",
       },
 
@@ -457,6 +455,18 @@ const bookingSchema = new mongoose.Schema(
       ],
       default: "confirmed",
       index: true,
+    },
+
+    cancellationReason: {
+      type: String,
+      default: "",
+      trim: true,
+      maxlength: 500,
+    },
+    cancelledAt: Date,
+    cancelledBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
     },
 
     // =========================

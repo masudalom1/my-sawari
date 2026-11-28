@@ -22,6 +22,7 @@ import dashboardRoutes from "./routes/dashboard.routes.js";
 import membershipRoutes from "./routes/membership.routes.js";
 import { trackWriteRequests } from "./realtime/changeFeed.js";
 import PaymentsHistory from "./routes/paymentHistory.js"
+import refundRequestRoutes from "./routes/refundRequest.routes.js";
 import qrRoutes from "../src/routes/qrRoutes.js"
 import apiActivityLogRoutes from "./routes/apiActivityLog.routes.js";
 
@@ -181,6 +182,7 @@ app.use("/api/v1/leads", leadRoutes);
 app.use("/api/v1/bookings", bookingRoutes);
 app.use("/api/v1/dashboard", dashboardRoutes);
 app.use("/api/v1/dashboard/payments-history", PaymentsHistory);
+app.use("/api/v1/refund-requests", refundRequestRoutes);
 app.use("/api/v1/qr", qrRoutes);
 app.use("/api/v1/activity-logs", apiActivityLogRoutes);
 // 404

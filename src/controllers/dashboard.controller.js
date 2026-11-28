@@ -15,6 +15,7 @@ import {
   revenuePaymentAmount,
   revenuePaymentBreakdown,
 } from "../services/paymentAllocation.service.js";
+import { normalizePaymentMethod } from "../../shared/paymentReporting.mjs";
 import {
   parseRevenueRange,
   daysBetweenKeys,
@@ -83,9 +84,7 @@ function exchangeHistory(handover) {
 
 export const getVehiclesForImport = async (req, res) => {
   try {
-    const vehicles = await Vehicle.find({
-      isDeleted: false,
-    })
+    const vehicles = await Vehicle.find({})
       .select({
         vehicleName: 1,
         vehicleNumber: 1,
@@ -93,6 +92,9 @@ export const getVehiclesForImport = async (req, res) => {
         category: 1,
         status: 1,
         pricePerDay: 1,
+        createdAt: 1,
+        deletedAt: 1,
+        isDeleted: 1,
         images: { $slice: 1 }, // only the first image is returned below
       })
       .sort({ pricePerDay: 1 })
@@ -110,6 +112,9 @@ export const getVehiclesForImport = async (req, res) => {
       image: vehicle.images?.[0]?.url || null,
       status: vehicle.status,
       pricePerDay: vehicle.pricePerDay || 0,
+      createdAt: vehicle.createdAt || null,
+      deletedAt: vehicle.deletedAt || null,
+      isDeleted: vehicle.isDeleted === true,
     }));
 
     return res.status(200).json({
@@ -749,7 +754,15 @@ export const getPaymentsForImport = async (req, res) => {
       if (!linkedVehicleId) unlinkedCount++;
 
       const breakdown = revenuePaymentBreakdown(payment);
-      const amount = revenuePaymentAmount(payment);
+      const gpay = Object.entries(payment.paymentBreakdown || {}).reduce(
+        (total, [method, value]) =>
+          normalizePaymentMethod(method) === "gpay"
+            ? total + (Number(value) || 0)
+            : total,
+        0,
+      );
+      const amount = revenuePaymentAmount(payment) +
+        (Number(payment.amount) > 0 ? 0 : gpay);
       const channelSplit = allocateRevenuePayment({ ...payment, paymentMethod: payment.paymentMethod || "cash" }, amount);
 
       formattedPayments.push({
@@ -765,8 +778,8 @@ export const getPaymentsForImport = async (req, res) => {
         // Mixed payments sometimes store only the breakdown; fall back to its total.
         amount,
         type: payment.type,
-        paymentMethod: payment.paymentMethod || "cash",
-        paymentBreakdown: breakdown,
+        paymentMethod: normalizePaymentMethod(payment.paymentMethod) || "cash",
+        paymentBreakdown: { ...breakdown, gpay },
         channelSplit,
         upiLast4: payment.upiLast4 || [],
 

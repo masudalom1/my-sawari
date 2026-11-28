@@ -1,6 +1,7 @@
 import RolePermission from "../models/rolePermission.model.js";
 import {
   getEffectivePermissions,
+  normalizeStoredRolePermissionMap,
   RBAC_PERMISSION_KEYS,
   toPlainPermissionMap,
 } from "../config/rbacPermissions.js";
@@ -35,7 +36,7 @@ export async function resolveUserPermissions(user) {
 
   const rolePermissions = isSuperAdmin
     ? Object.fromEntries(RBAC_PERMISSION_KEYS.map((key) => [key, true]))
-    : toPlainPermissionMap(policy?.permissions);
+    : normalizeStoredRolePermissionMap(policy?.permissions);
   const overrides = toPlainPermissionMap(user.permissionOverrides);
   const effectivePermissions = getEffectivePermissions(
     rolePermissions,

@@ -50,6 +50,23 @@ const upload = multer({
   },
 });
 
+// Refund QR images and payout proofs must not be public Cloudinary assets.
+export const refundAttachmentUpload = multer({
+  storage: new CloudinaryStorage({
+    cloudinary,
+    params: async (req) => ({
+      folder: `my-sawari/refunds/${req.user.company || req.user.createdBy || req.user._id}`,
+      type: "authenticated",
+      public_id: randomUUID(),
+      resource_type: "image",
+      allowed_formats: ["jpg", "jpeg", "png", "webp"],
+      overwrite: false,
+    }),
+  }),
+  fileFilter: imageFileFilter,
+  limits: { fileSize: 10 * 1024 * 1024 },
+});
+
 /* ==================================
    HANDOVER UPLOAD
 ================================== */

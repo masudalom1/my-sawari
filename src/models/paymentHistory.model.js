@@ -89,6 +89,11 @@ const paymentHistorySchema = new mongoose.Schema(
       ref: "Booking",
       required: true,
     },
+    refundRequestId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Refund",
+      default: null,
+    },
 
     handoverId: {
       type: mongoose.Schema.Types.ObjectId,
@@ -155,7 +160,6 @@ const paymentHistorySchema = new mongoose.Schema(
 
     paymentMethod: {
       type: String,
-      enum: ["cash", "phonepe", "gpay", "razorpay", "mixed"],
       default: "cash",
     },
 
@@ -284,6 +288,13 @@ paymentHistorySchema.index({ paymentMethod: 1, lastCollectedAt: -1 });
 paymentHistorySchema.index({ type: 1, createdAt: -1 });
 paymentHistorySchema.index({ createdAt: -1, _id: -1 });
 paymentHistorySchema.index({ bookingId: 1, createdAt: -1 });
+paymentHistorySchema.index(
+  { refundRequestId: 1 },
+  {
+    unique: true,
+    partialFilterExpression: { refundRequestId: { $type: "objectId" } },
+  },
+);
 paymentHistorySchema.index({ paymentDate: -1 });
 paymentHistorySchema.index({ customPaymentDate: -1 });
 

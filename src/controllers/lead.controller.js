@@ -12,17 +12,145 @@ import Booking from "../models/booking.model.js";
 import Customer from "../models/customer.model.js";
 import Vehicle from "../models/vehicle.model.js";
 import Maintenance from "../models/maintenance.model.js";
+import User from "../models/user.model.js";
 import PaymentHistory,{toBookingMonth} from "../models/paymentHistory.model.js";
+import RefundRequest from "../models/refundRequest.model.js";
+import { createRefundRequest } from "../services/createRefundRequest.js";
 import { sendBookingCreatedMessage } from "../services/wati.service.js";
 import { resolveRequestPermissions } from "../services/permissionResolver.js";
 import { PERMISSIONS } from "../config/rbacPermissions.js";
 import CustomerActivity from "../models/customerActivity.model.js";
 import { normalizeMobileNumber } from "../services/membershipLookup.js";
+import { getCurrentRefundableBalance } from "../services/refundBalance.js";
 
 const dashboardCache = new Map();
 const CACHE_TTL_MS = 8000;
 
 export const invalidateBookingsCache = () => dashboardCache.clear();
+
+const REFUND_METHODS = new Set(["cash", "phonepe", "razorpay", "gpay"]);
+const roundMoney = (value) => Math.round((value + Number.EPSILON) * 100) / 100;
+
+function normalizeCancellationInput(body) {
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    throw new ApiError(400, "Invalid cancellation details.");
+  }
+
+  if (body.reason !== undefined && typeof body.reason !== "string") {
+    throw new ApiError(400, "Cancellation reason must be text.");
+  }
+  const reason = String(body.reason || "").trim();
+  if (reason.length > 500) {
+    throw new ApiError(400, "Cancellation reason must be 500 characters or less.");
+  }
+
+  if (body.refund == null) return { reason, refund: null };
+  if (typeof body.refund !== "object" || Array.isArray(body.refund)) {
+    throw new ApiError(400, "Invalid refund details.");
+  }
+
+  const amount = Number(body.refund.amount);
+  if (!["number", "string"].includes(typeof body.refund.amount) ||
+    !Number.isFinite(amount) || amount <= 0 || roundMoney(amount) !== amount) {
+    throw new ApiError(400, "Refund amount must be a positive amount with up to two decimals.");
+  }
+
+  const method = String(body.refund.method || "").trim().toLowerCase();
+  if (!REFUND_METHODS.has(method)) {
+    throw new ApiError(400, "Select a valid refund method.");
+  }
+
+  const customerUpiId = String(body.refund.customerUpiId || "").trim();
+  if (
+    body.refund.customerUpiId !== undefined &&
+    typeof body.refund.customerUpiId !== "string"
+  ) {
+    throw new ApiError(400, "Customer UPI ID must be text.");
+  }
+  if (
+    customerUpiId &&
+    (method === "cash" || customerUpiId.length > 256 ||
+      !/^[A-Za-z0-9._-]+@[A-Za-z0-9.-]+$/.test(customerUpiId))
+  ) {
+    throw new ApiError(400, "Enter a valid UPI ID for a digital refund method.");
+  }
+
+  const proofImageUrl = String(body.refund.proofImageUrl || "").trim();
+  if (
+    body.refund.proofImageUrl !== undefined &&
+    typeof body.refund.proofImageUrl !== "string"
+  ) {
+    throw new ApiError(400, "Payment proof URL must be text.");
+  }
+  if (proofImageUrl) {
+    let parsedUrl;
+    try {
+      parsedUrl = new URL(proofImageUrl);
+    } catch {
+      throw new ApiError(400, "Payment proof must be a valid HTTPS image URL.");
+    }
+    if (proofImageUrl.length > 2048 || parsedUrl.protocol !== "https:") {
+      throw new ApiError(400, "Payment proof must be a valid HTTPS image URL.");
+    }
+  }
+
+  return {
+    reason,
+    refund: {
+      amount: roundMoney(amount),
+      method,
+      customerUpiId,
+      proofImageUrl,
+    },
+  };
+}
+
+function assertBookingCanBeCancelled(booking) {
+  if (
+    booking.status !== "confirmed" ||
+    booking.handover ||
+    booking.vehicleReturn ||
+    booking.isWalkIn
+  ) {
+    throw new ApiError(
+      400,
+      "Only confirmed bookings that have not been handed over can be cancelled.",
+    );
+  }
+}
+
+function matchesExistingRefundRequest(existing, refund, reason) {
+  return (
+    existing &&
+    (existing.refundSource === "cancellation" || existing.source === "Booking Cancellation") &&
+    roundMoney(Number(existing.amount)) === refund.amount &&
+    existing.method === refund.method &&
+    String(existing.customerUpiId || "") === refund.customerUpiId &&
+    String(existing.reason || "") === reason &&
+    String(existing.proofImageUrl || "") === refund.proofImageUrl
+  );
+}
+
+function findCancellationRefund(bookingId, company, session = null) {
+  return RefundRequest.findOne({
+    bookingId,
+    company,
+    $or: [
+      { requestKey: `booking-cancellation:${bookingId}` },
+      { refundSource: "cancellation" },
+      { source: "Booking Cancellation" },
+    ],
+  }).session(session);
+}
+
+async function cancellationReplay(booking, refund, reason, session) {
+  if (booking.status !== "cancelled") return null;
+  const existing = await findCancellationRefund(booking._id, booking.company, session);
+  const matches = refund
+    ? matchesExistingRefundRequest(existing, refund, reason)
+    : !existing && String(booking.cancellationReason || "") === reason;
+  return matches ? { booking, refundRequest: existing, replayed: true } : null;
+}
 
 const getISTDateString = (date) =>
   new Date(date).toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" });
@@ -4211,57 +4339,169 @@ export const updateBooking = async (req, res, next) => {
   }
 };
 
+// The calendar and Edit Booking use the unified fleet, including operations-app
+// bookings stamped with their creator's company. Both cancellation routes require
+// bookings.cancel. Resolve the same saved _id, then scope financial queries/writes
+// to its saved company, never the caller's company or a client-supplied value.
+async function findCancellationBooking(id, session = null) {
+  const booking = await Booking.findOne({ _id: id, isDeleted: false }).session(session);
+  if (!booking) throw new ApiError(404, "Booking not found.");
+  if (!mongoose.isObjectIdOrHexString(booking.company)) {
+    throw new ApiError(409, "This booking has no valid saved company. Correct its company before cancelling.");
+  }
+  return booking;
+}
+
+async function assertCancellationCompanyAccess(user, booking) {
+  if (user.role === "SUPER_ADMIN") return;
+  const userCompany = user.company || user.createdBy || user._id;
+  if (String(userCompany?._id || userCompany) === String(booking.company)) return;
+  const bookingOwner = await User.findById(booking.company).select("businessName").lean();
+  if (
+    !bookingOwner ||
+    String(bookingOwner.businessName || "").trim().toLowerCase() !==
+      String(user.businessName || "").trim().toLowerCase()
+  ) {
+    throw new ApiError(403, "You do not have permission to cancel this booking.");
+  }
+}
+
 export const cancelBooking = async (req, res, next) => {
+  let session;
+  let input;
   try {
     const { id } = req.params;
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      throw new ApiError(400, "Invalid booking id.");
+    }
 
-    const booking = await Booking.findOne({
-      _id: id,
-      isDeleted: false,
+    input = normalizeCancellationInput(req.body || {});
+    const { reason, refund } = input;
+    let result;
+    session = await mongoose.startSession();
+
+    await session.withTransaction(async () => {
+      const booking = await findCancellationBooking(id, session);
+      await assertCancellationCompanyAccess(req.user, booking);
+      const companyId = booking.company;
+
+      if (booking.status === "cancelled") {
+        const replay = await cancellationReplay(booking, refund, reason, session);
+        if (replay) {
+          result = replay;
+          return;
+        }
+        throw new ApiError(409, "Booking was already cancelled with different details.");
+      }
+
+      assertBookingCanBeCancelled(booking);
+
+      if (refund) {
+        const existing = await findCancellationRefund(booking._id, companyId, session);
+        if (existing) {
+          throw new ApiError(409, "A cancellation refund request already exists for this booking.");
+        }
+
+        const { refundableAmount } = await getCurrentRefundableBalance(
+          booking,
+          companyId,
+          session,
+        );
+        if (refund.amount > refundableAmount) {
+          throw new ApiError(
+            400,
+            `Refund amount exceeds the current refundable balance of ₹${refundableAmount.toLocaleString("en-IN")}.`,
+          );
+        }
+      }
+
+      booking.status = "cancelled";
+      booking.cancellationReason = reason;
+      booking.cancelledAt = new Date();
+      booking.cancelledBy = req.user._id;
+      await booking.save({ session });
+
+      let refundRequest = null;
+      if (refund) {
+        refundRequest = await createRefundRequest({
+          booking,
+          actor: req.user,
+          session,
+          details: {
+            requestKey: `booking-cancellation:${booking._id}`,
+            source: "Booking Cancellation",
+            vehicleNumber: booking.vehicleNumber,
+            amount: refund.amount,
+            method: refund.method,
+            customerUpiId: refund.customerUpiId,
+            proofImageUrl: refund.proofImageUrl,
+            reason,
+          },
+        });
+      }
+
+      result = { booking, refundRequest, replayed: false };
     });
 
-    if (!booking) {
-      return res.status(404).json({
-        success: false,
-        message: "Booking not found.",
-      });
-    }
-
-    if (booking.status === "active") {
-      return res.status(400).json({
-        success: false,
-        message:
-          "Vehicle has already been handed over. Active bookings cannot be cancelled.",
-      });
-    }
-
-    if (booking.status === "completed") {
-      return res.status(400).json({
-        success: false,
-        message: "Completed bookings cannot be cancelled.",
-      });
-    }
-
-    if (booking.status === "cancelled") {
-      return res.status(400).json({
-        success: false,
-        message: "Booking is already cancelled.",
-      });
-    }
-
-    booking.status = "cancelled";
-    // isDeleted stays false — a cancelled booking is a real, visible
-    // outcome, not a deleted record. Keep it queryable for the
-    // Cancelled tab, history, and reporting.
-    booking.cancelledAt = new Date();
-    booking.cancelledBy = req.user._id;
-
-    await booking.save();
-
+    invalidateBookingsCache();
     return res.status(200).json({
       success: true,
-      message: "Booking cancelled successfully.",
+      message: result.replayed
+        ? "Booking cancellation already processed."
+        : "Booking cancelled successfully.",
+      replayed: result.replayed,
+      booking: result.booking,
+      refundRequest: result.refundRequest,
+    });
+  } catch (error) {
+    if (error?.code === 11000) {
+      // The unique cancellation key can win a race independently of transaction retries.
+      try {
+        const booking = await findCancellationBooking(req.params.id);
+        const replay = booking && await cancellationReplay(booking, input.refund, input.reason);
+        if (replay) {
+          invalidateBookingsCache();
+          return res.status(200).json({
+            success: true,
+            message: "Booking cancellation already processed.",
+            replayed: true,
+            booking: replay.booking,
+            refundRequest: replay.refundRequest,
+          });
+        }
+      } catch (lookupError) {
+        return next(lookupError);
+      }
+      next(new ApiError(409, "A cancellation refund request already exists for this booking."));
+    } else {
+      next(error);
+    }
+  } finally {
+    await session?.endSession();
+  }
+};
+
+export const getBookingCancellationDetails = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      throw new ApiError(400, "Invalid booking id.");
+    }
+
+    const booking = await findCancellationBooking(id);
+    await assertCancellationCompanyAccess(req.user, booking);
+    assertBookingCanBeCancelled(booking);
+
+    const refundBalance = await getCurrentRefundableBalance(
       booking,
+      booking.company,
+    );
+    return res.status(200).json({
+      success: true,
+      bookingId: String(booking._id),
+      bookingAmount: booking.bookingAmount ?? booking.payment?.bookingAmountPaid ?? null,
+      ...refundBalance,
+      hasActiveRefundRequest: refundBalance.reservedAmount > 0,
     });
   } catch (error) {
     next(error);

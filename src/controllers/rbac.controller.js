@@ -13,6 +13,7 @@ import asyncHandler from "../utils/asyncHandler.js";
 import ApiError from "../utils/ApiError.js";
 import {
   normalizePermissionMap,
+  normalizeStoredRolePermissionMap,
   normalizeUserPermissionOverrideMap,
   RBAC_PERMISSION_KEYS,
   toPlainPermissionMap,
@@ -65,25 +66,25 @@ export const getRolePermissionConfiguration = asyncHandler(async (req, res) => {
 
   const roles = USER_ROLES.map((role) => {
     const policy = policyByRole.get(role);
+    const permissions = role === "SUPER_ADMIN"
+      ? Object.fromEntries(RBAC_PERMISSION_KEYS.map((key) => [key, true]))
+      : normalizeStoredRolePermissionMap(policy?.permissions);
+    const allowedPermissionCount = Object.values(permissions).filter(
+      (allowed) => allowed === true,
+    ).length;
     return {
       role,
-      permissions: role === "SUPER_ADMIN"
-        ? Object.fromEntries(RBAC_PERMISSION_KEYS.map((key) => [key, true]))
-        : toPlainPermissionMap(policy?.permissions),
+      permissions,
       configured: role === "SUPER_ADMIN" || Boolean(policy),
       policyState: role === "SUPER_ADMIN"
         ? "protected"
         : !policy
           ? "unconfigured"
-          : Object.values(policy.permissions || {}).some((allowed) => allowed === true)
+          : allowedPermissionCount > 0
             ? "configured"
             : "no-access",
-      permissionCount: role === "SUPER_ADMIN"
-        ? RBAC_PERMISSION_KEYS.length
-        : Object.keys(policy?.permissions || {}).length,
-      allowedPermissionCount: role === "SUPER_ADMIN"
-        ? RBAC_PERMISSION_KEYS.length
-        : Object.values(policy?.permissions || {}).filter((allowed) => allowed === true).length,
+      permissionCount: Object.keys(permissions).length,
+      allowedPermissionCount,
       protected: role === "SUPER_ADMIN",
       updatedAt: policy?.updatedAt || null,
     };
@@ -125,8 +126,8 @@ export const updateRolePermissionConfiguration = asyncHandler(
       throw new ApiError(403, "SUPER_ADMIN permissions are protected");
     }
 
-    const permissions = normalizePermissionMap(req.body?.permissions);
-    if (!permissions) {
+    const submittedPermissions = normalizePermissionMap(req.body?.permissions);
+    if (!submittedPermissions) {
       throw new ApiError(
         400,
         "Permissions must contain only registered permission keys with boolean values",
@@ -137,6 +138,10 @@ export const updateRolePermissionConfiguration = asyncHandler(
       businessName: req.user.businessName,
       role,
     }).select("permissions").lean();
+    const permissions = {
+      ...normalizeStoredRolePermissionMap(previousPolicy?.permissions),
+      ...submittedPermissions,
+    };
     const policy = await RolePermission.findOneAndUpdate(
       { businessName: req.user.businessName, role },
       {

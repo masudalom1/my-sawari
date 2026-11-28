@@ -51,6 +51,50 @@ test("RBAC management is tenant-scoped, protected, and enforced on dashboard API
     false,
     "protected Settings permissions remain denied even when granted in the ADMIN role policy",
   );
+  const updatedAdminPolicy = await adminApi(
+    "PUT",
+    "/auth/roles/ADMIN/permissions",
+    { permissions: { "page.bookings.cancel": false } },
+  );
+  assert.equal(updatedAdminPolicy.status, 200);
+  assert.equal(updatedAdminPolicy.json.data.permissions["page.bookings.cancel"], false);
+  assert.equal(updatedAdminPolicy.json.data.permissions["page.settings.view"], true);
+  const rejectedUnregisteredPermission = await adminApi(
+    "PUT",
+    "/auth/roles/ADMIN/permissions",
+    { permissions: { "page.bookings.cancelLegacy": true } },
+  );
+  assert.equal(rejectedUnregisteredPermission.status, 400);
+  const salesExecutiveCancelGrant = await adminApi(
+    "PUT",
+    "/auth/roles/SALES_EXECUTIVE/permissions",
+    {
+      permissions: {
+        "page.bookings.cancel": true,
+        "page.bookings.edit": true,
+      },
+    },
+  );
+  assert.equal(salesExecutiveCancelGrant.status, 200);
+  assert.equal(
+    salesExecutiveCancelGrant.json.data.permissions["page.bookings.cancel"],
+    true,
+  );
+  const salesExecutiveCancelRevoked = await adminApi(
+    "PUT",
+    "/auth/roles/SALES_EXECUTIVE/permissions",
+    { permissions: { "page.bookings.cancel": false } },
+  );
+  assert.equal(salesExecutiveCancelRevoked.status, 200);
+  assert.equal(
+    salesExecutiveCancelRevoked.json.data.permissions["page.bookings.cancel"],
+    false,
+  );
+  assert.equal(
+    salesExecutiveCancelRevoked.json.data.permissions["page.bookings.edit"],
+    true,
+    "updating cancellation must preserve other role permissions",
+  );
   for (const [method, path, body] of [
     ["GET", "/auth/roles/permissions"],
     ["GET", "/auth/employees"],
@@ -79,12 +123,15 @@ test("RBAC management is tenant-scoped, protected, and enforced on dashboard API
   );
   assert.equal(missingPolicy.configured, false);
   assert.equal(missingPolicy.policyState, "unconfigured");
-  assert.equal(missingPolicy.allowedPermissionCount, 0);
+  assert.equal(missingPolicy.allowedPermissionCount, 1);
+  assert.equal(missingPolicy.permissions["page.bookings.cancel"], true);
 
   const missingAccess = await employeeApi("GET", "/auth/permissions/me");
   assert.equal(missingAccess.json.data.configured, false);
   assert.equal(missingAccess.json.data.policyState, "unconfigured");
-  assert.equal(missingAccess.json.data.effectivePermissionCount, 0);
+  assert.equal(missingAccess.json.data.rolePermissions["page.bookings.cancel"], true);
+  assert.equal(missingAccess.json.data.effectivePermissions["page.bookings.cancel"], true);
+  assert.equal(missingAccess.json.data.effectivePermissionCount, 1);
 
   const overrideWithoutPolicy = await adminApi(
     "PUT",
@@ -116,14 +163,16 @@ test("RBAC management is tenant-scoped, protected, and enforced on dashboard API
   );
   assert.equal(emptyPolicy.status, 200);
   assert.equal(emptyPolicy.json.data.configured, true);
-  assert.equal(emptyPolicy.json.data.policyState, "no-access");
-  assert.equal(emptyPolicy.json.data.allowedPermissionCount, 0);
+  assert.equal(emptyPolicy.json.data.policyState, "configured");
+  assert.equal(emptyPolicy.json.data.permissions["page.bookings.cancel"], true);
+  assert.equal(emptyPolicy.json.data.allowedPermissionCount, 1);
   const emptyAccess = await employeeApi("GET", "/auth/permissions/me");
   assert.equal(emptyAccess.json.data.configured, true);
-  assert.equal(emptyAccess.json.data.policyState, "no-access");
-  assert.equal(emptyAccess.json.data.rolePermissionCount, 0);
-  assert.equal(emptyAccess.json.data.roleAllowedPermissionCount, 0);
-  assert.equal(emptyAccess.json.data.effectivePermissionCount, 0);
+  assert.equal(emptyAccess.json.data.policyState, "configured");
+  assert.equal(emptyAccess.json.data.rolePermissionCount, 1);
+  assert.equal(emptyAccess.json.data.roleAllowedPermissionCount, 1);
+  assert.equal(emptyAccess.json.data.effectivePermissions["page.bookings.cancel"], true);
+  assert.equal(emptyAccess.json.data.effectivePermissionCount, 1);
 
   for (const [method, path, body] of [
     ["GET", "/auth/employees"],
