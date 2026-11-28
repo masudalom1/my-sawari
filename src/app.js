@@ -54,18 +54,23 @@ app.use(compression());
 app.use(cookieParser());
 
 // body parser
-app.use(
-  express.json({
-    limit: "10kb",
-  }),
-);
+// 🔧 CHANGED: QR card templates carry uploaded images (up to ~6 MB), so their
+// routes skip this 10kb parser and use their own 8mb parser inside qrRoutes.js.
+// Every other route keeps the strict 10kb limit.
+const isQrTemplateRoute = (req) => req.path.startsWith("/api/v1/qr/templates");
 
-app.use(
-  express.urlencoded({
-    extended: true,
-    limit: "10kb",
-  }),
-);
+const jsonParser = express.json({
+  limit: "10kb",
+});
+
+const urlencodedParser = express.urlencoded({
+  extended: true,
+  limit: "10kb",
+});
+
+app.use((req, res, next) => (isQrTemplateRoute(req) ? next() : jsonParser(req, res, next)));
+
+app.use((req, res, next) => (isQrTemplateRoute(req) ? next() : urlencodedParser(req, res, next)));
 
 // prevent HTTP param pollution
 app.use(hpp());
