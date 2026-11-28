@@ -55,9 +55,13 @@ app.use(cookieParser());
 
 // body parser
 // 🔧 CHANGED: QR card templates carry uploaded images (up to ~6 MB), so their
-// routes skip this 10kb parser and use their own 8mb parser inside qrRoutes.js.
+// routes skip this 10kb parser and use their own 8mb parser inside qrRoutes.js
+// (const templateJson = express.json({ limit: "8mb" })).
 // Every other route keeps the strict 10kb limit.
-const isQrTemplateRoute = (req) => req.path.startsWith("/api/v1/qr/templates");
+
+// True for /api/v1/qr/templates, /api/v1/qr/templates/:id, /api/v1/qr/templates/:id/default.
+// Uses originalUrl + a regex so it still matches with a double slash or query string.
+const isQrTemplateRoute = (req) => /\/qr\/templates(\/|\?|$)/.test(req.originalUrl || req.url || "");
 
 const jsonParser = express.json({
   limit: "10kb",
@@ -68,8 +72,10 @@ const urlencodedParser = express.urlencoded({
   limit: "10kb",
 });
 
+// JSON bodies: 10kb everywhere, except QR template routes (parsed later in qrRoutes.js)
 app.use((req, res, next) => (isQrTemplateRoute(req) ? next() : jsonParser(req, res, next)));
 
+// Form bodies: same rule
 app.use((req, res, next) => (isQrTemplateRoute(req) ? next() : urlencodedParser(req, res, next)));
 
 // prevent HTTP param pollution
