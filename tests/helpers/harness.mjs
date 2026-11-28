@@ -81,7 +81,13 @@ export async function mockWati() {
 // Cloudinary: multer-storage-cloudinary pipes each file into upload_stream().
 export async function mockCloudinary() {
   const { default: cloudinary } = await import("../../src/config/cloudinary.js");
-  const state = { fail: false, uploads: 0, uploadOptions: [] };
+  const state = {
+    fail: false,
+    uploads: 0,
+    uploadOptions: [],
+    uploadedPublicIds: [],
+    destroyed: [],
+  };
 
   cloudinary.uploader.upload_stream = (opts, callback) =>
     new Writable({
@@ -94,13 +100,17 @@ export async function mockCloudinary() {
         state.uploads += 1;
         state.uploadOptions.push(opts);
         const id = opts.public_id || `mock-${state.uploads}`;
+        state.uploadedPublicIds.push(id);
         callback(undefined, {
           secure_url: `https://res.cloudinary.com/test-cloud/image/upload/${id}.jpg`,
           public_id: id,
         });
       },
     });
-  cloudinary.uploader.destroy = (id, options, callback) => callback?.(undefined, { result: "ok" });
+  cloudinary.uploader.destroy = (id, options, callback) => {
+    state.destroyed.push(id);
+    callback?.(undefined, { result: "ok" });
+  };
 
   return state;
 }

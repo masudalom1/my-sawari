@@ -8,8 +8,10 @@ export const getBookingVehicles = async (req, res, next) => {
   try {
     // Unified fleet: the same vehicles the Fleet Dashboard shows
     // (/dashboard/import), whichever company registered them.
+    // `deactivation` lets the booking form apply the same last-bookable-day
+    // rule as the server.
     const vehicles = await Vehicle.find({ isDeleted: false })
-      .select("vehicleName vehicleNumber category status pricePerDay images").lean();
+      .select("vehicleName vehicleNumber category status pricePerDay images deactivation").lean();
     return res.json({ success: true, vehicles });
   } catch (error) { next(error); }
 };

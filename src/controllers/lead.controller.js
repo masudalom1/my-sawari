@@ -6,6 +6,8 @@ import { lookupMembershipDiscount } from "../services/membershipPricing.js";
 import { bookingDuration, bookingTimeMinutes, bookingTimestamp, extraRentalDayChange } from "../../shared/bookingDuration.mjs";
 import { formatBookingPaymentTime, validateBookingPaymentTime } from "../../shared/bookingPaymentTime.mjs";
 import { validateNewBookingFields } from "../../shared/newBookingValidation.mjs";
+import { isBlockedByVehicleDeactivation, vehicleDeactivatedResponse } from "../../shared/vehicleDeactivation.mjs";
+import { assertBookableUntil, withVehicleAvailabilityLock } from "../services/vehicleAvailability.js";
 import Lead from "../models/lead.model.js";
 import LeadHistory from "../models/leadHistory.model.js";
 import Booking from "../models/booking.model.js";
@@ -2809,68 +2811,75 @@ export const createLeadBooking = async (req, res, next) => {
     const finalDiscountAmount = Number(discountAmount) || 0;
     const finalSecurityDeposit = Number(securityDeposit) || 0;
 
-    const booking = await Booking.create({
-      lead: lead._id,
-      company: companyId,
-      createdBy: req.user._id,
-      bookingSource: "dashboard",
+    // The booking-availability lock keeps this booking and a concurrent
+    // deactivation of the vehicle from both being saved.
+    const leadBookingEnd = bookingTimestamp(finalToDate, dropTime || "06:00 PM");
+    const booking = await withVehicleAvailabilityLock(vehicle._id, async (session, lockedVehicle) => {
+      assertBookableUntil(lockedVehicle, leadBookingEnd);
+      const [created] = await Booking.create([{
+        lead: lead._id,
+        company: companyId,
+        createdBy: req.user._id,
+        bookingSource: "dashboard",
 
-      customerName: customerName?.trim() || lead.customerName,
-      mobileNumber: mobileNumber?.trim() || lead.mobileNumber,
-      alternateMobileNumber: alternateMobileNumber?.trim() || "",
-      occupation: occupation?.trim() || "",
+        customerName: customerName?.trim() || lead.customerName,
+        mobileNumber: mobileNumber?.trim() || lead.mobileNumber,
+        alternateMobileNumber: alternateMobileNumber?.trim() || "",
+        occupation: occupation?.trim() || "",
 
-      aadhaarNumber: aadhaarNumber?.trim() || "",
-      drivingLicenseNumber: drivingLicenseNumber?.trim().toUpperCase() || "",
+        aadhaarNumber: aadhaarNumber?.trim() || "",
+        drivingLicenseNumber: drivingLicenseNumber?.trim().toUpperCase() || "",
 
-      destination: destination?.trim() || "",
-      tripType: tripType || "local",
-      rentalType: rentalType === "flexible" ? "flexible" : "standard",
+        destination: destination?.trim() || "",
+        tripType: tripType || "local",
+        rentalType: rentalType === "flexible" ? "flexible" : "standard",
 
-      fromDate: finalFromDate,
-      toDate: finalToDate,
-      pickupTime: pickupTime || "09:00 AM",
-      dropTime: dropTime || "06:00 PM",
+        fromDate: finalFromDate,
+        toDate: finalToDate,
+        pickupTime: pickupTime || "09:00 AM",
+        dropTime: dropTime || "06:00 PM",
 
-      residents: Number(residents) || lead.residents || 1,
-      vehicleId,
-      vehicleName: vehicleName || vehicle.vehicleName,
-      vehicleNumber: vehicle.vehicleNumber,
-      vehicleColor: vehicle.color,
+        residents: Number(residents) || lead.residents || 1,
+        vehicleId,
+        vehicleName: vehicleName || vehicle.vehicleName,
+        vehicleNumber: vehicle.vehicleNumber,
+        vehicleColor: vehicle.color,
 
-      // Flat fields kept for existing list/card screens
-      quotationAmount: finalQuotationAmount,
-      bookingAmount: advancePaid,
-      discountAmount: finalDiscountAmount,
-      securityDeposit: finalSecurityDeposit,
-      fastagBalance: fastagAmount,
-      totalDays: finalTotalDays,
-
-      // NEW: structured payment/bill record — mirrors Handover.payment so
-      // the "View Booking" bill screen renders identically pre/post handover.
-      payment: {
-        vehicleRent,
-        pickupCharge,
-        dropCharge,
-        fastagAmount,
-        totalAmount: finalQuotationAmount,
+        // Flat fields kept for existing list/card screens
+        quotationAmount: finalQuotationAmount,
+        bookingAmount: advancePaid,
         discountAmount: finalDiscountAmount,
         securityDeposit: finalSecurityDeposit,
-        bookingAmountPaid: advancePaid,
-        paymentMethod,
-        paymentBreakdown: breakdown,
-        // balanceAmount / totalCollected / paymentStatus are computed
-        // by the pre("save") hook on the Booking model.
-      },
+        fastagBalance: fastagAmount,
+        totalDays: finalTotalDays,
 
-      // PERSIST PICKUP / DROP SERVICE
-      pickupDropRequired: isPickupDropRequired,
-      serviceType: finalServiceType,
-      pickup: pickupDetails,
-      drop: dropDetails,
-      pickupDropNotes: pickupDropNotes?.trim() || "",
+        // NEW: structured payment/bill record — mirrors Handover.payment so
+        // the "View Booking" bill screen renders identically pre/post handover.
+        payment: {
+          vehicleRent,
+          pickupCharge,
+          dropCharge,
+          fastagAmount,
+          totalAmount: finalQuotationAmount,
+          discountAmount: finalDiscountAmount,
+          securityDeposit: finalSecurityDeposit,
+          bookingAmountPaid: advancePaid,
+          paymentMethod,
+          paymentBreakdown: breakdown,
+          // balanceAmount / totalCollected / paymentStatus are computed
+          // by the pre("save") hook on the Booking model.
+        },
 
-      status: "confirmed",
+        // PERSIST PICKUP / DROP SERVICE
+        pickupDropRequired: isPickupDropRequired,
+        serviceType: finalServiceType,
+        pickup: pickupDetails,
+        drop: dropDetails,
+        pickupDropNotes: pickupDropNotes?.trim() || "",
+
+        status: "confirmed",
+      }], { session });
+      return created;
     });
 
     // ==========================
@@ -3586,6 +3595,17 @@ export const createBookings = async (req, res, next) => {
     const newStart = new Date(bookingTimestamp(finalFromDate, finalPickupTime));
     const newEnd = new Date(bookingTimestamp(finalToDate, finalDropTime));
 
+    // Read after the availability lock so a deactivation saved concurrently
+    // is seen: no booking may run past the vehicle's last bookable day.
+    const lockedVehicle = await Vehicle.findById(vehicle._id)
+      .select("deactivation")
+      .session(session)
+      .lean();
+    if (isBlockedByVehicleDeactivation(lockedVehicle, newEnd)) {
+      await session.abortTransaction();
+      return res.status(409).json(vehicleDeactivatedResponse(lockedVehicle));
+    }
+
     // Exact boundary is allowed:
     // Existing ends exactly when new booking starts = NO conflict.
     const existingBookings = await Booking.find({
@@ -4220,17 +4240,20 @@ export const updateBooking = async (req, res, next) => {
     if (end < start || (end === start && typeof booking.flexibleTime !== "boolean")) return fail("Drop date and time must be after pickup date and time.");
     const changedVehicle = String(booking.vehicleId) !== String(vehicle._id);
     const changedRange = changedVehicle || start !== bookingTimestamp(bookingDay(booking.fromDate), booking.pickupTime) || end !== bookingTimestamp(bookingDay(booking.toDate), booking.dropTime);
-    if (changedRange) {
+    // A reschedule or vehicle change is checked under the booking-availability
+    // lock, in the same transaction that saves it (see the end of this handler).
+    const assertRescheduleAvailable = async (session, lockedVehicle) => {
       const candidates = await Booking.find({ _id: { $ne: booking._id }, vehicleId: vehicle._id, isDeleted: false, status: { $nin: ["cancelled", "completed"] } })
-        .select("fromDate toDate pickupTime dropTime").lean();
+        .select("fromDate toDate pickupTime dropTime").session(session).lean();
       if (candidates.some(item => {
         const lo = bookingTimestamp(bookingDay(item.fromDate), item.pickupTime);
         const hi = bookingTimestamp(bookingDay(item.toDate), item.dropTime);
         return lo < end && hi > start;
-      })) return fail("This vehicle is already booked during the selected dates and times.", 409);
-      const maintenance = await Maintenance.exists({ vehicle: vehicle._id, isDeleted: false, status: { $nin: ["Cancelled", "Completed"] }, startDate: { $lt: new Date(end) }, endDate: { $gt: new Date(start) } });
-      if (maintenance) return fail("This vehicle has maintenance during the selected dates and times.", 409);
-    }
+      })) throw new ApiError(409, "This vehicle is already booked during the selected dates and times.");
+      const maintenance = await Maintenance.exists({ vehicle: vehicle._id, isDeleted: false, status: { $nin: ["Cancelled", "Completed"] }, startDate: { $lt: new Date(end) }, endDate: { $gt: new Date(start) } }).session(session);
+      if (maintenance) throw new ApiError(409, "This vehicle has maintenance during the selected dates and times.");
+      assertBookableUntil(lockedVehicle, end);
+    };
 
     // Apply only explicitly supported fields; omission preserves saved values.
     const textFields = ["customerName", "mobileNumber", "alternateMobileNumber", "occupation", "destination", "aadhaarNumber", "drivingLicenseNumber", "pickupDropNotes"];
@@ -4331,7 +4354,14 @@ export const updateBooking = async (req, res, next) => {
       booking.payment.totalAmount = Math.round((originalFare.totalAmount + delta) * 100) / 100;
     }
     await booking.validate();
-    await booking.save();
+    if (changedRange) {
+      await withVehicleAvailabilityLock(vehicle._id, async (session, lockedVehicle) => {
+        await assertRescheduleAvailable(session, lockedVehicle);
+        await booking.save({ session });
+      });
+    } else {
+      await booking.save();
+    }
     await booking.populate({ path: "vehicleId", select: "vehicleName vehicleNumber manufacturer model color pricePerDay images" });
     return res.status(200).json({ success: true, message: "Booking updated successfully.", booking });
   } catch (error) {

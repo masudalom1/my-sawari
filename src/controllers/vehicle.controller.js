@@ -4,7 +4,22 @@ import cloudinary from "../config/cloudinary.js";
 import Vehicle from "../models/vehicle.model.js";
 import Maintenance from "../models/maintenance.model.js";
 import Booking from "../models/booking.model.js";
+import Handover from "../models/handover.model.js";
 import { bookingTimestamp } from "../../shared/bookingDuration.mjs";
+import {
+  DEACTIVATION_NOTES_MAX_LENGTH,
+  deactivationBlockStart,
+  deactivationDateLabel,
+  isBlockedByVehicleDeactivation,
+  isDeactivationReason,
+  vehicleDeactivationDate,
+} from "../../shared/vehicleDeactivation.mjs";
+import {
+  sendVehicleAvailabilityError,
+  VehicleAvailabilityError,
+  withVehicleAvailabilityLock,
+} from "../services/vehicleAvailability.js";
+import { currentIndiaDate } from "../utils/indiaDateRange.js";
 
 const parseDate = (value) => {
   if (!value) return null;
@@ -88,7 +103,72 @@ const completeActiveMaintenancesForVehicle = async (vehicle, userId, now = new D
 };
 
 // add vehicle screen
+const CAR_VEHICLE_TYPES = [
+  "SUV",
+  "Sedan",
+  "Hatchback",
+  "Luxury",
+  "Tempo Traveller",
+  "Mini Bus",
+  "Bus",
+];
+const OPTIONAL_VEHICLE_DATES = [
+  "registrationDate",
+  "insuranceValidUpto",
+  "pucValidUpto",
+  "fitnessValidUpto",
+];
+
+function parseOptionalVehicleDate(value) {
+  if (value === undefined || value === null || value === "") {
+    return { valid: true, value: null };
+  }
+  if (typeof value !== "string") return { valid: false, value: null };
+
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return { valid: false, value: null };
+  if (
+    /^\d{4}-\d{2}-\d{2}$/.test(value) &&
+    parsed.toISOString().slice(0, 10) !== value
+  ) {
+    return { valid: false, value: null };
+  }
+  return { valid: true, value: parsed };
+}
+
+async function cleanupUploadedVehicleImages(files) {
+  const uploaded = files.filter((file) => file.filename);
+  const results = await Promise.allSettled(
+    uploaded.map(
+      (file) =>
+        new Promise((resolve, reject) => {
+          cloudinary.uploader.destroy(
+            file.filename,
+            { resource_type: "image" },
+            (error, result) => {
+              if (error) reject(error);
+              else if (result?.result === "error") {
+                reject(new Error("Cloudinary did not delete the uploaded image"));
+              } else resolve(result);
+            },
+          );
+        }),
+    ),
+  );
+  results.forEach((result, index) => {
+    if (result.status === "rejected") {
+      console.error(
+        `Failed to clean up uploaded vehicle image ${uploaded[index].filename}:`,
+        result.reason,
+      );
+    }
+  });
+}
+
 export const createVehicle = async (req, res, next) => {
+  const uploadedFiles = req.files || [];
+  let persisted = false;
+
   try {
     // Same scope booking reads use: an employee's vehicles belong to the
     // owner who created them, otherwise New Booking can never select them.
@@ -96,10 +176,14 @@ export const createVehicle = async (req, res, next) => {
 
     const {
       vehicleName,
+      displayName,
       vehicleNumber,
       manufacturer,
       model,
       variant,
+      modelYear,
+      pricePerDay,
+      category,
       vehicleType,
       fuelType,
       transmission,
@@ -107,23 +191,112 @@ export const createVehicle = async (req, res, next) => {
       color,
       chassisNumber,
       engineNumber,
-      registrationDate,
-      insuranceValidUpto,
-      pucValidUpto,
-      fitnessValidUpto,
       notes,
       status,
     } = req.body;
 
-    if (!vehicleNumber) {
+    const normalizedVehicleNumber =
+      typeof vehicleNumber === "string" ? vehicleNumber.trim().toUpperCase() : "";
+    if (!normalizedVehicleNumber) {
       return res.status(400).json({
         success: false,
         message: "Vehicle number is required",
+        fieldErrors: { vehicleNumber: "Vehicle number is required." },
+      });
+    }
+
+    const normalizedCategory =
+      typeof category === "string" && category.trim()
+        ? category.trim().toLowerCase()
+        : undefined;
+    const fieldErrors = {};
+    if (category !== undefined && category !== null) {
+      if (typeof category !== "string" || !["bike", "car"].includes(normalizedCategory)) {
+        fieldErrors.category = "Category must be Car or Bike.";
+      }
+    }
+
+    let normalizedVehicleType;
+    if (vehicleType !== undefined && vehicleType !== null && vehicleType !== "") {
+      if (typeof vehicleType !== "string" || normalizedCategory !== "car") {
+        fieldErrors.vehicleType = "Vehicle Type is only valid for cars.";
+      } else {
+        normalizedVehicleType = CAR_VEHICLE_TYPES.find(
+          (type) => type.toLowerCase() === vehicleType.trim().toLowerCase(),
+        );
+        if (!normalizedVehicleType) {
+          fieldErrors.vehicleType = `Vehicle Type must be one of: ${CAR_VEHICLE_TYPES.join(", ")}.`;
+        }
+      }
+    } else if (normalizedCategory === "car") {
+      fieldErrors.vehicleType = "Vehicle Type is required for cars.";
+    }
+
+    const normalizedSeatingCapacity = Number(seatingCapacity);
+    if (
+      seatingCapacity === undefined ||
+      seatingCapacity === null ||
+      String(seatingCapacity).trim() === "" ||
+      !Number.isInteger(normalizedSeatingCapacity) ||
+      normalizedSeatingCapacity < 1
+    ) {
+      fieldErrors.seatingCapacity = "Seating Capacity must be a whole number of at least 1.";
+    }
+
+    const normalizedPricePerDay =
+      pricePerDay === undefined || pricePerDay === null || String(pricePerDay).trim() === ""
+        ? 0
+        : Number(pricePerDay);
+    if (!Number.isFinite(normalizedPricePerDay) || normalizedPricePerDay < 0) {
+      fieldErrors.pricePerDay = "Price per Day must be a nonnegative number.";
+    }
+
+    const normalizedModelYear =
+      modelYear === undefined || modelYear === null || String(modelYear).trim() === ""
+        ? null
+        : Number(modelYear);
+    if (
+      normalizedModelYear !== null &&
+      (!Number.isInteger(normalizedModelYear) ||
+        normalizedModelYear < 1886 ||
+        normalizedModelYear > 2100)
+    ) {
+      fieldErrors.modelYear = "Model Year must be a whole number between 1886 and 2100.";
+    }
+
+    const normalizedDates = {};
+    for (const field of OPTIONAL_VEHICLE_DATES) {
+      const parsed = parseOptionalVehicleDate(req.body[field]);
+      if (!parsed.valid) fieldErrors[field] = `${field} must be a valid date.`;
+      normalizedDates[field] = parsed.value;
+    }
+
+    if (
+      displayName !== undefined &&
+      displayName !== null &&
+      String(displayName).trim().length > 100
+    ) {
+      fieldErrors.displayName = "Display Name cannot exceed 100 characters.";
+    }
+    if (notes !== undefined && notes !== null && String(notes).trim().length > 500) {
+      fieldErrors.notes = "Notes cannot exceed 500 characters.";
+    }
+
+    if (status && status !== "available") {
+      fieldErrors.status = ["rent", "service"].includes(status)
+        ? "On Rent is set by a booking handover; Under Service is set through maintenance."
+        : "Status must be available.";
+    }
+    if (Object.keys(fieldErrors).length) {
+      return res.status(400).json({
+        success: false,
+        message: "Please correct the highlighted fields.",
+        fieldErrors,
       });
     }
 
     const existingVehicle = await Vehicle.findOne({
-      vehicleNumber: vehicleNumber.toUpperCase(),
+      vehicleNumber: normalizedVehicleNumber,
       isDeleted: false,
     });
 
@@ -131,38 +304,45 @@ export const createVehicle = async (req, res, next) => {
       return res.status(400).json({
         success: false,
         message: "Vehicle with this number already exists",
+        fieldErrors: {
+          vehicleNumber: "A vehicle with this number already exists.",
+        },
       });
     }
 
-    const images =
-      req.files?.map((file) => ({
-        url: file.path,
-        publicId: file.filename, // schema field name; "public_id" was silently dropped
-      })) || [];
+    const images = uploadedFiles.map((file) => ({
+      url: file.path,
+      publicId: file.filename,
+    }));
 
     const vehicle = await Vehicle.create({
       company: companyId,
       createdBy: req.user._id,
       vehicleName,
-      vehicleNumber: vehicleNumber.toUpperCase(),
+      displayName: displayName || "",
+      vehicleNumber: normalizedVehicleNumber,
       manufacturer,
       model,
       variant,
-      vehicleType,
+      modelYear: normalizedModelYear,
+      pricePerDay: normalizedPricePerDay,
+      category: normalizedCategory,
+      vehicleType: normalizedVehicleType,
       fuelType,
       transmission,
-      seatingCapacity: Number(seatingCapacity),
+      seatingCapacity: normalizedSeatingCapacity,
       color,
       chassisNumber,
       engineNumber,
-      registrationDate: registrationDate || null,
-      insuranceValidUpto: insuranceValidUpto || null,
-      pucValidUpto: pucValidUpto || null,
-      fitnessValidUpto: fitnessValidUpto || null,
+      registrationDate: normalizedDates.registrationDate,
+      insuranceValidUpto: normalizedDates.insuranceValidUpto,
+      pucValidUpto: normalizedDates.pucValidUpto,
+      fitnessValidUpto: normalizedDates.fitnessValidUpto,
       notes,
-      status: status || "available",
+      status: "available",
       images,
     });
+    persisted = true;
 
     res.status(201).json({
       success: true,
@@ -170,9 +350,46 @@ export const createVehicle = async (req, res, next) => {
       data: vehicle,
     });
   } catch (error) {
-    next(error);
+    if (sendVehicleSaveError(res, error)) return;
+    return next(error);
+  } finally {
+    if (!persisted) await cleanupUploadedVehicleImages(uploadedFiles);
   }
 };
+
+// Schema and duplicate-number failures become per-field errors the vehicle
+// form can show. Returns false for anything else.
+function sendVehicleSaveError(res, error) {
+  if (error instanceof mongoose.Error.ValidationError) {
+    res.status(400).json({
+      success: false,
+      message: "Please correct the highlighted fields.",
+      fieldErrors: Object.fromEntries(
+        Object.entries(error.errors).map(([field, detail]) => [
+          field,
+          detail.message,
+        ]),
+      ),
+    });
+    return true;
+  }
+  if (
+    error?.code === 11000 &&
+    (error.keyPattern?.vehicleNumber ||
+      error.keyValue?.vehicleNumber ||
+      String(error.message).includes("vehicleNumber"))
+  ) {
+    res.status(400).json({
+      success: false,
+      message: "A vehicle with this number already exists.",
+      fieldErrors: {
+        vehicleNumber: "A vehicle with this number already exists.",
+      },
+    });
+    return true;
+  }
+  return false;
+}
 // manage vehicle page v1.0
 export const getAllVehicle = async (req, res, next) => {
   try {
@@ -250,8 +467,27 @@ export const getAllVehicle = async (req, res, next) => {
     next(error);
   }
 };
+// The Fleet Manager filter value for deactivated vehicles.
+const DEACTIVATED_FILTER = "deactivated";
+// A vehicle counts as deactivated once a deactivation date is saved.
+const IS_DEACTIVATED = { $ne: [{ $ifNull: ["$deactivation.date", null] }, null] };
+// Names for the audit details the Deactivated list shows.
+const AUDIT_USER_FIELDS = [
+  { path: "createdBy", select: "fullName" },
+  { path: "deactivation.deactivatedBy", select: "fullName" },
+];
+
 // v1.1
-export const getAllVehicles = async (req, res, next) => {
+export const getAllVehicles = (req, res, next) =>
+  listFleetVehicles(req, res, next, { separateDeactivated: false });
+
+// Fleet Manager: deactivated vehicles form their own count and filter and are
+// left out of the Available / On Rent / Service counts and lists. Total still
+// covers every vehicle that has not been removed.
+export const getFleetManagerVehicles = (req, res, next) =>
+  listFleetVehicles(req, res, next, { separateDeactivated: true });
+
+async function listFleetVehicles(req, res, next, { separateDeactivated }) {
   try {
     const page = Math.max(Number(req.query.page) || 1, 1);
     // Default limit brought down from 1000 to 20 — 1000 meant this
@@ -262,19 +498,28 @@ export const getAllVehicles = async (req, res, next) => {
     const skip = (page - 1) * limit;
     const filters = { isDeleted: false };
 
-    if (req.query.status && req.query.status !== "All") {
-      filters.status = req.query.status;
+    const status = req.query.status;
+    const statusSelected = Boolean(status) && status !== "All" && status !== "all";
+    const deactivatedView = separateDeactivated && status === DEACTIVATED_FILTER;
+    if (deactivatedView) {
+      filters["deactivation.date"] = { $ne: null };
+    } else if (statusSelected) {
+      filters.status = status;
+      // `null` also matches vehicles saved before deactivation existed.
+      if (separateDeactivated) filters["deactivation.date"] = null;
     }
 
     // NEW: optional category filter (car / bike). Only applied when a
     // caller explicitly sends it, so existing screens hitting this same
     // controller without a category param behave exactly as before.
-    if (req.query.category && req.query.category !== "All") {
+    if (req.query.category && !["All", "all"].includes(req.query.category)) {
       const categoryTerm = String(req.query.category).trim();
       if (categoryTerm) {
         // Case-insensitive exact match so "Car"/"car"/"CAR" all work
-        // regardless of how it's stored in the DB.
-        filters.category = new RegExp(`^${categoryTerm}$`, "i");
+        // regardless of how it's stored in the DB. Escaped so the value is
+        // matched literally, never run as a pattern.
+        const escapedCategory = categoryTerm.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        filters.category = new RegExp(`^${escapedCategory}$`, "i");
       }
     }
 
@@ -286,17 +531,29 @@ export const getAllVehicles = async (req, res, next) => {
       if (term) {
         const escaped = term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
         const regex = new RegExp(escaped, "i");
-        filters.$or = [{ vehicleName: regex }, { vehicleNumber: regex }];
+        filters.$or = [
+          { vehicleName: regex },
+          { displayName: regex },
+          { vehicleNumber: regex },
+          // Fleet Manager also finds vehicles by brand and model.
+          ...(separateDeactivated ? [{ manufacturer: regex }, { model: regex }] : []),
+        ];
       }
     }
 
+    const listQuery = Vehicle.find(filters);
+    // The Deactivated view also shows who created and deactivated each
+    // vehicle and when it last changed.
+    if (deactivatedView) listQuery.populate(AUDIT_USER_FIELDS);
+
     const [vehicles, total, stats] = await Promise.all([
-      Vehicle.find(filters)
+      listQuery
         // Only the fields the fleet-list card actually renders, plus
         // just the FIRST image (the list only ever shows one cover
         // photo per card) instead of the full images array.
         .select({
           vehicleName: 1,
+          displayName: 1,
           vehicleNumber: 1,
           fuelType: 1,
           transmission: 1,
@@ -305,10 +562,12 @@ export const getAllVehicles = async (req, res, next) => {
           category: 1,
           registrationDate: 1,
           pricePerDay: 1,
+          deactivation: 1,
           images: { $slice: 1 },
           createdAt: 1,
+          ...(deactivatedView ? { createdBy: 1, updatedAt: 1 } : {}),
         })
-        .sort({ createdAt: -1 })
+        .sort({ createdAt: -1, _id: -1 })
         .skip(skip)
         .limit(limit)
         .lean(),
@@ -323,7 +582,14 @@ export const getAllVehicles = async (req, res, next) => {
       // is active, matching what the four cards at the top mean to show.
       Vehicle.aggregate([
         { $match: { isDeleted: false } },
-        { $group: { _id: "$status", count: { $sum: 1 } } },
+        {
+          $group: {
+            _id: separateDeactivated
+              ? { $cond: [IS_DEACTIVATED, DEACTIVATED_FILTER, "$status"] }
+              : "$status",
+            count: { $sum: 1 },
+          },
+        },
       ]),
     ]);
 
@@ -340,18 +606,21 @@ export const getAllVehicles = async (req, res, next) => {
   } catch (error) {
     next(error);
   }
-};
+}
 
 export const getAvailableVehicles = async (req, res, next) => {
   try {
     const { fromDate, toDate, pickupTime, dropTime } = req.query;
 
     let conflictingVehicleIds = new Set();
+    // Without a valid range, "available" means available right now.
+    let deactivationCheckEnd = Date.now();
     if (fromDate && toDate) {
       const requestedStart = bookingTimestamp(fromDate, pickupTime || "08:00 AM");
       const requestedEnd = bookingTimestamp(toDate, dropTime || "08:00 AM");
 
       if (!isNaN(requestedStart) && !isNaN(requestedEnd) && requestedEnd > requestedStart) {
+        deactivationCheckEnd = requestedEnd;
         const overlappingBookings = await Booking.find({
           isDeleted: false,
           status: { $nin: ["cancelled", "completed", "returned"] },
@@ -397,19 +666,24 @@ export const getAvailableVehicles = async (req, res, next) => {
         fuelType
         pricePerDay
         status
+        deactivation
       `,
       )
       .sort({ vehicleName: 1 })
       .lean();
 
-    const data = vehicles.map((vehicle) => ({
-      ...vehicle,
+    const data = vehicles
+      .filter(
+        (vehicle) => !isBlockedByVehicleDeactivation(vehicle, deactivationCheckEnd),
+      )
+      .map((vehicle) => ({
+        ...vehicle,
 
-      pricing: {
-        pricePerDay: vehicle.pricePerDay || 0,
-        currency: "INR",
-      },
-    }));
+        pricing: {
+          pricePerDay: vehicle.pricePerDay || 0,
+          currency: "INR",
+        },
+      }));
 
     return res.status(200).json({
       success: true,
@@ -488,151 +762,204 @@ export const getSingleVehicle = async (req, res, next) => {
 };
 
 const DISPLAY_NAME_MAX_LENGTH = 100;
- 
+const MAX_VEHICLE_IMAGES = 5;
+const UPDATABLE_TEXT_FIELDS = [
+  "vehicleName",
+  "manufacturer",
+  "model",
+  "variant",
+  "fuelType",
+  "transmission",
+  "color",
+  "chassisNumber",
+  "engineNumber",
+  "notes",
+];
+const REQUIRED_TEXT_FIELDS = {
+  vehicleName: "Vehicle name is required.",
+  manufacturer: "Manufacturer is required.",
+  fuelType: "Fuel type is required.",
+  transmission: "Transmission is required.",
+};
+
+const isBlank = (value) =>
+  value === undefined || value === null || String(value).trim() === "";
+
+// Partial update: only fields present in the body are validated and saved.
+// An empty optional field clears it, so the Fleet Manager form can send the
+// whole form back.
 export const updateVehicle = async (req, res, next) => {
+  const uploadedFiles = req.files || [];
+  let persisted = false;
+
   try {
+    if (!mongoose.isValidObjectId(req.params.id)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid vehicle id.",
+      });
+    }
+
+    // Unified fleet: the clicked vehicle by _id, whichever company it carries.
     const vehicle = await Vehicle.findById(req.params.id);
- 
+
     if (!vehicle || vehicle.isDeleted) {
       return res.status(404).json({
         success: false,
         message: "Vehicle not found",
       });
     }
- 
-    const allowedFields = [
-      "vehicleName",
-      "displayName",
-      "vehicleNumber",
-      "manufacturer",
-      "model",
-      "variant",
-      "pricePerDay",
-      "category",
-      "vehicleType",
-      "fuelType",
-      "transmission",
-      "seatingCapacity",
-      "color",
-      "chassisNumber",
-      "engineNumber",
-      "registrationDate",
-      "insuranceValidUpto",
-      "pucValidUpto",
-      "fitnessValidUpto",
-      "notes",
-    ];
- 
-    // -----------------------------------------
-    // Display name validation (optional field)
-    // An empty string is allowed so employees can clear it.
-    // -----------------------------------------
-    if (req.body.displayName !== undefined && req.body.displayName !== null) {
-      const incomingDisplayName = String(req.body.displayName).trim();
- 
-      if (incomingDisplayName.length > DISPLAY_NAME_MAX_LENGTH) {
-        return res.status(400).json({
-          success: false,
-          message: `Display name cannot exceed ${DISPLAY_NAME_MAX_LENGTH} characters`,
-        });
-      }
- 
-      req.body.displayName = incomingDisplayName; // normalize whitespace
-    } else if (req.body.displayName === null) {
-      req.body.displayName = "";
+
+    const body = req.body || {};
+    const has = (field) => body[field] !== undefined;
+    const updates = {};
+    const fieldErrors = {};
+
+    for (const field of UPDATABLE_TEXT_FIELDS) {
+      if (has(field)) updates[field] = body[field] === null ? "" : String(body[field]).trim();
     }
- 
-    // -----------------------------------------
-    // Category validation (must run BEFORE assignment)
-    // -----------------------------------------
+    for (const [field, message] of Object.entries(REQUIRED_TEXT_FIELDS)) {
+      if (has(field) && !updates[field]) fieldErrors[field] = message;
+    }
+    if ((updates.notes || "").length > 500) {
+      fieldErrors.notes = "Notes cannot exceed 500 characters.";
+    }
+
+    if (has("displayName")) {
+      const displayName = body.displayName === null ? "" : String(body.displayName).trim();
+      if (displayName.length > DISPLAY_NAME_MAX_LENGTH) {
+        fieldErrors.displayName = `Display name cannot exceed ${DISPLAY_NAME_MAX_LENGTH} characters.`;
+      } else {
+        updates.displayName = displayName;
+      }
+    }
+
+    if (has("vehicleNumber")) {
+      const vehicleNumber =
+        typeof body.vehicleNumber === "string" ? body.vehicleNumber.trim().toUpperCase() : "";
+      if (!vehicleNumber) fieldErrors.vehicleNumber = "Vehicle number is required.";
+      else updates.vehicleNumber = vehicleNumber;
+    }
+
+    let category = vehicle.category;
+    if (has("category")) {
+      const normalized = isBlank(body.category) ? "" : String(body.category).trim().toLowerCase();
+      if (!["bike", "car"].includes(normalized)) {
+        fieldErrors.category = "Category must be Car or Bike.";
+      } else {
+        category = normalized;
+        updates.category = normalized;
+      }
+    }
+
+    // Vehicle type is a car body type: required for cars, cleared for bikes.
+    let clearVehicleType = false;
+    if (category === "car") {
+      if (has("vehicleType")) {
+        const vehicleType = CAR_VEHICLE_TYPES.find(
+          (type) => type.toLowerCase() === String(body.vehicleType ?? "").trim().toLowerCase(),
+        );
+        if (vehicleType) updates.vehicleType = vehicleType;
+        else {
+          fieldErrors.vehicleType = isBlank(body.vehicleType)
+            ? "Vehicle type is required for cars."
+            : `Vehicle type must be one of: ${CAR_VEHICLE_TYPES.join(", ")}.`;
+        }
+      } else if (!vehicle.vehicleType) {
+        fieldErrors.vehicleType = "Vehicle type is required for cars.";
+      }
+    } else if (has("vehicleType")) {
+      if (isBlank(body.vehicleType)) clearVehicleType = true;
+      else fieldErrors.vehicleType = "Vehicle type only applies to cars.";
+    } else if (updates.category === "bike" && vehicle.vehicleType) {
+      clearVehicleType = true;
+    }
+
+    if (has("pricePerDay")) {
+      const price = isBlank(body.pricePerDay) ? 0 : Number(body.pricePerDay);
+      if (!Number.isFinite(price) || price < 0) {
+        fieldErrors.pricePerDay = "Price per day must be zero or more.";
+      } else {
+        updates.pricePerDay = price;
+      }
+    }
+
+    if (has("modelYear")) {
+      const modelYear = isBlank(body.modelYear) ? null : Number(body.modelYear);
+      if (
+        modelYear !== null &&
+        (!Number.isInteger(modelYear) || modelYear < 1886 || modelYear > 2100)
+      ) {
+        fieldErrors.modelYear = "Model year must be a whole number between 1886 and 2100.";
+      } else {
+        updates.modelYear = modelYear;
+      }
+    }
+
+    if (has("seatingCapacity")) {
+      const seats = isBlank(body.seatingCapacity) ? NaN : Number(body.seatingCapacity);
+      if (!Number.isInteger(seats) || seats < 1) {
+        fieldErrors.seatingCapacity = "Seating capacity must be a whole number of at least 1.";
+      } else {
+        updates.seatingCapacity = seats;
+      }
+    }
+
+    for (const field of OPTIONAL_VEHICLE_DATES) {
+      if (!has(field)) continue;
+      const parsed = parseOptionalVehicleDate(body[field]);
+      if (parsed.valid) updates[field] = parsed.value;
+      else fieldErrors[field] = "Enter a valid date.";
+    }
+
+    if (has("status") && !normalizeVehicleStatusInput(body.status)) {
+      fieldErrors.status = "Status must be available, rent, or service";
+    }
+
+    if (vehicle.images.length + uploadedFiles.length > MAX_VEHICLE_IMAGES) {
+      fieldErrors.images = `A vehicle can have up to ${MAX_VEHICLE_IMAGES} photos.`;
+    }
+
     if (
-      req.body.category !== undefined &&
-      req.body.category !== null &&
-      req.body.category !== "" &&
-      !["bike", "car"].includes(req.body.category)
+      updates.vehicleNumber &&
+      updates.vehicleNumber !== vehicle.vehicleNumber &&
+      (await Vehicle.exists({
+        _id: { $ne: vehicle._id },
+        vehicleNumber: updates.vehicleNumber,
+        isDeleted: false,
+      }))
     ) {
+      fieldErrors.vehicleNumber = "A vehicle with this number already exists.";
+    }
+
+    const errorMessages = Object.values(fieldErrors);
+    if (errorMessages.length) {
       return res.status(400).json({
         success: false,
-        message: "Category must be either bike or car",
+        message:
+          errorMessages.length === 1
+            ? errorMessages[0]
+            : "Please correct the highlighted fields.",
+        fieldErrors,
       });
     }
- 
-    const effectiveCategory = req.body.category ?? vehicle.category;
- 
-    // -----------------------------------------
-    // vehicleType validation (must run BEFORE assignment)
-    // -----------------------------------------
-    const carVehicleTypes = [
-      "SUV",
-      "Sedan",
-      "Hatchback",
-      "Luxury",
-      "Tempo Traveller",
-      "Mini Bus",
-      "Bus",
-    ];
- 
-    if (req.body.vehicleType !== undefined) {
-      const incomingType = String(req.body.vehicleType).trim();
- 
-      if (effectiveCategory === "car") {
-        const matched = carVehicleTypes.find(
-          (t) => t.toLowerCase() === incomingType.toLowerCase(),
-        );
- 
-        if (!matched) {
-          return res.status(400).json({
-            success: false,
-            message: `vehicleType must be one of: ${carVehicleTypes.join(", ")}. Received: "${incomingType}"`,
-          });
-        }
- 
-        req.body.vehicleType = matched; // normalize casing
-      } else {
-        return res.status(400).json({
-          success: false,
-          message: "vehicleType only applies to vehicles with category 'car'",
-        });
-      }
-    }
- 
-    // -----------------------------------------
-    // Update fields (now safe — bad values already rejected above)
-    // -----------------------------------------
-    allowedFields.forEach((field) => {
-      if (req.body[field] !== undefined) {
-        vehicle[field] = req.body[field];
-      }
-    });
- 
-    // -----------------------------------------
-    // Vehicle number normalization
-    // -----------------------------------------
-    if (vehicle.vehicleNumber) {
-      vehicle.vehicleNumber = vehicle.vehicleNumber.toUpperCase().trim();
-    }
- 
+
+    vehicle.set(updates);
+    if (clearVehicleType) vehicle.vehicleType = undefined;
+
     // -----------------------------------------
     // Status
     // -----------------------------------------
-    if (req.body.status !== undefined) {
-      const incomingStatus = normalizeVehicleStatusInput(req.body.status);
-
-      if (!incomingStatus) {
-        return res.status(400).json({
-          success: false,
-          message: "Status must be available, rent, or service",
-        });
-      }
-
+    // Validated above. Only auto-complete active maintenance when the status
+    // actually changes out of service/maintenance into "available".
+    if (has("status")) {
+      const incomingStatus = normalizeVehicleStatusInput(body.status);
       const previousStatus = normalizeVehicleStatusInput(vehicle.status);
       const wasInMaintenance =
         previousStatus === "service" ||
         Boolean(vehicle.maintenance?.required || vehicle.maintenance?.currentMaintenance);
 
       vehicle.status = incomingStatus;
-      // Only auto-complete active maintenance when status actually changes out of
-      // service/maintenance into "available".
       if (
         incomingStatus === "available" &&
         previousStatus !== "available" &&
@@ -641,28 +968,25 @@ export const updateVehicle = async (req, res, next) => {
         await completeActiveMaintenancesForVehicle(vehicle, req.user?._id);
       }
     }
- 
-    // -----------------------------------------
-    // Add new images
-    // -----------------------------------------
-    if (req.files?.length > 0) {
-      const newImages = req.files.map((file) => ({
-        url: `/uploads/vehicles/${file.filename}`,
-        publicId: null,
-      }));
- 
-      vehicle.images.push(...newImages);
-    }
- 
+
+    // New photos are appended and stored on Cloudinary, like Add Vehicle's.
+    vehicle.images.push(
+      ...uploadedFiles.map((file) => ({ url: file.path, publicId: file.filename })),
+    );
+
     await vehicle.save();
- 
+    persisted = true;
+
     return res.status(200).json({
       success: true,
       message: "Vehicle updated successfully",
       data: vehicle,
     });
   } catch (error) {
-    next(error);
+    if (sendVehicleSaveError(res, error)) return;
+    return next(error);
+  } finally {
+    if (!persisted) await cleanupUploadedVehicleImages(uploadedFiles);
   }
 };
 
@@ -699,6 +1023,355 @@ export const deleteVehicle = async (req, res, next) => {
     });
   } catch (error) {
     next(error);
+  }
+};
+
+// Bookings that still hold the vehicle; same statuses booking creation checks.
+const ACTIVE_BOOKING_STATUS_FILTER = { $nin: ["cancelled", "completed"] };
+const LISTED_DEACTIVATION_CONFLICTS = 10;
+
+function conflictFromBooking(booking) {
+  return {
+    kind: "booking",
+    bookingId: booking._id,
+    bookingCode: booking.bookingCode || null,
+    customerName: booking.customerName || "",
+    fromDate: booking.fromDate,
+    toDate: booking.toDate,
+    pickupTime: booking.pickupTime,
+    dropTime: booking.dropTime,
+    status: booking.status,
+  };
+}
+
+function conflictFromRental(handover, overdue) {
+  return {
+    kind: "rental",
+    overdue,
+    handoverId: handover._id,
+    bookingId: handover.bookingId || null,
+    bookingCode: null,
+    customerName: handover.customer?.fullName || "",
+    fromDate: handover.trip?.pickupDateTime || null,
+    toDate: handover.trip?.dropDateTime || null,
+    status: handover.handoverStatus,
+  };
+}
+
+// Active or future bookings and running rentals on the vehicle that overlap
+// the blocked period starting at `blockStart`. A rental counts separately
+// because a handover can carry its own vehicle (after an exchange) and drop
+// time.
+async function findDeactivationConflicts(vehicleId, blockStart, session) {
+  const [bookings, rentals] = await Promise.all([
+    Booking.find({
+      vehicleId,
+      isDeleted: false,
+      status: ACTIVE_BOOKING_STATUS_FILTER,
+    })
+      .select("_id bookingCode customerName fromDate toDate pickupTime dropTime status")
+      .sort({ fromDate: 1, _id: 1 })
+      .session(session)
+      .lean(),
+    Handover.find({
+      "vehicle.vehicleId": vehicleId,
+      isDeleted: { $ne: true },
+      handoverStatus: "active",
+      bookingStatus: { $in: ["confirmed", "active"] },
+    })
+      .select("_id bookingId customer.fullName trip.pickupDateTime trip.dropDateTime handoverStatus")
+      .sort({ "trip.pickupDateTime": 1, _id: 1 })
+      .session(session)
+      .lean(),
+  ]);
+
+  // Same exact-boundary rule as booking overlaps.
+  const conflicts = bookings
+    .filter(
+      (booking) =>
+        bookingTimestamp(booking.toDate, booking.dropTime || "08:00 AM") > blockStart,
+    )
+    .map(conflictFromBooking);
+  // A running rental conflicts when it is due back after the block starts,
+  // or when it is overdue: until it is returned its real end is unknown.
+  const now = Date.now();
+  const listedBookings = new Set(conflicts.map(({ bookingId }) => String(bookingId)));
+  for (const rental of rentals) {
+    const dueBack = new Date(rental.trip?.dropDateTime).getTime();
+    const overdue = !Number.isFinite(dueBack) || dueBack <= now;
+    if ((overdue || dueBack > blockStart) && !listedBookings.has(String(rental.bookingId))) {
+      conflicts.push(conflictFromRental(rental, overdue));
+    }
+  }
+  return conflicts;
+}
+
+// Saves a deactivation date: the vehicle's last bookable day (India time).
+// From 12:00 AM on the next day it cannot be booked. Refused while any active
+// or future booking or rental overlaps that blocked period, so existing
+// bookings are never left on a deactivated vehicle; staff resolve them through
+// the booking workflow first. The vehicle and its history are kept.
+export const deactivateVehicle = async (req, res, next) => {
+  const { id } = req.params;
+  if (!mongoose.isValidObjectId(id)) {
+    return res.status(400).json({ success: false, message: "Invalid vehicle id." });
+  }
+
+  const deactivationDate = req.body?.deactivationDate;
+  const parsedDate =
+    typeof deactivationDate === "string" && /^\d{4}-\d{2}-\d{2}$/.test(deactivationDate)
+      ? parseOptionalVehicleDate(deactivationDate)
+      : { valid: false };
+  if (!parsedDate.valid || !parsedDate.value) {
+    return res.status(400).json({
+      success: false,
+      message: "Choose a valid deactivation date.",
+      fieldErrors: { deactivationDate: "Choose a valid deactivation date." },
+    });
+  }
+  if (deactivationDate < currentIndiaDate()) {
+    return res.status(400).json({
+      success: false,
+      message: "The deactivation date cannot be in the past.",
+      fieldErrors: { deactivationDate: "The deactivation date cannot be in the past." },
+    });
+  }
+
+  const reason = typeof req.body?.reason === "string" ? req.body.reason.trim() : "";
+  if (!isDeactivationReason(reason)) {
+    const message = "Choose a reason for deactivating this vehicle.";
+    return res.status(400).json({ success: false, message, fieldErrors: { reason: message } });
+  }
+  const notes = typeof req.body?.notes === "string" ? req.body.notes.trim() : "";
+  if (notes.length > DEACTIVATION_NOTES_MAX_LENGTH || (reason === "other" && !notes)) {
+    const message = notes
+      ? `Keep the notes within ${DEACTIVATION_NOTES_MAX_LENGTH} characters.`
+      : "Describe the reason when you choose Other.";
+    return res.status(400).json({ success: false, message, fieldErrors: { notes: message } });
+  }
+
+  try {
+    const blockStart = deactivationBlockStart(deactivationDate);
+    await withVehicleAvailabilityLock(id, async (session, vehicle) => {
+      if (vehicleDeactivationDate(vehicle)) {
+        throw new VehicleAvailabilityError(409, {
+          success: false,
+          code: "VEHICLE_ALREADY_DEACTIVATED",
+          message: `This vehicle is already deactivated after ${deactivationDateLabel(
+            vehicleDeactivationDate(vehicle),
+          )}.`,
+        });
+      }
+
+      const conflicts = await findDeactivationConflicts(id, blockStart, session);
+      if (conflicts.length) {
+        const label = deactivationDateLabel(deactivationDate);
+        throw new VehicleAvailabilityError(409, {
+          success: false,
+          code: "VEHICLE_DEACTIVATION_CONFLICT",
+          message: `${conflicts.length === 1 ? "1 booking continues" : `${conflicts.length} bookings continue`} after ${label}. Cancel or reschedule ${conflicts.length === 1 ? "it" : "them"} in the booking workflow, or choose a later date.`,
+          conflictCount: conflicts.length,
+          conflicts: conflicts.slice(0, LISTED_DEACTIVATION_CONFLICTS),
+        });
+      }
+
+      // updateOne, not save(): legacy records with incomplete fields must
+      // still be deactivatable.
+      await Vehicle.updateOne(
+        { _id: id },
+        {
+          $set: {
+            deactivation: {
+              date: parsedDate.value,
+              deactivatedBy: req.user._id,
+              deactivatedAt: new Date(),
+              reason,
+              notes,
+              // Read under the lock, so it is the status at this moment.
+              previousStatus: ["available", "rent", "service"].includes(vehicle.status)
+                ? vehicle.status
+                : null,
+            },
+          },
+        },
+        { session },
+      );
+    });
+
+    const updated = await Vehicle.findById(id).populate(AUDIT_USER_FIELDS).lean();
+    return res.status(200).json({
+      success: true,
+      message: "Vehicle deactivated",
+      data: updated,
+    });
+  } catch (error) {
+    if (sendVehicleAvailabilityError(res, error)) return;
+    return next(error);
+  }
+};
+
+const REACTIVATION_REASON_MAX_LENGTH = 500;
+const CLEARED_DEACTIVATION = {
+  date: null,
+  deactivatedBy: null,
+  deactivatedAt: null,
+  reason: "",
+  notes: "",
+  previousStatus: null,
+};
+
+// The statuses a deactivated vehicle may return to. A vehicle out on a rental
+// stays On Rent (its return makes it Available); one under maintenance right
+// now can only return Under Service; otherwise Available (the default) or
+// Under Service.
+async function reactivationOptions(vehicleId, session = null) {
+  const [rental, maintenances] = await Promise.all([
+    Handover.findOne({
+      "vehicle.vehicleId": vehicleId,
+      isDeleted: { $ne: true },
+      handoverStatus: "active",
+      bookingStatus: { $in: ["confirmed", "active"] },
+    })
+      .select("_id customer.fullName trip.dropDateTime")
+      .session(session)
+      .lean(),
+    Maintenance.find({
+      vehicle: vehicleId,
+      isDeleted: { $ne: true },
+      status: { $in: ["Scheduled", "In Progress"] },
+    })
+      .select("_id title maintenanceType status startDate endDate expectedCompletionDate")
+      .session(session)
+      .lean(),
+  ]);
+  if (rental) {
+    return {
+      statuses: ["rent"],
+      defaultStatus: "rent",
+      rule: "rental",
+      message: "The vehicle is out on a rental, so it stays On Rent until it is returned.",
+      rental: {
+        handoverId: rental._id,
+        customerName: rental.customer?.fullName || "",
+        dueBack: rental.trip?.dropDateTime || null,
+      },
+    };
+  }
+  const maintenance = maintenances.find((doc) => isMaintenanceCurrentlyBlocking(doc));
+  if (maintenance) {
+    return {
+      statuses: ["service"],
+      defaultStatus: "service",
+      rule: "maintenance",
+      message: "Maintenance is in progress, so the vehicle can only return Under Service.",
+      maintenance: {
+        maintenanceId: maintenance._id,
+        title: maintenance.title || maintenance.maintenanceType || "",
+        endDate: maintenance.endDate || null,
+      },
+    };
+  }
+  return { statuses: ["available", "service"], defaultStatus: "available", rule: null, message: "" };
+}
+
+// Whether a vehicle can be reactivated, and to which statuses.
+export const getReactivationOptions = async (req, res, next) => {
+  try {
+    if (!mongoose.isValidObjectId(req.params.id)) {
+      return res.status(400).json({ success: false, message: "Invalid vehicle id." });
+    }
+    const vehicle = await Vehicle.findOne({ _id: req.params.id, isDeleted: false })
+      .select("deactivation")
+      .lean();
+    if (!vehicle) {
+      return res.status(404).json({ success: false, message: "Vehicle not found" });
+    }
+    if (!vehicleDeactivationDate(vehicle)) {
+      return res.status(409).json({
+        success: false,
+        code: "VEHICLE_NOT_DEACTIVATED",
+        message: "This vehicle is not deactivated.",
+      });
+    }
+    return res.status(200).json({
+      success: true,
+      data: { eligible: true, ...(await reactivationOptions(vehicle._id)) },
+    });
+  } catch (error) {
+    return next(error);
+  }
+};
+
+// Puts a deactivated vehicle back into service with the chosen status. The
+// finished deactivation moves to deactivationHistory with who reactivated it,
+// when (server time) and why; nothing is deleted.
+export const reactivateVehicle = async (req, res, next) => {
+  const { id } = req.params;
+  if (!mongoose.isValidObjectId(id)) {
+    return res.status(400).json({ success: false, message: "Invalid vehicle id." });
+  }
+  const status = req.body?.status;
+  if (!["available", "service", "rent"].includes(status)) {
+    const message = "Choose the status the vehicle returns to.";
+    return res.status(400).json({ success: false, message, fieldErrors: { status: message } });
+  }
+  const reason = typeof req.body?.reason === "string" ? req.body.reason.trim() : "";
+  if (reason.length > REACTIVATION_REASON_MAX_LENGTH) {
+    const message = `Keep the reason within ${REACTIVATION_REASON_MAX_LENGTH} characters.`;
+    return res.status(400).json({ success: false, message, fieldErrors: { reason: message } });
+  }
+
+  try {
+    // Under the booking-availability lock, like deactivation, so the two
+    // cannot interleave.
+    await withVehicleAvailabilityLock(id, async (session, vehicle) => {
+      if (!vehicleDeactivationDate(vehicle)) {
+        throw new VehicleAvailabilityError(409, {
+          success: false,
+          code: "VEHICLE_NOT_DEACTIVATED",
+          message: "This vehicle is not deactivated.",
+        });
+      }
+      const options = await reactivationOptions(vehicle._id, session);
+      if (!options.statuses.includes(status)) {
+        const message = options.message || "That status is not allowed for this vehicle.";
+        throw new VehicleAvailabilityError(400, {
+          success: false,
+          code: "REACTIVATION_STATUS_NOT_ALLOWED",
+          message,
+          fieldErrors: { status: message },
+          options,
+        });
+      }
+      await Vehicle.updateOne(
+        { _id: id },
+        {
+          $set: {
+            status,
+            deactivation: CLEARED_DEACTIVATION,
+            ...(status === "available"
+              ? { "maintenance.required": false, "maintenance.currentMaintenance": null }
+              : {}),
+          },
+          $push: {
+            deactivationHistory: {
+              ...vehicle.deactivation,
+              reactivatedBy: req.user._id,
+              reactivatedAt: new Date(),
+              reactivationReason: reason,
+              reactivatedStatus: status,
+            },
+          },
+        },
+        { session },
+      );
+    });
+
+    const updated = await Vehicle.findById(id).populate(AUDIT_USER_FIELDS).lean();
+    return res.status(200).json({ success: true, message: "Vehicle reactivated", data: updated });
+  } catch (error) {
+    if (sendVehicleAvailabilityError(res, error)) return;
+    return next(error);
   }
 };
 

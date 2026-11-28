@@ -20,6 +20,7 @@ test("central registry defines unique stable permission keys", () => {
     "page.dashboard.view",
     "page.dashboard.create",
     "page.dashboard.edit",
+    "page.dashboard.deactivate",
     "page.dashboard.delete",
     "page.revenue.view",
     "page.vehicleRevenue.view",
@@ -35,6 +36,7 @@ test("central registry defines unique stable permission keys", () => {
     "page.verifyUpiCollections.view",
     "page.verifyUpiCollections.verify",
     "page.appUsers.view",
+    "page.vehicleManager.view",
     "page.settings.view",
     "page.settings.create",
     "page.settings.edit",
@@ -56,6 +58,12 @@ test("central registry defines unique stable permission keys", () => {
     }
   }
   assert.equal(PERMISSIONS.bookings.cancel, "page.bookings.cancel");
+  assert.equal(
+    permissionKey("refundRequests", "view"),
+    PERMISSIONS.paymentsHistory.view,
+  );
+  assert.equal(PERMISSIONS.refundRequests.view, PERMISSIONS.paymentsHistory.view);
+  assert.ok(RBAC_PERMISSION_KEYS.includes(PERMISSIONS.refundRequests.view));
 });
 
 test("backend route guards reference only keys from the central registry", async () => {
@@ -120,6 +128,33 @@ test("App Users exposes only a grantable view permission without adding navigati
       navigation: true,
       actions: ["view"],
       permission: "page.appUsers.view",
+    },
+  );
+});
+
+test("vehicle Deactivate is a registered, separately assignable action", () => {
+  const dashboard = PERMISSION_MODULES.find(({ key }) => key === "dashboard");
+  assert.deepEqual(dashboard.actions, ["view", "create", "edit", "deactivate", "delete"]);
+  assert.equal(PERMISSIONS.dashboard.deactivate, "page.dashboard.deactivate");
+  assert.notEqual(PERMISSIONS.dashboard.deactivate, PERMISSIONS.dashboard.edit);
+});
+
+test("Fleet Manager exposes only its independently grantable view permission", () => {
+  const fleetManager = PERMISSION_MODULES.find(({ key }) => key === "vehicleManager");
+  assert.deepEqual(
+    {
+      label: fleetManager.label,
+      href: fleetManager.href,
+      navigation: fleetManager.navigation,
+      actions: fleetManager.actions,
+      permission: PERMISSIONS.vehicleManager.view,
+    },
+    {
+      label: "Fleet Manager",
+      href: "/vehicles",
+      navigation: true,
+      actions: ["view"],
+      permission: "page.vehicleManager.view",
     },
   );
 });

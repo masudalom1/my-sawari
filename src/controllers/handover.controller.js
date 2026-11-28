@@ -5,6 +5,12 @@ import { sendBookingConfirmation } from "../services/wati.service.js";
 import VehicleReturn from "../models/vehicleReturn.model.js";
 import Booking from "../models/booking.model.js";
 import PaymentHistory from "../models/paymentHistory.model.js";
+import { isBlockedByVehicleDeactivation, vehicleDeactivatedResponse } from "../../shared/vehicleDeactivation.mjs";
+import {
+  assertBookableUntil,
+  sendVehicleAvailabilityError,
+  withVehicleAvailabilityLock,
+} from "../services/vehicleAvailability.js";
 
 const PAGE_SIZE_DEFAULT = 10;
 const MAX_PAGE_LIMIT = 30;
@@ -582,13 +588,16 @@ export const completeDraftHandover = async (req, res) => {
       });
     }
 
+    const dropAt = new Date(handover.trip?.dropDateTime);
+    if (isBlockedByVehicleDeactivation(vehicle, dropAt)) {
+      return res.status(409).json(vehicleDeactivatedResponse(vehicle));
+    }
+
     vehicle.status = "rent";
 
     if (handover.vehicle.handoverKm) {
       vehicle.currentKm = handover.vehicle.handoverKm;
     }
-
-    await vehicle.save();
 
     handover.bookingStatus = "confirmed";
 
@@ -596,7 +605,13 @@ export const completeDraftHandover = async (req, res) => {
 
     handover.draftProgress.currentScreen = "completed";
 
-    await handover.save();
+    // Re-checked under the booking-availability lock, in the transaction
+    // that starts the rental.
+    await withVehicleAvailabilityLock(vehicle._id, async (session, lockedVehicle) => {
+      assertBookableUntil(lockedVehicle, dropAt);
+      await vehicle.save({ session });
+      await handover.save({ session });
+    });
 
     try {
       await sendBookingConfirmation({
@@ -615,6 +630,7 @@ export const completeDraftHandover = async (req, res) => {
       data: handover,
     });
   } catch (error) {
+    if (sendVehicleAvailabilityError(res, error)) return;
     console.error(error);
 
     return res.status(500).json({
@@ -722,6 +738,9 @@ export const createHandover = async (req, res, next) => {
         message: "Selected vehicle is not available",
       });
     }
+    if (isBlockedByVehicleDeactivation(selectedVehicle, new Date(trip.dropDateTime))) {
+      return res.status(409).json(vehicleDeactivatedResponse(selectedVehicle));
+    }
     if (
       payment?.fuelLevel === undefined ||
       payment.fuelLevel < 0 ||
@@ -738,83 +757,53 @@ export const createHandover = async (req, res, next) => {
     // ==========================
     // CREATE HANDOVER
     // ==========================
-    const handover = await Handover.create({
-      company: req.user.company || req.user._id,
-      createdBy: req.user._id,
-      bookingId,
-      customer: {
-        fullName: customer.fullName,
-        mobileNumber: customer.mobileNumber,
-        alternateMobileNumber: customer.alternateMobileNumber || "",
-        occupation: customer.occupation || "",
-        destination: customer.destination || "",
-      },
-
-      identity: {
-        aadhaarNumber: identity.aadhaarNumber,
-        drivingLicenseNumber: identity.drivingLicenseNumber,
-      },
-
-      vehicle: {
-        vehicleId: selectedVehicle._id,
-        vehicleName: selectedVehicle.vehicleName,
-        vehicleNumber: selectedVehicle.vehicleNumber,
-        vehicleColor: selectedVehicle.color || "",
-        handoverKm: Number(vehicle?.handoverKm) || 0,
-        spareAvailable: vehicle?.spareAvailable === true,
-        toolkitAvailable: vehicle?.toolkitAvailable === true,
-      },
-
-      trip: {
-        tripType: trip?.tripType || "local",
-        numberOfDays: Number(trip?.numberOfDays) || 1,
-        pickupDateTime: trip.pickupDateTime,
-        dropDateTime: trip.dropDateTime,
-      },
-
-      payment: {
-        fuelLevel:
-          payment?.fuelLevel !== undefined ? Number(payment.fuelLevel) : 7,
-
-        fastTagBalance: Number(payment?.fastTagBalance) || 0,
-
-        fastTagPayableAmount: Number(payment?.fastTagPayableAmount) || 0,
-
-        totalFare: Number(payment?.totalFare) || 0,
-
-        securityDeposit: Number(payment?.securityDeposit) || 0,
-
-        extraCharges: Number(payment?.extraCharges) || 0,
-
-        discountAmount: Number(payment?.discountAmount) || 0,
-
-        totalAmount: Number(payment?.totalAmount) || 0,
-
-        bookingAmountPaid: Number(payment?.bookingAmountPaid) || 0,
-
-        amountReceivedNow: Number(payment?.amountReceivedNow) || 0,
-
-        balanceAmount: Number(payment?.balanceAmount) || 0,
-
-        paymentMethod: payment?.paymentMethod || "cash",
-
-        upiLast4: normalizedUpiLast4,
-
-        paymentBreakdown: {
-          cash: Number(payment?.paymentBreakdown?.cash) || 0,
-
-          phonePe: Number(payment?.paymentBreakdown?.phonePe) || 0,
-
-          razorpay: Number(payment?.paymentBreakdown?.razorpay) || 0,
+    // Starting a rental puts the vehicle on rent until the drop time, so it
+    // is checked against deactivation under the booking-availability lock.
+    const handover = await withVehicleAvailabilityLock(selectedVehicle._id, async (session, lockedVehicle) => {
+      assertBookableUntil(lockedVehicle, new Date(trip.dropDateTime));
+      const [created] = await Handover.create([{
+        company: req.user.company || req.user._id,
+        createdBy: req.user._id,
+        bookingId,
+        customer: {
+          fullName: customer.fullName,
+          mobileNumber: customer.mobileNumber,
+          alternateMobileNumber: customer.alternateMobileNumber || "",
+          occupation: customer.occupation || "",
+          destination: customer.destination || "",
         },
-        billSummary: {
+
+        identity: {
+          aadhaarNumber: identity.aadhaarNumber,
+          drivingLicenseNumber: identity.drivingLicenseNumber,
+        },
+
+        vehicle: {
+          vehicleId: selectedVehicle._id,
+          vehicleName: selectedVehicle.vehicleName,
+          vehicleNumber: selectedVehicle.vehicleNumber,
+          vehicleColor: selectedVehicle.color || "",
+          handoverKm: Number(vehicle?.handoverKm) || 0,
+          spareAvailable: vehicle?.spareAvailable === true,
+          toolkitAvailable: vehicle?.toolkitAvailable === true,
+        },
+
+        trip: {
+          tripType: trip?.tripType || "local",
+          numberOfDays: Number(trip?.numberOfDays) || 1,
+          pickupDateTime: trip.pickupDateTime,
+          dropDateTime: trip.dropDateTime,
+        },
+
+        payment: {
+          fuelLevel:
+            payment?.fuelLevel !== undefined ? Number(payment.fuelLevel) : 7,
+
+          fastTagBalance: Number(payment?.fastTagBalance) || 0,
+
+          fastTagPayableAmount: Number(payment?.fastTagPayableAmount) || 0,
+
           totalFare: Number(payment?.totalFare) || 0,
-
-          fastTagPayable: Number(payment?.fastTagPayableAmount) || 0,
-
-          pickupCharge: Number(booking?.pickup?.charge) || 0,
-
-          dropCharge: Number(booking?.drop?.charge) || 0,
 
           securityDeposit: Number(payment?.securityDeposit) || 0,
 
@@ -828,31 +817,67 @@ export const createHandover = async (req, res, next) => {
 
           amountReceivedNow: Number(payment?.amountReceivedNow) || 0,
 
-          totalCollected:
-            Number(payment?.bookingAmountPaid || 0) +
-            Number(payment?.amountReceivedNow || 0),
-
           balanceAmount: Number(payment?.balanceAmount) || 0,
+
+          paymentMethod: payment?.paymentMethod || "cash",
+
+          upiLast4: normalizedUpiLast4,
+
+          paymentBreakdown: {
+            cash: Number(payment?.paymentBreakdown?.cash) || 0,
+
+            phonePe: Number(payment?.paymentBreakdown?.phonePe) || 0,
+
+            razorpay: Number(payment?.paymentBreakdown?.razorpay) || 0,
+          },
+          billSummary: {
+            totalFare: Number(payment?.totalFare) || 0,
+
+            fastTagPayable: Number(payment?.fastTagPayableAmount) || 0,
+
+            pickupCharge: Number(booking?.pickup?.charge) || 0,
+
+            dropCharge: Number(booking?.drop?.charge) || 0,
+
+            securityDeposit: Number(payment?.securityDeposit) || 0,
+
+            extraCharges: Number(payment?.extraCharges) || 0,
+
+            discountAmount: Number(payment?.discountAmount) || 0,
+
+            totalAmount: Number(payment?.totalAmount) || 0,
+
+            bookingAmountPaid: Number(payment?.bookingAmountPaid) || 0,
+
+            amountReceivedNow: Number(payment?.amountReceivedNow) || 0,
+
+            totalCollected:
+              Number(payment?.bookingAmountPaid || 0) +
+              Number(payment?.amountReceivedNow || 0),
+
+            balanceAmount: Number(payment?.balanceAmount) || 0,
+          },
         },
-      },
 
-      notes: notes || "",
+        notes: notes || "",
 
-      bookingStatus: "draft",
+        bookingStatus: "draft",
 
-      images: {
-        customerPhoto: files?.customerPhoto?.[0]?.path || "",
+        images: {
+          customerPhoto: files?.customerPhoto?.[0]?.path || "",
 
-        customerWithVehicle: files?.customerWithVehicle?.[0]?.path || "",
+          customerWithVehicle: files?.customerWithVehicle?.[0]?.path || "",
 
-        vehicleFront: files?.vehicleFront?.[0]?.path || "",
+          vehicleFront: files?.vehicleFront?.[0]?.path || "",
 
-        vehicleRear: files?.vehicleRear?.[0]?.path || "",
+          vehicleRear: files?.vehicleRear?.[0]?.path || "",
 
-        vehicleLeft: files?.vehicleLeft?.[0]?.path || "",
+          vehicleLeft: files?.vehicleLeft?.[0]?.path || "",
 
-        vehicleRight: files?.vehicleRight?.[0]?.path || "",
-      },
+          vehicleRight: files?.vehicleRight?.[0]?.path || "",
+        },
+      }], { session });
+      return created;
     });
 
     // ==========================
@@ -3765,6 +3790,38 @@ export const updateRental = async (req, res) => {
       handover.vehicle?.vehicleId &&
       vehicleId.toString() !== handover.vehicle.vehicleId.toString();
 
+    // ==========================================================
+    // DEACTIVATION
+    // Extending the drop time or exchanging onto another vehicle must not
+    // run past that vehicle's last bookable day.
+    // ==========================================================
+
+    const currentDropAt = new Date(handover.trip?.dropDateTime);
+    const requestedDropAt =
+      dropDateTime !== undefined ? new Date(dropDateTime) : currentDropAt;
+    const rentalIntervalChanged =
+      Boolean(isVehicleExchange) ||
+      requestedDropAt.getTime() !== currentDropAt.getTime();
+    const rentalVehicleId = isVehicleExchange
+      ? vehicleId
+      : handover.vehicle?.vehicleId;
+
+    if (
+      rentalIntervalChanged &&
+      rentalVehicleId &&
+      !Number.isNaN(requestedDropAt.getTime())
+    ) {
+      const rentalVehicle = await Vehicle.findById(rentalVehicleId)
+        .select("deactivation")
+        .lean();
+      if (
+        rentalVehicle &&
+        isBlockedByVehicleDeactivation(rentalVehicle, requestedDropAt)
+      ) {
+        return res.status(409).json(vehicleDeactivatedResponse(rentalVehicle));
+      }
+    }
+
     if (isVehicleExchange) {
       // --------------------------------------------------------
       // OLD VEHICLE DETAILS
@@ -4179,6 +4236,8 @@ ${updateNote}`
     // SYNC BOOKING
     // ==========================================================
 
+    let bookingToSave = null;
+
     if (handover.bookingId) {
       const booking = await Booking.findById(handover.bookingId);
 
@@ -4253,15 +4312,32 @@ ${updateNote}`
             (Number(booking.payment.fastagAmount) || 0),
         );
 
-        await booking.save();
+        bookingToSave = booking;
       }
     }
 
     // ==========================================================
     // SAVE HANDOVER
+    // A changed rental interval is saved under the booking-availability
+    // lock and re-checked against the rental vehicle's deactivation.
     // ==========================================================
 
-    await handover.save();
+    const saveRental = async (session) => {
+      if (bookingToSave) await bookingToSave.save({ session });
+      await handover.save({ session });
+    };
+
+    if (rentalIntervalChanged) {
+      await withVehicleAvailabilityLock(
+        handover.vehicle.vehicleId,
+        async (session, lockedVehicle) => {
+          assertBookableUntil(lockedVehicle, new Date(handover.trip.dropDateTime));
+          await saveRental(session);
+        },
+      );
+    } else {
+      await saveRental();
+    }
 
     // ==========================================================
     // PAYMENT HISTORY
@@ -4424,6 +4500,8 @@ ${updateNote}`
       },
     });
   } catch (error) {
+    if (sendVehicleAvailabilityError(res, error)) return;
+
     console.error("UPDATE RENTAL ERROR:", error);
 
     return res.status(500).json({
@@ -4665,9 +4743,27 @@ export const updateHandover = async (req, res, next) => {
       });
     }
 
+    const previousVehicleId = String(handover.vehicle?.vehicleId || "");
+    const previousDropAt = new Date(handover.trip?.dropDateTime).getTime();
+
     Object.assign(handover, req.body);
 
-    await handover.save();
+    // A direct edit that moves the drop time or the vehicle follows the same
+    // deactivation rule as rental extensions and exchanges.
+    const rentalVehicleId = handover.vehicle?.vehicleId;
+    const dropAt = new Date(handover.trip?.dropDateTime);
+    const rentalIntervalChanged =
+      String(rentalVehicleId || "") !== previousVehicleId ||
+      dropAt.getTime() !== previousDropAt;
+
+    if (rentalVehicleId && rentalIntervalChanged) {
+      await withVehicleAvailabilityLock(rentalVehicleId, async (session, lockedVehicle) => {
+        assertBookableUntil(lockedVehicle, dropAt);
+        await handover.save({ session });
+      });
+    } else {
+      await handover.save();
+    }
 
     res.status(200).json({
       success: true,
@@ -4675,6 +4771,7 @@ export const updateHandover = async (req, res, next) => {
       data: handover,
     });
   } catch (error) {
+    if (sendVehicleAvailabilityError(res, error)) return;
     console.log("========== CLOUDINARY ERROR ==========");
     console.log(error);
     console.log("MESSAGE:", error.message);

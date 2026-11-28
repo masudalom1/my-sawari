@@ -5,7 +5,9 @@ export const PERMISSION_MODULES = Object.freeze([
     href: "/",
     group: "Overview",
     navigation: true,
-    actions: ["view", "create", "edit", "delete"],
+    // Also guards vehicle records: Add Vehicle (create), Fleet Manager
+    // Edit (edit) and Fleet Manager Deactivate / Reactivate (deactivate).
+    actions: ["view", "create", "edit", "deactivate", "delete"],
   },
   {
     key: "revenue",
@@ -73,6 +75,14 @@ export const PERMISSION_MODULES = Object.freeze([
     actions: ["view"],
   },
   {
+    key: "vehicleManager",
+    label: "Fleet Manager",
+    href: "/vehicles",
+    group: "Fleet Operations",
+    navigation: true,
+    actions: ["view"],
+  },
+  {
     key: "maintenance",
     label: "Maintenance & Service",
     href: null,
@@ -127,6 +137,11 @@ export const PERMISSION_ACTIONS = Object.freeze({
   view: { key: "view", label: "View", description: "Page and sidebar visibility" },
   create: { key: "create", label: "Create", description: "Create records or users" },
   edit: { key: "edit", label: "Edit", description: "Edit existing records" },
+  deactivate: {
+    key: "deactivate",
+    label: "Deactivate",
+    description: "Deactivate a vehicle from a date, or reactivate it",
+  },
   cancel: {
     key: "cancel",
     label: "Cancel booking",
@@ -144,11 +159,14 @@ export const PERMISSION_ACTIONS = Object.freeze({
 });
 
 export function permissionKey(moduleKey, action) {
+  if (moduleKey === "refundRequests" && action === "view") {
+    return "page.paymentsHistory.view";
+  }
   return `page.${moduleKey}.${action}`;
 }
 
-export const PERMISSIONS = Object.freeze(
-  Object.fromEntries(
+export const PERMISSIONS = Object.freeze({
+  ...Object.fromEntries(
     PERMISSION_MODULES.map(({ key, actions }) => [
       key,
       Object.freeze(
@@ -158,7 +176,10 @@ export const PERMISSIONS = Object.freeze(
       ),
     ]),
   ),
-);
+  refundRequests: Object.freeze({
+    view: permissionKey("refundRequests", "view"),
+  }),
+});
 
 export const RBAC_PERMISSION_KEYS = Object.freeze(
   PERMISSION_MODULES.flatMap(({ key, actions }) =>

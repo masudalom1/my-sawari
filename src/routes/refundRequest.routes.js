@@ -19,7 +19,7 @@ import {
 const router = express.Router();
 // This internal finance permission grants refund reads across companies,
 // including unattributed historical records. Write guards remain below.
-router.use(protect, requirePermission(PERMISSIONS.paymentsHistory.view));
+router.use(protect, requirePermission(PERMISSIONS.refundRequests.view));
 router.use((_req, res, next) => { res.set("Cache-Control", "private, no-store"); next(); });
 
 router.post("/attachments", requirePermission(PERMISSIONS.dashboard.edit),
@@ -30,7 +30,7 @@ router.get("/:id/attachments/:kind", getRefundAttachment);
 router.get(
   "/",
   protect,
-  requirePermission(PERMISSIONS.paymentsHistory.view),
+  requirePermission(PERMISSIONS.refundRequests.view),
   getRefundRequests,
 );
 router.get(

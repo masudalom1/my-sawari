@@ -3,9 +3,13 @@ import upload from "../config/multer.js";
 import {
   createVehicle,
   getAllVehicles,
+  getFleetManagerVehicles,
   getSingleVehicle,
   updateVehicle,
   deleteVehicle,
+  deactivateVehicle,
+  getReactivationOptions,
+  reactivateVehicle,
   updateVehicleStatus,
   getAvailableVehicles,
   getAll,
@@ -29,6 +33,7 @@ router.use(protect);
 
 router.post("/create", requirePermission(PERMISSIONS.dashboard.create), vehicleUpload.array("images", 5), createVehicle);
 
+router.get("/fleet-manager", requirePermission(PERMISSIONS.vehicleManager.view), getFleetManagerVehicles);
 router.get("/all", requirePermission(PERMISSIONS.dashboard.view), getAllVehicles);
 
 // Showing Available car in handover screen
@@ -46,10 +51,20 @@ router.patch("/maintenance/:id/status", protect, requirePermission(PERMISSIONS.d
 
 
 
-// NOT IN USED
-router.get("/:id", requirePermission(PERMISSIONS.dashboard.view), getSingleVehicle);
+// Fleet Manager Edit reads the saved vehicle, so Edit alone is enough to load it.
+router.get("/:id", requirePermission([PERMISSIONS.dashboard.view, PERMISSIONS.dashboard.edit]), getSingleVehicle);
 
-router.put("/update/:id", requirePermission(PERMISSIONS.dashboard.edit), upload.array("images", 5), updateVehicle);
+// Fleet Manager Edit. Photos are stored on Cloudinary, like Add Vehicle's.
+router.put("/update/:id", requirePermission(PERMISSIONS.dashboard.edit), vehicleUpload.array("images", 5), updateVehicle);
+
+// Fleet Manager Deactivate: unavailable for bookings from an effective date.
+router.patch("/deactivate/:id", requirePermission(PERMISSIONS.dashboard.deactivate), deactivateVehicle);
+
+// Fleet Manager Reactivate (same permission): eligibility and statuses, then the change.
+router.get("/reactivation/:id", requirePermission(PERMISSIONS.dashboard.deactivate), getReactivationOptions);
+router.patch("/reactivate/:id", requirePermission(PERMISSIONS.dashboard.deactivate), reactivateVehicle);
+
+// NOT IN USED
 
 router.patch("/status/:id", requirePermission(PERMISSIONS.dashboard.edit), updateVehicleStatus);
 

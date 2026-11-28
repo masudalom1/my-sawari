@@ -15,6 +15,23 @@ const vehicleImageSchema = new mongoose.Schema(
   { _id: false },
 );
 
+// A finished deactivation, kept when the vehicle is reactivated.
+const deactivationRecordSchema = new mongoose.Schema(
+  {
+    date: { type: Date, default: null },
+    deactivatedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
+    deactivatedAt: { type: Date, default: null },
+    reason: { type: String, default: "" },
+    notes: { type: String, default: "" },
+    previousStatus: { type: String, default: null },
+    reactivatedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
+    reactivatedAt: { type: Date, default: null },
+    reactivationReason: { type: String, default: "" },
+    reactivatedStatus: { type: String, default: null },
+  },
+  { _id: false },
+);
+
 const vehicleSchema = new mongoose.Schema(
   {
     company: {
@@ -70,10 +87,24 @@ const vehicleSchema = new mongoose.Schema(
       trim: true,
       default: "",
     },
+    modelYear: {
+      type: Number,
+      min: 1886,
+      max: 2100,
+      validate: {
+        validator: (value) => value == null || Number.isInteger(value),
+        message: "Model year must be a whole number",
+      },
+      default: null,
+    },
     pricePerDay: {
       type: Number,
       default: 0,
       min: 0,
+      validate: {
+        validator: Number.isFinite,
+        message: "Price per day must be a finite number",
+      },
     },
     bookingAvailabilityVersion: {
       type: Number,
@@ -129,6 +160,10 @@ const vehicleSchema = new mongoose.Schema(
       type: Number,
       required: true,
       min: 1,
+      validate: {
+        validator: Number.isInteger,
+        message: "Seating capacity must be a whole number",
+      },
     },
 
     color: {
@@ -229,6 +264,52 @@ const vehicleSchema = new mongoose.Schema(
         type: Date,
         default: null,
       },
+    },
+
+    // Fleet Manager deactivation. `date` is the last bookable calendar day
+    // (India time; a UTC day key, like booking dates). From 12:00 AM on the
+    // next day the vehicle cannot be booked. The vehicle and its booking
+    // history are kept; see shared/vehicleDeactivation.mjs.
+    deactivation: {
+      date: {
+        type: Date,
+        default: null,
+      },
+      deactivatedBy: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "User",
+        default: null,
+      },
+      deactivatedAt: {
+        type: Date,
+        default: null,
+      },
+      // Why staff deactivated it (a code from DEACTIVATION_REASONS; checked
+      // by the API so older free-text values stay valid), optional notes,
+      // and its operational status at that moment.
+      reason: {
+        type: String,
+        trim: true,
+        maxlength: 500,
+        default: "",
+      },
+      notes: {
+        type: String,
+        trim: true,
+        maxlength: 500,
+        default: "",
+      },
+      previousStatus: {
+        type: String,
+        enum: ["available", "rent", "service", null],
+        default: null,
+      },
+    },
+
+    // Every earlier deactivation, oldest first, with its reactivation.
+    deactivationHistory: {
+      type: [deactivationRecordSchema],
+      default: [],
     },
 
     isDeleted: {

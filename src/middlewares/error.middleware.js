@@ -28,6 +28,12 @@ const errorHandler = (err, req, res, next) => {
     console.error(`${req.method} ${req.originalUrl} failed:`, err);
   }
 
+  // Client errors that define their whole response (e.g. availability
+  // conflicts with a `code` and conflict details).
+  if (statusCode < 500 && err.responseBody && typeof err.responseBody === "object") {
+    return res.status(statusCode).json(err.responseBody);
+  }
+
   res.status(statusCode).json({
     success: false,
     ...(err.balance && { balance: err.balance }),

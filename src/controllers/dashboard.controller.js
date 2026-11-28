@@ -16,6 +16,7 @@ import {
   revenuePaymentBreakdown,
 } from "../services/paymentAllocation.service.js";
 import { normalizePaymentMethod } from "../../shared/paymentReporting.mjs";
+import { vehicleDeactivationDate } from "../../shared/vehicleDeactivation.mjs";
 import {
   parseRevenueRange,
   daysBetweenKeys,
@@ -95,6 +96,7 @@ export const getVehiclesForImport = async (req, res) => {
         createdAt: 1,
         deletedAt: 1,
         isDeleted: 1,
+        deactivation: 1,
         images: { $slice: 1 }, // only the first image is returned below
       })
       .sort({ pricePerDay: 1 })
@@ -115,6 +117,9 @@ export const getVehiclesForImport = async (req, res) => {
       createdAt: vehicle.createdAt || null,
       deletedAt: vehicle.deletedAt || null,
       isDeleted: vehicle.isDeleted === true,
+      // Last bookable day (YYYY-MM-DD) of a deactivated vehicle; the colour
+      // sheet ends the row's timeline there.
+      deactivationDate: vehicleDeactivationDate(vehicle),
     }));
 
     return res.status(200).json({
